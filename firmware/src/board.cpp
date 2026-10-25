@@ -7,11 +7,11 @@
 namespace hpn {
 namespace {
 
-// --- Original carrier: WEMOS/LOLIN S2 Mini + 74HC595 + 74HC4051 ------------
-//
-// See firmware/docs/board-old-lolin-s2.md for the full pin and bit map.
-const BoardConfig kOldLolinS2 = {
-    "old-lolin-s2",
+// --- HomeNet Heatpumps 1.0 -------------------------------------------------
+// Legacy carrier: any MCU in the S2 Mini footprint, currently a LOLIN S2 Mini.
+// See firmware/docs/hhn-1.0.md for the full pin and bit map.
+const BoardConfig kHhn1 = {
+    "HomeNet Heatpumps 1.0",
     OutputBackend::ShiftRegister,
     /* sr_data_pin   */ 12,
     /* sr_clock_pin  */ 11,
@@ -33,9 +33,12 @@ const BoardConfig kOldLolinS2 = {
     /* mux channels  */ {1, 3, 0, 2},  // floor, rad1, rad2, mixer
 };
 
-// --- Generic development board (pins still to be assigned) -----------------
-const BoardConfig kGenericDevkit = {
-    "generic-devkit",
+// --- Boardless development -------------------------------------------------
+// Bare ESP32 devkit without a carrier. Pins stay unassigned until the new
+// HomeNet Heatpumps 2.0 layout is defined. Use HPN_IO_EMULATION to develop
+// against an emulated carrier instead.
+const BoardConfig kBoardless = {
+    "boardless devkit",
     OutputBackend::DirectGpio,
     HPN_GPIO_UNASSIGNED,
     HPN_GPIO_UNASSIGNED,
@@ -65,25 +68,25 @@ void copy_str(char (&dst)[N], const char* src) {
 }  // namespace
 
 const BoardConfig& board_config() {
-#if defined(HPN_BOARD_OLD_LOLIN_S2)
-  return kOldLolinS2;
-#elif defined(HPN_BOARD_GENERIC_DEVKIT)
-  return kGenericDevkit;
+#if defined(HPN_CARRIER_HHN1)
+  return kHhn1;
+#elif defined(HPN_CARRIER_BOARDLESS)
+  return kBoardless;
 #else
-#error "No HPN_BOARD_* macro defined. Set a board profile in platformio.ini."
+#error "No HPN_CARRIER_* macro defined. Set a carrier profile in platformio.ini."
 #endif
 }
 
 void board_apply_defaults(Config& config) {
-#if defined(HPN_BOARD_OLD_LOLIN_S2)
-  config.gpio_onewire = 18;  // D4 / 1-Wire bus
-  config.gpio_led_data = 16; // 5 x WS2812B/SK6812, GRB
+#if defined(HPN_CARRIER_HHN1)
+  config.gpio_onewire = 18;   // D4 / 1-Wire bus
+  config.gpio_led_data = 16;  // 5 x WS2812B/SK6812, GRB
   config.num_leds = 5;
   config.has_pump_power[0] = true;  // floor
   config.has_pump_power[1] = true;  // radiator 1
   config.has_pump_power[2] = true;  // radiator 2
 
-  // Old ESPHome configuration used a 145 s full mixer stroke.
+  // Legacy ESPHome configuration used a 145 s full mixer stroke.
   config.travel_time_ms = 145000;
   config.setpoint_default = 35.0f;
   config.floor_setpoint_shadow = 35.0f;
@@ -94,7 +97,7 @@ void board_apply_defaults(Config& config) {
   copy_str(config.sensor_id_ret, "92c08b7f1f64ff28");     // floor return
   copy_str(config.sensor_id_mix, "593c26f648ddbf28");     // mixed flow
 #endif
-  // The generic profile leaves pins unassigned until the new board is defined.
+  // The boardless profile leaves pins unassigned until Heatpumps 2.0 exists.
 }
 
 }  // namespace hpn

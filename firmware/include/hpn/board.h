@@ -3,25 +3,27 @@
 #include <stdint.h>
 
 #include "hpn/config.h"
+#include "hpn/io_types.h"
 
 // Board-level wiring abstraction.
 //
 // The controller logic is board-agnostic. A BoardConfig describes how the
-// current PCB reaches the actuators and sensors. The temporary board is the
-// original LOLIN S2 Mini carrier, documented in firmware/docs/board-old-lolin-s2.md.
+// active carrier reaches the actuators and sensors. Carriers:
+//
+//   HomeNet Heatpumps 1.0   legacy carrier, currently a LOLIN S2 Mini inside.
+//                           See firmware/docs/hhn-1.0.md.
+//   HomeNet Heatpumps 2.0   next carrier, under planning. Primary MCUs are
+//                           ESP32-C3 and ESP32-S3. No profile yet.
+//   boardless               bare devkit, no carrier. Direct GPIO with all
+//                           assignments still unset.
+//
+// The carrier profile is independent of the I/O backend: the same profile can
+// be run against real pins or against the emulation model (HPN_IO_EMULATION).
 namespace hpn {
 
 enum class OutputBackend : uint8_t {
   DirectGpio = 0,
   ShiftRegister = 1,  // 74HC595, one byte
-};
-
-enum class CurrentChannel : uint8_t {
-  PumpFloor = 0,
-  PumpRad1 = 1,
-  PumpRad2 = 2,
-  Mixer = 3,
-  Count = 4,
 };
 
 struct BoardConfig {
@@ -50,13 +52,13 @@ struct BoardConfig {
   uint8_t adc_pin;
   uint8_t mux_s2_pin;
   uint8_t mux_s3_pin;
-  uint8_t current_mux_channel[4];  // indexed by CurrentChannel; 0xFF = absent
+  uint8_t current_mux_channel[kCurrentChannelCount];  // 0xFF = absent
 };
 
-// Active board profile, selected by HPN_BOARD_* in platformio.ini.
+// Active carrier profile, selected by HPN_CARRIER_* in platformio.ini.
 const BoardConfig& board_config();
 
-// Apply board-specific values to the generic configuration (pins, sensor ROM
+// Apply carrier-specific values to the generic configuration (pins, sensor ROM
 // IDs, LED count, mixer travel time, ...).
 void board_apply_defaults(Config& config);
 

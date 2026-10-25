@@ -1,26 +1,27 @@
 #include "hpn/l0_io.h"
 
-#include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 
-#include "hpn/build_target.h"
+#include "hpn/io_backend.h"
 
 namespace hpn {
 namespace l0 {
 namespace {
 
-// TODO(hardware): confirm the relay-driver polarity on the old carrier.
+// TODO(hardware): confirm the relay-driver polarity on HomeNet Heatpumps 1.0.
 // The 74HC595 drives the relay board; active-high is assumed.
-constexpr uint8_t kActuatorOnLevel = HIGH;
-constexpr uint8_t kActuatorOffLevel = LOW;
+constexpr uint8_t kActuatorOnLevel = io::kHigh;
+constexpr uint8_t kActuatorOffLevel = io::kLow;
 
 Config g_config{};
 BoardConfig g_board{};
 uint8_t g_sr_cache = 0;
-Adafruit_NeoPixel g_leds;
+uint16_t g_led_count = 0;
 bool g_leds_ready = false;
 
-bool is_assigned(uint8_t pin) { return pin != HPN_GPIO_UNASSIGNED; }
+bool is_assigned(uint8_t pin) {
+  return pin != HPN_GPIO_UNASSIGNED;
+}
 
 uint8_t relay_bit(Relay relay) {
   switch (relay) {
@@ -32,8 +33,9 @@ uint8_t relay_bit(Relay relay) {
       return g_board.sr_bit_pump_rad2;
     case Relay::PumpFloor:
       return g_board.sr_bit_pump_floor;
+    default:
+      return HPN_GPIO_UNASSIGNED;
   }
-  return HPN_GPIO_UNASSIGNED;
 }
 
 uint8_t relay_pin(Relay relay) {
@@ -46,8 +48,9 @@ uint8_t relay_pin(Relay relay) {
       return g_config.gpio_pump_rad2;
     case Relay::PumpFloor:
       return g_config.gpio_pump_floor;
+    default:
+      return HPN_GPIO_UNASSIGNED;
   }
-  return HPN_GPIO_UNASSIGNED;
 }
 
 void init_output_pin(uint8_t pin, const char* name) {
@@ -56,23 +59,24 @@ void init_output_pin(uint8_t pin, const char* name) {
     return;
   }
 
-  digitalWrite(pin, kActuatorOffLevel);
-  pinMode(pin, OUTPUT);
-  digitalWrite(pin, kActuatorOffLevel);
+  io::write_pin(pin, kActuatorOffLevel);
+  io::pin_mode(pin, io::kModeOutput);
+  io::write_pin(pin, kActuatorOffLevel);
   Serial.printf("[l0] %-11s GPIO%u (safe=OFF)\n", name, static_cast<unsigned>(pin));
 }
 
-// A 74HC595 with MSBFIRST puts bit 0 on Q0 (QA), matching the old ESPHome
+// A 74HC595 with MSBFIRST puts bit 0 on Q0 (QA), matching the legacy ESPHome
 // configuration.
 void write_shift_register() {
   if (g_board.output_backend != OutputBackend::ShiftRegister) {
     return;
   }
+  if (!is_assigned(g_board.sr_data_pin) || !is_assigned(g_board.sr_clock_pin) ||
+      !is_assigned(g_board.sr_latch_pin)) {
+    return;
+  }
 
-  digitalWrite(g_board.sr_latch_pin, LOW);
-  shiftOut(g_board.sr_data_pin, g_board.sr_clock_pin, MSBFIRST, g_sr_cache);
-  digitalWrite(g_board.sr_latch_pin, HIGH);
-  digitalWrite(g_board.sr_latch_pin, LOW);
+  io::shift_out_msb(g_board.sr_data_pin, g_board.sr_clock_pin, g_board.sr_latch_pin, g_sr_cache);
 }
 
 void init_shift_register() {
@@ -82,18 +86,18 @@ void init_shift_register() {
     return;
   }
 
-  digitalWrite(g_board.sr_data_pin, LOW);
-  pinMode(g_board.sr_data_pin, OUTPUT);
-  digitalWrite(g_board.sr_clock_pin, LOW);
-  pinMode(g_board.sr_clock_pin, OUTPUT);
-  digitalWrite(g_board.sr_latch_pin, LOW);
-  pinMode(g_board.sr_latch_pin, OUTPUT);
+  io::write_pin(g_board.sr_data_pin, io::kLow);
+  io::pin_mode(g_board.sr_data_pin, io::kModeOutput);
+  io::write_pin(g_board.sr_clock_pin, io::kLow);
+  io::pin_mode(g_board.sr_clock_pin, io::kModeOutput);
+  io::write_pin(g_board.sr_latch_pin, io::kLow);
+  io::pin_mode(g_board.sr_latch_pin, io::kModeOutput);
 
   if (is_assigned(g_board.sr_oe_pin)) {
-    const uint8_t disable_level = g_board.sr_oe_active_low ? HIGH : LOW;
-    digitalWrite(g_board.sr_oe_pin, disable_level);
-    pinMode(g_board.sr_oe_pin, OUTPUT);
-    digitalWrite(g_board.sr_oe_pin, disable_level);
+    const uint8_t disable_level = g_board.sr_oe_active_low ? io::kHigh : io::kLow;
+    io::write_pin(g_board.sr_oe_pin, disable_level);
+    io::pin_mode(g_board.sr_oe_pin, io::kModeOutput);
+    io::write_pin(g_board.sr_oe_pin, disable_level);
   }
 
   // Zero every output before enabling the relay drivers.
@@ -101,15 +105,14 @@ void init_shift_register() {
   write_shift_register();
 
   if (is_assigned(g_board.sr_oe_pin)) {
-    const uint8_t enable_level = g_board.sr_oe_active_low ? LOW : HIGH;
-    digitalWrite(g_board.sr_oe_pin, enable_level);
+    const uint8_t enable_level = g_board.sr_oe_active_low ? io::kLow : io::kHigh;
+    io::write_pin(g_board.sr_oe_pin, enable_level);
   }
 
-  Serial.printf("[l0] 74HC595 data=%u clock=%u latch=%u oe=%u\n",
-                static_cast<unsigned>(g_board.sr_data_pin),
-                static_cast<unsigned>(g_board.sr_clock_pin),
-                static_cast<unsigned>(g_board.sr_latch_pin),
-                static_cast<unsigned>(g_board.sr_oe_pin));
+  Serial.printf(
+      "[l0] 74HC595 data=%u clock=%u latch=%u oe=%u\n", static_cast<unsigned>(g_board.sr_data_pin),
+      static_cast<unsigned>(g_board.sr_clock_pin), static_cast<unsigned>(g_board.sr_latch_pin),
+      static_cast<unsigned>(g_board.sr_oe_pin));
 }
 
 void init_direct_outputs() {
@@ -127,44 +130,30 @@ void init_current_mux() {
   }
 
   if (is_assigned(g_board.adc_pin)) {
-    pinMode(g_board.adc_pin, INPUT);
+    io::adc_begin(g_board.adc_pin);
   }
 
-  // 74HC4051 S2/S3 are held low on the old carrier; only channels 0-3 are used.
+  // 74HC4051 S2/S3 are held low on the HomeNet Heatpumps 1.0 carrier; only
+  // channels 0-3 are used.
   if (is_assigned(g_board.mux_s2_pin)) {
-    pinMode(g_board.mux_s2_pin, OUTPUT);
-    digitalWrite(g_board.mux_s2_pin, LOW);
+    io::pin_mode(g_board.mux_s2_pin, io::kModeOutput);
+    io::write_pin(g_board.mux_s2_pin, io::kLow);
   }
   if (g_board.mux_s3_pin != g_board.mux_s2_pin && is_assigned(g_board.mux_s3_pin)) {
-    pinMode(g_board.mux_s3_pin, OUTPUT);
-    digitalWrite(g_board.mux_s3_pin, LOW);
+    io::pin_mode(g_board.mux_s3_pin, io::kModeOutput);
+    io::write_pin(g_board.mux_s3_pin, io::kLow);
   }
 
-  analogReadResolution(12);
+  io::adc_set_resolution(12);
   Serial.printf("[l0] current MUX adc=GPIO%u\n", static_cast<unsigned>(g_board.adc_pin));
 }
 
-void init_leds() {
-  if (!is_assigned(g_config.gpio_led_data) || g_config.num_leds == 0) {
+void leds_off() {
+  if (!g_leds_ready) {
     return;
   }
-
-  g_leds.updateLength(g_config.num_leds);
-  g_leds.setPin(static_cast<int16_t>(g_config.gpio_led_data));
-  g_leds.begin();
-  g_leds.clear();
-  g_leds.show();
-  g_leds_ready = true;
-
-  Serial.printf("[l0] LEDs      GPIO%u x%u\n", static_cast<unsigned>(g_config.gpio_led_data),
-                static_cast<unsigned>(g_config.num_leds));
-}
-
-void leds_off() {
-  if (g_leds_ready) {
-    g_leds.clear();
-    g_leds.show();
-  }
+  uint8_t zeros[kMaxLeds * 3] = {};
+  io::leds_show(zeros, g_led_count);
 }
 
 }  // namespace
@@ -174,10 +163,14 @@ void begin(const Config& config, const BoardConfig& board) {
   g_board = board;
   g_sr_cache = 0;
   g_leds_ready = false;
+  g_led_count = 0;
 
-  Serial.printf("[l0] board     %s (%s)\n", g_board.name,
-                g_board.output_backend == OutputBackend::ShiftRegister ? "74HC595"
-                                                                       : "direct GPIO");
+  Serial.printf("[l0] carrier   %s (%s)\n", g_board.name,
+                g_board.output_backend == OutputBackend::ShiftRegister ? "74HC595" : "direct GPIO");
+  Serial.printf("[l0] backend   %s\n", io::kEmulated ? "emulation" : "hardware");
+
+  // Seed the emulation model (or the hardware backend) with this carrier.
+  io::begin(g_config, g_board);
 
   if (g_board.output_backend == OutputBackend::ShiftRegister) {
     init_shift_register();
@@ -186,7 +179,15 @@ void begin(const Config& config, const BoardConfig& board) {
   }
 
   init_current_mux();
-  init_leds();
+
+  if (is_assigned(g_config.gpio_led_data) && g_config.num_leds > 0) {
+    g_led_count = g_config.num_leds > kMaxLeds ? kMaxLeds : g_config.num_leds;
+    io::leds_begin(g_config.gpio_led_data, g_led_count);
+    g_leds_ready = true;
+    Serial.printf("[l0] LEDs      GPIO%u x%u\n", static_cast<unsigned>(g_config.gpio_led_data),
+                  static_cast<unsigned>(g_led_count));
+  }
+
   apply_safe_state();
 }
 
@@ -202,7 +203,7 @@ void apply_safe_state() {
     };
     for (uint8_t pin : pins) {
       if (is_assigned(pin)) {
-        digitalWrite(pin, kActuatorOffLevel);
+        io::write_pin(pin, kActuatorOffLevel);
       }
     }
   }
@@ -212,7 +213,9 @@ void apply_safe_state() {
 
 void tick(const Config& config, const BoardConfig& board, SystemState& state) {
   // Placeholder for the L0 pulse state machine, 1-Wire conversion scheduling,
-  // encoder sampling, and pump-power plausibility checks.
+  // encoder sampling, and pump-power plausibility checks. The sensor seam is
+  // already in place: read_temperature() and read_power_w() answer from the
+  // emulation model under HPN_IO_EMULATION.
   (void)config;
   (void)board;
   (void)state;
@@ -235,7 +238,7 @@ void set_relay(Relay relay, bool on) {
 
   const uint8_t pin = relay_pin(relay);
   if (is_assigned(pin)) {
-    digitalWrite(pin, on ? kActuatorOnLevel : kActuatorOffLevel);
+    io::write_pin(pin, on ? kActuatorOnLevel : kActuatorOffLevel);
   }
 }
 
@@ -260,27 +263,44 @@ void set_mixer_motor(bool enabled, bool open_direction) {
     return;
   }
 
-  // Direct-GPIO boards use separate, hardware-interlocked open/close relays.
+  // Direct-GPIO carriers use separate, hardware-interlocked open/close relays.
   const bool can_open = is_assigned(g_config.gpio_mix_open);
   const bool can_close = is_assigned(g_config.gpio_mix_close);
   if (can_open) {
-    digitalWrite(g_config.gpio_mix_open,
-                (enabled && open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    io::write_pin(g_config.gpio_mix_open,
+                  (enabled && open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
   }
   if (can_close) {
-    digitalWrite(g_config.gpio_mix_close,
-                (enabled && !open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    io::write_pin(g_config.gpio_mix_close,
+                  (enabled && !open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
   }
 }
 
+void set_leds(const uint8_t* rgb, uint16_t count) {
+  if (!g_leds_ready || rgb == nullptr) {
+    return;
+  }
+  if (count > g_led_count) {
+    count = g_led_count;
+  }
+  io::leds_show(rgb, count);
+}
+
+bool read_temperature(TempRole role, float& celsius) {
+  return io::read_temperature(role, celsius);
+}
+
+float read_power_w(CurrentChannel channel) {
+  return io::read_power_w(channel);
+}
+
 bool select_current_channel(CurrentChannel channel) {
-  if (!g_board.has_current_mux ||
-      g_board.output_backend != OutputBackend::ShiftRegister) {
+  if (!g_board.has_current_mux || g_board.output_backend != OutputBackend::ShiftRegister) {
     return false;
   }
 
   const uint8_t index = static_cast<uint8_t>(channel);
-  if (index >= static_cast<uint8_t>(CurrentChannel::Count)) {
+  if (index >= kCurrentChannelCount) {
     return false;
   }
 
@@ -302,18 +322,23 @@ bool select_current_channel(CurrentChannel channel) {
   }
 
   write_shift_register();
-  delayMicroseconds(100);  // let the analogue switch settle
+  io::delay_us(100);  // let the analogue switch settle
   return true;
 }
 
 uint16_t read_current_raw(CurrentChannel channel) {
+  if (io::kEmulated) {
+    // The emulation models power in watts, not an ADC waveform; use
+    // read_power_w() instead.
+    return 0;
+  }
   if (!is_assigned(g_board.adc_pin)) {
     return 0;
   }
   if (!select_current_channel(channel)) {
     return 0;
   }
-  return analogRead(g_board.adc_pin);
+  return io::adc_read(g_board.adc_pin);
 }
 
 }  // namespace l0

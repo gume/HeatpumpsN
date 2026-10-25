@@ -2,22 +2,17 @@
 
 #include "hpn/board.h"
 #include "hpn/config.h"
+#include "hpn/io_types.h"
 #include "hpn/state.h"
 
 // L0: the only layer allowed to touch hardware pins (plan 02 §2.1).
 //
-// The board profile selects direct GPIOs or the old board's 74HC595 output
-// expander. Higher layers only call the logical helpers below; they never see
-// shift-register bits or MUX select lines.
+// The carrier profile selects direct GPIOs or the 74HC595 output expander; the
+// I/O backend selects real pins or the emulation model. Higher layers only call
+// the logical helpers below; they never see shift-register bits, MUX select
+// lines or pin numbers.
 namespace hpn {
 namespace l0 {
-
-enum class Relay : uint8_t {
-  Heater = 0,
-  PumpRad1,
-  PumpRad2,
-  PumpFloor,
-};
 
 void begin(const Config& config, const BoardConfig& board);
 
@@ -31,7 +26,15 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state);
 void set_relay(Relay relay, bool on);
 void set_mixer_motor(bool enabled, bool open_direction);
 
-// Current-measurement MUX. Returns false when the active board has no MUX or
+// Addressable LED chain. rgb is count * 3 bytes in logical RGB order.
+void set_leds(const uint8_t* rgb, uint16_t count);
+
+// Sensor access. On hardware these are not implemented yet and report "no
+// data"; under emulation they return the values mocked in hpn::sim.
+bool read_temperature(TempRole role, float& celsius);
+float read_power_w(CurrentChannel channel);
+
+// Current-measurement MUX. Returns false when the active carrier has no MUX or
 // the requested channel is absent.
 bool select_current_channel(CurrentChannel channel);
 uint16_t read_current_raw(CurrentChannel channel);
