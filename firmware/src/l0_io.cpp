@@ -261,7 +261,9 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
     state.mixer_power_w = read_power_w(CurrentChannel::Mixer);
   }
 
-  // The mixer pulse state machine and encoder sampling are still TODO(L0).
+  // Encoder sampling and the remaining L0 diagnostics are still TODO(L0). The
+  // mixer pulse state machine now lives in L1 so bench and hardware builds
+  // share the same actuator path.
   (void)board;
 }
 
