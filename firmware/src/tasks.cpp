@@ -94,9 +94,13 @@ bool health_ok() {
 
 void watchdog_begin(uint32_t timeout_ms) {
   esp_task_wdt_config_t config = {timeout_ms, 0, true};
-  esp_err_t err = esp_task_wdt_init(&config);
+
+  // The Arduino core already initialized the task watchdog during startup, so
+  // reconfigure the existing instance first. Calling init() unconditionally
+  // logs "TWDT already initialized" and leaves the default timeout in place.
+  esp_err_t err = esp_task_wdt_reconfigure(&config);
   if (err == ESP_ERR_INVALID_STATE) {
-    err = esp_task_wdt_reconfigure(&config);
+    err = esp_task_wdt_init(&config);
   }
 
   g_wdt_ready = (err == ESP_OK);

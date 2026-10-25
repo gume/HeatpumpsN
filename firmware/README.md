@@ -78,7 +78,9 @@ timeout 10s pio remote device monitor -b 115200 || true
 ```
 
 Always bound `pio remote device monitor` with `timeout`; an unbounded monitor
-blocks the session.
+blocks the session. The monitor also needs a terminal: `pio remote device
+monitor` refuses piped or redirected stdin. For scripted captures, open the
+serial port directly (the agent runs on the host that owns it).
 
 The remote agent is authenticated through the PlatformIO account
 (`pio account login`). Check availability with `pio remote agent list`, and
@@ -90,6 +92,22 @@ environment explicitly when the target must drive real pins.
 
 Local `pio run` remains available as an offline compile-only fallback, but
 build/flash/monitor operations for the target board use the remote agent.
+
+### Remote upload workaround
+
+`pio remote run --target upload` uploads with the `nobuild` target. That skips
+the ESP32 platform's `checkprogsize`/partition parsing, so `ESP32_APP_OFFSET`
+used to expire empty and esptool rejected the call with `Address
+".pio/build/<env>/firmware.bin" must be a number`. `[env] upload_command` in
+`platformio.ini` therefore spells out `0x10000` explicitly.
+
+Consequence: remote uploads only write the application image. A device that has
+never been flashed (no bootloader or partition table) needs one local
+`pio run -t upload` first. PlatformIO Remote also does not sync arbitrary
+project files, only `platformio.ini`, `src/`, `include/`, `lib/`, `data/` and
+the built binaries, so the workaround must live in `platformio.ini` — an
+`extra_scripts` helper at the project root fails remotely with
+`missing SConscript file`.
 
 ## Layout
 
