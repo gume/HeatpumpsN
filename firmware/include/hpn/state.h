@@ -96,6 +96,7 @@ struct SystemState {
   uint32_t mix_pulse_ms_req;
   int8_t mix_pulse_dir_phys;
   uint32_t mix_pulse_ms_phys;
+  bool mix_free_run;  // homing/sweep: ignore soft limits until the pulse ends
 
   // --- Relays: Intended (L4), Requested (L2), Physical (L1 -> L0) ----------
   bool heater_intended, heater_requested, heater_phys;

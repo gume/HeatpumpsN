@@ -117,7 +117,7 @@ struct Snapshot {
   uint32_t mqtt_errors;
 };
 
-enum class Sequence : uint8_t { None = 0, AntiSeize };
+enum class Sequence : uint8_t { None = 0, AntiSeize, EndstopHome, MixerSweep };
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -1148,46 +1148,113 @@ void deactivate_test(const char* reason) {
     g_state->pump_rad2_intended = false;
     g_state->mix_pulse_ms_req = 0;
     g_state->mix_pulse_dir_req = 0;
+    g_state->mix_free_run = false;
+    float pos = g_state->pos_est_dr;
+    if (pos < 0.0f) pos = 0.0f;
+    if (pos > 1.0f) pos = 1.0f;
+    g_state->mix_target_pos = pos;
   }
 
   log_event(0, 1002, reason);
 }
 
 void tick_sequence(uint32_t now_ms) {
-  if (g_sequence != Sequence::AntiSeize || g_state == nullptr) {
+  if (g_sequence == Sequence::None || g_state == nullptr) {
     return;
   }
   if (static_cast<int32_t>(now_ms - g_sequence_next_ms) < 0) {
     return;
   }
 
-  switch (g_sequence_step) {
-    case 0:
-      g_state->pump_floor_intended = true;
-      log_event(0, 1400, "Anti-seize sequence: floor pump on");
-      g_sequence_step = 1;
-      g_sequence_next_ms = now_ms + 30000u;
-      break;
-    case 1:
-      g_state->pump_floor_intended = false;
-      g_state->pump_rad1_intended = true;
-      log_event(0, 1401, "Anti-seize sequence: rad1 pump on");
-      g_sequence_step = 2;
-      g_sequence_next_ms = now_ms + 30000u;
-      break;
-    case 2:
-      g_state->pump_rad1_intended = false;
-      g_state->pump_rad2_intended = true;
-      log_event(0, 1402, "Anti-seize sequence: rad2 pump on");
-      g_sequence_step = 3;
-      g_sequence_next_ms = now_ms + 30000u;
-      break;
-    default:
-      g_state->pump_rad2_intended = false;
-      g_sequence = Sequence::None;
-      g_sequence_step = 0;
-      log_event(0, 1403, "Anti-seize sequence complete");
-      break;
+  if (g_sequence == Sequence::AntiSeize) {
+    switch (g_sequence_step) {
+      case 0:
+        g_state->pump_floor_intended = true;
+        log_event(0, 1400, "Anti-seize sequence: floor pump on");
+        g_sequence_step = 1;
+        g_sequence_next_ms = now_ms + 30000u;
+        break;
+      case 1:
+        g_state->pump_floor_intended = false;
+        g_state->pump_rad1_intended = true;
+        log_event(0, 1401, "Anti-seize sequence: rad1 pump on");
+        g_sequence_step = 2;
+        g_sequence_next_ms = now_ms + 30000u;
+        break;
+      case 2:
+        g_state->pump_rad1_intended = false;
+        g_state->pump_rad2_intended = true;
+        log_event(0, 1402, "Anti-seize sequence: rad2 pump on");
+        g_sequence_step = 3;
+        g_sequence_next_ms = now_ms + 30000u;
+        break;
+      default:
+        g_state->pump_rad2_intended = false;
+        g_sequence = Sequence::None;
+        g_sequence_step = 0;
+        log_event(0, 1403, "Anti-seize sequence complete");
+        break;
+    }
+    return;
+  }
+
+  const uint32_t travel_ms =
+      g_config != nullptr && g_config->travel_time_ms > 0 ? g_config->travel_time_ms : 120000;
+  const uint32_t stroke_ms = travel_ms + 10000u;
+
+  if (g_sequence == Sequence::EndstopHome) {
+    switch (g_sequence_step) {
+      case 0:
+        g_state->mix_free_run = true;
+        g_state->mix_target_pos = 0.0f;
+        g_state->mix_pulse_dir_req = -1;
+        g_state->mix_pulse_ms_req = stroke_ms;
+        log_event(0, 1420, "Endstop home: driving mixer fully closed");
+        g_sequence_step = 1;
+        g_sequence_next_ms = now_ms + stroke_ms;
+        break;
+      default:
+        g_state->mix_free_run = false;
+        g_state->pos_est_dr = 0.0f;
+        g_state->mix_target_pos = 0.0f;
+        g_sequence = Sequence::None;
+        g_sequence_step = 0;
+        log_event(0, 1421, "Endstop home complete; dead reckoning zeroed");
+        break;
+    }
+    return;
+  }
+
+  if (g_sequence == Sequence::MixerSweep) {
+    switch (g_sequence_step) {
+      case 0:
+        g_state->mix_free_run = true;
+        g_state->mix_target_pos = 1.0f;
+        g_state->mix_pulse_dir_req = 1;
+        g_state->mix_pulse_ms_req = stroke_ms;
+        log_event(0, 1430, "Mixer sweep: driving fully open");
+        g_sequence_step = 1;
+        g_sequence_next_ms = now_ms + stroke_ms;
+        break;
+      case 1:
+        g_state->mix_free_run = true;
+        g_state->mix_target_pos = 0.0f;
+        g_state->mix_pulse_dir_req = -1;
+        g_state->mix_pulse_ms_req = stroke_ms;
+        log_event(0, 1431, "Mixer sweep: driving fully closed");
+        g_sequence_step = 2;
+        g_sequence_next_ms = now_ms + stroke_ms;
+        break;
+      default:
+        g_state->mix_free_run = false;
+        g_state->pos_est_dr = 0.0f;
+        g_state->mix_target_pos = 0.0f;
+        g_sequence = Sequence::None;
+        g_sequence_step = 0;
+        log_event(0, 1432, "Mixer sweep complete");
+        break;
+    }
+    return;
   }
 }
 
@@ -1730,6 +1797,9 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
   if (mixer[0] != '\0') {
     if (strcmp(mixer, "stop") == 0) {
       g_state->mix_pulse_ms_req = 0;
+      // Freeze the position loop where the valve is now so the next target
+      // does not make L2 drive the motor again immediately.
+      g_state->mix_target_pos = g_state->pos_est_dr;
       log_event(0, 1102, "Test command: mixer stop");
       JsonDocument doc;
       doc["ok"] = true;
@@ -1752,8 +1822,20 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
         pulse_ms = max_pulse;
       }
 
-      g_state->mix_pulse_dir_req = strcmp(mixer, "open") == 0 ? 1 : -1;
+      const bool open = strcmp(mixer, "open") == 0;
+      g_state->mix_pulse_dir_req = open ? 1 : -1;
       g_state->mix_pulse_ms_req = pulse_ms;
+
+      // Keep the position loop aligned with the raw pulse so L2 does not fight
+      // the manual nudge once the pulse has finished.
+      const uint32_t travel_ms =
+          g_config != nullptr && g_config->travel_time_ms > 0 ? g_config->travel_time_ms : 120000;
+      float expected = g_state->pos_est_dr +
+                       (open ? 1.0f : -1.0f) *
+                           (static_cast<float>(pulse_ms) / static_cast<float>(travel_ms));
+      if (expected < 0.0f) expected = 0.0f;
+      if (expected > 1.0f) expected = 1.0f;
+      g_state->mix_target_pos = expected;
 
       char detail[96];
       snprintf(detail, sizeof(detail), "Test command: mixer %s for %ums", mixer,
@@ -1811,8 +1893,21 @@ void handle_test_sequence(AsyncWebServerRequest* request, const char* id) {
     return;
   }
 
-  if (strcmp(id, "mixer-sweep") == 0 || strcmp(id, "endstop-home") == 0 ||
-      strcmp(id, "heater-pump") == 0) {
+  if (strcmp(id, "mixer-sweep") == 0 || strcmp(id, "endstop-home") == 0) {
+    g_sequence = strcmp(id, "mixer-sweep") == 0 ? Sequence::MixerSweep : Sequence::EndstopHome;
+    g_sequence_step = 0;
+    g_sequence_next_ms = millis();
+    log_event(0, strcmp(id, "mixer-sweep") == 0 ? 1411 : 1412,
+              strcmp(id, "mixer-sweep") == 0 ? "Mixer sweep sequence started"
+                                             : "Endstop home sequence started");
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["sequence"] = id;
+    send_json(request, 200, doc);
+    return;
+  }
+
+  if (strcmp(id, "heater-pump") == 0) {
     send_error(request, 501, "test sequence is not implemented yet");
     return;
   }
@@ -1878,6 +1973,13 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   mixer["override"] = snapshot.mixer_override;
   mixer["manualMotion"] = snapshot.mixer_manual_motion;
   mixer["manualOpen"] = snapshot.mixer_manual_open;
+  mixer["position"] = snapshot.mixer_position;
+
+  JsonObject controller = doc["controller"].to<JsonObject>();
+  controller["estimatedPosition"] = g_state != nullptr ? g_state->pos_est_dr * 100.0f : 0.0f;
+  controller["targetPosition"] = g_state != nullptr ? g_state->mix_target_pos * 100.0f : 0.0f;
+  controller["motion"] = g_state != nullptr && g_state->mix_pulse_ms_phys > 0;
+  controller["direction"] = g_state != nullptr ? g_state->mix_pulse_dir_phys : 0;
 
   doc["followController"] = snapshot.follow_controller;
   doc["realisticPower"] = snapshot.realistic_power;

@@ -36,6 +36,7 @@ struct Snapshot {
   bool mixer_override;
   bool mixer_manual_motion;
   bool mixer_manual_open;
+  float mixer_position;  // simulated valve position, 0.0 closed .. 1.0 open
 
   // Emulation behaviour switches.
   bool follow_controller;  // relays/mixer follow L0 unless overridden

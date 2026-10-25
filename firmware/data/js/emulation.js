@@ -12,7 +12,11 @@ const state = {
   snapshot: null,
   error: null,
   timer: null,
-  interactingUntil: 0
+  interactingUntil: 0,
+  dirtyTemps: new Set(),
+  dirtyPower: new Set(),
+  pendingTemps: new Map(),
+  pendingPower: new Map()
 };
 
 const TEMP_LABELS = {
@@ -136,7 +140,9 @@ function renderTemperatureControls(temps, snapshot) {
 
   return Object.keys(TEMP_LABELS).map((role) => {
     const item = temps[role] || { value: 0, valid: true };
-    const value = num(item.value, 0);
+    const pending = state.pendingTemps.get(role);
+    const value = pending ? pending.value : num(item.value, 0);
+    const valid = pending ? pending.valid : item.valid !== false;
     const locked = role === 'boiler' && realisticBoiler;
     const disabled = locked ? 'disabled' : '';
     const min = role === 'boiler' ? 15 : -20;
@@ -150,7 +156,7 @@ function renderTemperatureControls(temps, snapshot) {
         <span class="unit">°C</span>
       </div>
       <div class="row between">
-        <label class="checkbox-row"><input type="checkbox" data-temp-valid="${esc(role)}" ${item.valid !== false ? 'checked' : ''} ${disabled}> valid</label>
+        <label class="checkbox-row"><input type="checkbox" data-temp-valid="${esc(role)}" ${valid ? 'checked' : ''} ${disabled}> valid</label>
         <button class="btn btn-sm" type="button" data-sim-temp="${esc(role)}" ${disabled}>Apply</button>
       </div>
       ${locked ? '<div class="small faint">Realistic boiler sine is active. Turn it off to edit.</div>' : ''}
@@ -162,7 +168,8 @@ function renderPowerControls(power, powerSet, snapshot) {
   const realistic = !!snapshot.realisticPower;
 
   return Object.keys(POWER_LABELS).map((channel) => {
-    const value = num(powerSet[channel], POWER_DEFAULTS[channel]);
+    const pending = state.pendingPower.get(channel);
+    const value = pending !== undefined ? pending : num(powerSet[channel], POWER_DEFAULTS[channel]);
     const actual = num(power[channel], 0);
     const label = realistic ? (channel === 'mixer' ? 'Moving power' : 'On power') : 'Power';
 
@@ -198,6 +205,10 @@ function renderStage(snapshot) {
   const relayOverride = snapshot.relayOverride || {};
   const power = snapshot.power || {};
   const mixer = snapshot.mixer || {};
+  const controller = snapshot.controller || {};
+  const valvePos = Math.max(0, Math.min(100, num(mixer.position, 0) * 100));
+  const controllerPos = Math.max(0, Math.min(100, num(controller.estimatedPosition, 0)));
+  const controllerTarget = Math.max(0, Math.min(100, num(controller.targetPosition, 0)));
   const outputByte = num(snapshot.outputByte, 0);
 
   return `<section class="emu-stage">
@@ -220,15 +231,18 @@ function renderStage(snapshot) {
           <span class="chip">${mixer.motion ? (mixer.open ? 'open command' : 'close command') : 'idle'}</span>
         </div>
         <div class="mixer-bar" style="margin-top:10px">
-          <span class="${mixer.motion ? 'moving' : ''}" style="left:${mixer.open ? '50%' : '0%'};width:50%"></span>
+          <span class="${mixer.motion ? 'moving' : ''}" style="left:0;width:${valvePos.toFixed(1)}%"></span>
         </div>
         <div class="mixer-labels"><span>closed</span><span>open</span></div>
+        <div class="metric-row"><span class="k">Simulated valve</span><span class="v">${valvePos.toFixed(1)}%</span></div>
+        <div class="metric-row"><span class="k">Controller estimate</span><span class="v">${controllerPos.toFixed(1)}%</span></div>
+        <div class="metric-row"><span class="k">Controller target</span><span class="v">${controllerTarget.toFixed(1)}%</span></div>
         <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
-          <button class="btn btn-sm" type="button" data-sim-mixer="open">Open</button>
+          <button class="btn btn-sm" type="button" data-sim-mixer="open">Increase</button>
           <button class="btn btn-sm" type="button" data-sim-mixer="stop">Stop</button>
-          <button class="btn btn-sm" type="button" data-sim-mixer="close">Close</button>
+          <button class="btn btn-sm" type="button" data-sim-mixer="close">Decrease</button>
         </div>
-        <p class="emu-note">${mixer.motion ? `Motor energized (${mixer.open ? 'opening' : 'closing'}), ${fmtNum(power.mixer, 1)} W.` : `Motor idle, ${fmtNum(power.mixer, 1)} W.`}</p>
+        <p class="emu-note">${mixer.motion ? `Motor energized (${mixer.open ? 'opening / increasing' : 'closing / decreasing'}), ${fmtNum(power.mixer, 1)} W.` : `Motor idle, ${fmtNum(power.mixer, 1)} W.`}</p>
       </div>
 
       <div class="emu-block">
@@ -248,6 +262,7 @@ function renderStage(snapshot) {
 function syncLiveReadouts(snapshot) {
   const temps = snapshotMap(snapshot);
   for (const role of Object.keys(TEMP_LABELS)) {
+    if (state.dirtyTemps.has(role)) continue;
     const item = temps[role];
     if (!item) continue;
     const value = num(item.value, 0);
@@ -259,6 +274,7 @@ function syncLiveReadouts(snapshot) {
 
   const powerSet = snapshot.powerSet || {};
   for (const channel of Object.keys(POWER_LABELS)) {
+    if (state.dirtyPower.has(channel)) continue;
     const value = num(powerSet[channel], POWER_DEFAULTS[channel]);
     const range = root.querySelector(`[data-power-range="${channel}"]`);
     const number = root.querySelector(`[data-power-value="${channel}"]`);
@@ -281,8 +297,11 @@ function render() {
   }
 
   const active = document.activeElement;
+  // Checkboxes are state toggles, not text-entry fields: allow the poll to
+  // re-render so dependent controls (for example the realistic-boiler lock)
+  // update immediately. Skip only while a number/range editor is focused.
   if (active && root.contains(active) &&
-      active.matches('input[type="number"], input[type="range"], input[type="checkbox"]')) {
+      (active.matches('input[type="number"], input[type="range"]') || active.isContentEditable)) {
     return;
   }
   if (Date.now() < state.interactingUntil) {
@@ -392,7 +411,20 @@ function syncRange(target, value) {
 
 root.addEventListener('input', (event) => {
   const target = event.target;
-  if (target.matches('[data-temp-range], [data-temp-value], [data-power-range], [data-power-value]')) {
+  if (target.matches('[data-temp-range], [data-temp-value]')) {
+    const role = target.dataset.tempRange || target.dataset.tempValue;
+    const validInput = root.querySelector(`[data-temp-valid="${role}"]`);
+    state.pendingTemps.set(role, {
+      value: Number(target.value),
+      valid: validInput ? validInput.checked : true
+    });
+    state.dirtyTemps.add(role);
+    state.interactingUntil = Date.now() + 1500;
+    syncRange(target, target.value);
+  } else if (target.matches('[data-power-range], [data-power-value]')) {
+    const channel = target.dataset.powerRange || target.dataset.powerValue;
+    state.pendingPower.set(channel, Number(target.value));
+    state.dirtyPower.add(channel);
     state.interactingUntil = Date.now() + 1500;
     syncRange(target, target.value);
   }
@@ -400,6 +432,18 @@ root.addEventListener('input', (event) => {
 
 root.addEventListener('change', async (event) => {
   const target = event.target;
+  if (target.matches('[data-temp-valid]')) {
+    const role = target.dataset.tempValid;
+    const valueInput = root.querySelector(`[data-temp-value="${role}"]`);
+    state.pendingTemps.set(role, {
+      value: Number(valueInput ? valueInput.value : 0),
+      valid: target.checked
+    });
+    state.dirtyTemps.add(role);
+    state.interactingUntil = Date.now() + 1500;
+    return;
+  }
+
   let payload = null;
 
   if (target.matches('[data-sim-follow]')) {
@@ -418,6 +462,10 @@ root.addEventListener('change', async (event) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
+    if (payload.realisticBoiler === true) {
+      state.dirtyTemps.delete('boiler');
+      state.pendingTemps.delete('boiler');
+    }
     state.interactingUntil = 0;
     toast('Emulation behavior updated.', 'ok');
     await refreshSim();
@@ -471,6 +519,10 @@ root.addEventListener('click', async (event) => {
     if (!window.confirm('Reset the simulation model to its defaults?')) return;
     try {
       await api('/api/sim/reset', { method: 'POST' });
+      state.dirtyTemps.clear();
+      state.dirtyPower.clear();
+      state.pendingTemps.clear();
+      state.pendingPower.clear();
       state.interactingUntil = 0;
       toast('Simulation model reset.', 'ok');
       await refreshSim();
@@ -484,6 +536,10 @@ root.addEventListener('click', async (event) => {
     button.disabled = true;
     try {
       await api('/api/sim/overrides/clear', { method: 'POST' });
+      state.dirtyTemps.clear();
+      state.dirtyPower.clear();
+      state.pendingTemps.clear();
+      state.pendingPower.clear();
       state.interactingUntil = 0;
       toast('Manual overrides cleared.', 'ok');
       await refreshSim();
@@ -554,6 +610,8 @@ root.addEventListener('click', async (event) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role, value, valid: validInput ? validInput.checked : true })
       });
+      state.dirtyTemps.delete(role);
+      state.pendingTemps.delete(role);
       state.interactingUntil = 0;
       toast(`${TEMP_LABELS[role] || role} set to ${fmtTemp(value)}.`, 'ok');
       await refreshSim();
@@ -580,6 +638,8 @@ root.addEventListener('click', async (event) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel, watts })
       });
+      state.dirtyPower.delete(channel);
+      state.pendingPower.delete(channel);
       state.interactingUntil = 0;
       toast(`${POWER_LABELS[channel] || channel} set to ${fmtNum(watts, 1)} W.`, 'ok');
       await refreshSim();

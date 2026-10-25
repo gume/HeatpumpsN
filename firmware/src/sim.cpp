@@ -38,6 +38,8 @@ struct Model {
   bool mixer_override;
   bool mixer_manual_motion;
   bool mixer_manual_open;
+  float mixer_position;
+  uint32_t mixer_last_ms;
 
   uint16_t led_count;
   uint8_t led_rgb[kMaxLeds * 3];
@@ -163,6 +165,32 @@ float effective_temperature(const Model& model, TempRole role, uint32_t now_ms) 
   return model.temperature_set_c[index];
 }
 
+// Integrate the simulated valve position while the motor is energised. The
+// controller's own dead-reckoning estimate lives in SystemState; this is the
+// "physical" carrier position that the emulation page shows next to it.
+void advance_mixer_locked(Model& model, uint32_t now_ms) {
+  if (model.mixer_last_ms == 0) {
+    model.mixer_last_ms = now_ms;
+    return;
+  }
+
+  const uint32_t elapsed_ms = now_ms - model.mixer_last_ms;
+  model.mixer_last_ms = now_ms;
+  if (!effective_mixer_motion(model)) {
+    return;
+  }
+
+  const uint32_t travel_ms =
+      model.config.travel_time_ms > 0 ? model.config.travel_time_ms : 120000;
+  const float delta = static_cast<float>(elapsed_ms) / static_cast<float>(travel_ms);
+  model.mixer_position += effective_mixer_open(model) ? delta : -delta;
+  if (model.mixer_position < 0.0f) {
+    model.mixer_position = 0.0f;
+  } else if (model.mixer_position > 1.0f) {
+    model.mixer_position = 1.0f;
+  }
+}
+
 Relay relay_for_channel(CurrentChannel channel) {
   switch (channel) {
     case CurrentChannel::PumpFloor:
@@ -240,6 +268,8 @@ void reset_locked(Model& model) {
   model.mixer_override = false;
   model.mixer_manual_motion = false;
   model.mixer_manual_open = false;
+  model.mixer_position = 0.0f;
+  model.mixer_last_ms = 0;
 
   model.led_count = 0;
   memset(model.led_rgb, 0, sizeof(model.led_rgb));
@@ -282,6 +312,7 @@ Snapshot snapshot() {
   const uint32_t now_ms = millis();
 
   taskENTER_CRITICAL(&g_mux);
+  advance_mixer_locked(g_model, now_ms);
   const Model& model = g_model;
 
   out.revision = model.revision;
@@ -306,6 +337,7 @@ Snapshot snapshot() {
   out.mixer_override = model.mixer_override;
   out.mixer_manual_motion = model.mixer_manual_motion;
   out.mixer_manual_open = model.mixer_manual_open;
+  out.mixer_position = model.mixer_position;
   out.follow_controller = model.follow_controller;
   out.realistic_power = model.realistic_power;
   out.realistic_boiler = model.realistic_boiler;

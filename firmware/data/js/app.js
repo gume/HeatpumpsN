@@ -1206,14 +1206,14 @@ function renderTest() {
             <span class="unit">%</span>
             <button class="btn btn-sm" type="button" data-action="test-target">Store</button>
           </div>
-          <small>Stores the target only. The pulse engine is bench-only and does not run closed-loop position control.</small>
+          <small>Stores the target. L2 now drives the valve toward it with pulse control and dead-reckoned position feedback.</small>
         </div>
       </section>
     </div>
 
     <section class="card guarded">
       <div class="card-head">
-        <div><h2>Test sequences</h2><p>Scripted bench checks; some are not implemented yet</p></div>
+        <div><h2>Test sequences</h2><p>Scripted bench checks</p></div>
         <span class="chip chip-warn">${esc(test.sequence || 'none')}</span>
       </div>
       <div class="sequence-grid">
@@ -1224,13 +1224,13 @@ function renderTest() {
         </div>
         <div class="sequence-card">
           <h4>Mixer sweep</h4>
-          <p>Full open/close sweep with endstop timing. Not implemented in this build.</p>
-          <button class="btn btn-sm" type="button" disabled>Pending</button>
+          <p>Drives fully open, then fully closed, using the dead-reckoned position.</p>
+          <button class="btn btn-sm" type="button" data-action="test-sequence" data-sequence="mixer-sweep">Run sequence</button>
         </div>
         <div class="sequence-card">
           <h4>Endstop home</h4>
-          <p>Drive to the closed endstop and re-zero the encoder. Not implemented.</p>
-          <button class="btn btn-sm" type="button" disabled>Pending</button>
+          <p>Drives fully closed and re-zeroes the dead-reckoned position.</p>
+          <button class="btn btn-sm" type="button" data-action="test-sequence" data-sequence="endstop-home">Run sequence</button>
         </div>
         <div class="sequence-card">
           <h4>Heater + pump</h4>
