@@ -127,8 +127,10 @@ electronics:
   60–70 °C sine wave until the real form is collected;
 - no relay or pump physics, no mixer mechanics, no flow or temperature
   response of the plant;
-- no Wi-Fi/MQTT radio physics: the station-mode Wi-Fi client and the web portal
-  are real, MQTT is still a stub.
+- no Wi-Fi/MQTT radio physics: the station-mode Wi-Fi client, MQTT/HA
+  integration and the web portal are real. MQTT commands and telemetry use the
+  same emulated carrier state as the bench page; counters stay in RAM and are
+  never written to NVS under emulation.
 
 The emulated `l0::read_current_raw()` returns `0`. Use `l0::read_power_w()`.
 On real hardware both current paths are still TODO.

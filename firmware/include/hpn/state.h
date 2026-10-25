@@ -105,6 +105,7 @@ struct SystemState {
 
   // --- Optional feedback & supervision timers ------------------------------
   float pump_power_w[3];
+  float mixer_power_w;
   uint32_t keepalive_age_s;
   uint32_t after_heating_timer_s;
 

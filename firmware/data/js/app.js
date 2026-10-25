@@ -17,6 +17,7 @@ const state = {
   access: [],
   slow: [],
   counters: [],
+  counterPersistence: null,
   runtime: null,
   ws: null,
   wsConnected: false,
@@ -384,6 +385,10 @@ async function refreshCounters() {
   try {
     const data = await apiGet('/api/counters');
     state.counters = Array.isArray(data.counters) ? data.counters : [];
+    state.counterPersistence = {
+      enabled: !!data.persistenceEnabled,
+      saveIntervalS: num(data.saveIntervalS, 0)
+    };
     return state.counters;
   } catch (err) {
     toast(`Could not load relay counters: ${err.message}`, 'err');
@@ -1082,13 +1087,17 @@ function renderSlowLog() {
 
 function renderCounters() {
   const counters = state.counters;
+  const persistence = state.counterPersistence || {};
+  const persistenceLabel = persistence.enabled
+    ? `NVS hourly${persistence.saveIntervalS ? ` (${fmtDuration(persistence.saveIntervalS)})` : ''}`
+    : 'RAM only (emulation)';
 
   return `<div class="stack">
     <section class="card readonly accent-top">
       <div class="card-head">
         <div><h2>Relay counters</h2><p>Cycle counts and estimated runtime</p></div>
         <div class="row">
-          <span class="chip chip-warn">RAM only in this build</span>
+          <span class="chip ${persistence.enabled ? 'chip-ok' : 'chip-warn'}">${persistenceLabel}</span>
           <button class="btn btn-sm" type="button" data-action="refresh-counters">Refresh</button>
           <button class="btn btn-sm btn-danger" type="button" data-action="counter-reset" data-counter="all">Reset all</button>
         </div>
@@ -1108,7 +1117,9 @@ function renderCounters() {
         <div style="margin-top:10px"><button class="btn btn-sm" type="button" data-action="counter-reset" data-counter="${esc(counter.id)}">Reset</button></div>
       </div>`).join('')}</div>` : emptyCard('No counters yet.')}
 
-      <p class="small faint" style="margin-top:12px">Counters are not persisted to NVS yet; they reset on reboot. The API reports <span class="mono">persisted:false</span> so the UI does not imply otherwise.</p>
+      <p class="small faint" style="margin-top:12px">${persistence.enabled
+        ? 'Counters are saved to NVS at most once per hour, and only when a cycle count or runtime value changed. A manual reset is saved promptly.'
+        : 'Emulation builds deliberately keep counters in RAM only; they reset on reboot and never touch NVS.'}</p>
     </section>
   </div>`;
 }
@@ -1468,9 +1479,11 @@ function renderSettingsNetwork() {
   const cfg = state.config.network;
   if (!cfg) return loadingCard('Loading network settings…');
   const wifi = state.live?.wifi || state.status?.wifi || {};
+  const mqtt = state.live?.mqtt || state.status?.mqtt || {};
+  const mqttState = mqtt.connected ? `connected ${esc(mqtt.broker || '')}` : esc(mqtt.state || (mqtt.enabled ? 'offline' : 'disabled'));
 
   return `<div class="stack">
-    <div class="banner warn">Writable configuration. Wi-Fi and MQTT changes require a reboot.</div>
+    <div class="banner warn">Writable configuration. Wi-Fi changes require a reboot; MQTT reconnects automatically after saving.</div>
     <form class="settings-form writable" data-section="network">
       <section class="card writable accent-top">
         <div class="card-head">
@@ -1489,9 +1502,12 @@ function renderSettingsNetwork() {
         </div>
 
         <div class="form-section">
-          <h3>MQTT broker</h3>
+          <div class="row between">
+            <h3>MQTT broker</h3>
+            <span class="chip ${mqtt.connected ? 'chip-ok' : (mqtt.enabled ? 'chip-warn' : '')}">${mqttState}</span>
+          </div>
           <div class="form-grid">
-            ${fieldText('mqtt_host', 'Broker host', cfg.mqtt_host, 'Hostname or IP address.', 'text', 'homeassistant.local')}
+            ${fieldText('mqtt_host', 'Broker host', cfg.mqtt_host, 'Hostname or IP address. Leave empty to disable MQTT.', 'text', 'homeassistant.local')}
             ${fieldNumber('mqtt_port', 'Broker port', cfg.mqtt_port, 1, 65535, 1, 'Usually 1883.', 'int')}
             ${fieldText('mqtt_user', 'Username', cfg.mqtt_user, 'Optional broker username.', 'text', '')}
             ${fieldPassword('mqtt_pass', 'Password', cfg.has_mqtt_password, 'Leave blank to keep the stored password.')}
@@ -1500,7 +1516,7 @@ function renderSettingsNetwork() {
         </div>
 
         ${formActions('Save network settings', `<button class="btn" type="button" data-action="mqtt-test">Test MQTT</button>`)}
-        <p class="small faint">MQTT is not implemented yet; the Test MQTT action will return a 501 from the controller.</p>
+        <p class="small faint">Home Assistant discovery is published under <span class="mono">homeassistant/</span>. Commands use <span class="mono">&lt;base&gt;/cmd/...</span> and state uses <span class="mono">&lt;base&gt;/state/...</span>. Leave the broker host empty to disable MQTT.</p>
       </section>
     </form>
   </div>`;
@@ -1610,7 +1626,7 @@ function renderSettingsSystem() {
         <button class="btn" type="button" data-action="reboot">Reboot controller</button>
         <button class="btn btn-danger" type="button" data-action="factory-reset">Factory reset</button>
       </div>
-      <p class="small faint" style="margin-top:10px">Factory reset clears the NVS configuration and reboots. The event log and relay counters are in RAM and are lost on reboot.</p>
+      <p class="small faint" style="margin-top:10px">Factory reset clears the NVS configuration and relay counters, then reboots. The event log is in RAM and is lost on reboot.</p>
     </section>
   </div>`;
 }
@@ -1841,9 +1857,11 @@ async function runTestSequence(id) {
 
 async function resetCounter(id) {
   const label = id === 'all' ? 'all relay counters' : `the "${id}" counter`;
+  const persistence = state.counterPersistence || {};
+  const storage = persistence.enabled ? 'The reset is saved to NVS promptly.' : 'Counters are RAM-only under emulation.';
   const ok = await confirmDialog(
     'Reset counters?',
-    `Reset ${label}? Counters are RAM-only in this build and this cannot be undone.`,
+    `Reset ${label}? ${storage} This cannot be undone.`,
     'Reset',
     true
   );
@@ -2056,9 +2074,18 @@ async function handleViewClick(event) {
     case 'export-slow':
       exportSlow();
       break;
-    case 'mqtt-test':
-      toast('MQTT is not implemented yet; the controller returns 501.', 'warn');
+    case 'mqtt-test': {
+      try {
+        const result = await apiPost('/api/mqtt/test');
+        const detail = result.connected
+          ? `Test message queued for ${result.broker || 'the broker'}.`
+          : 'Test message queued; the broker is not connected yet.';
+        toast(detail, result.connected ? 'ok' : 'warn', 4500);
+      } catch (err) {
+        toast(err.message, 'err', 6000);
+      }
       break;
+    }
     case 'reboot':
       await rebootController();
       break;

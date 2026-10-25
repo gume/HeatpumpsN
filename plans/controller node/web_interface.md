@@ -131,7 +131,8 @@ Each temperature shows: value, sensor ID, staleness (e.g. "2 s ago"), and health
 - One card per switched output: pump_rad1, pump_rad2, pump_floor, heater, mixer-open, mixer-close.
 - Values: total switching cycles, switching cycles since last anti-seize/service date, estimated runtime hours (pumps), last operated timestamp.
 - Purpose: wear monitoring and justification for the anti-seize exercise schedule (§ Safety settings).
-- Counters are NVS-persisted, wear-leveled (increment-batched writes, e.g. flush every 10 increments or on change of hour).
+- Counters are NVS-persisted in hardware builds, wear-leveled: a dirty flag is set by cycle or runtime changes and the cache is flushed at most once per hour. Emulation builds keep counters in RAM only and never touch the counter NVS namespace.
+- An explicit reset requests an immediate save so a reboot cannot restore old values.
 - Writeable action: "reset counters" (per counter, double-confirm, logged as event).
 
 ### 3.4 Test Mode
@@ -183,8 +184,11 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 
 **3.5.3 Network & MQTT**
 - Wi-Fi: SSID, password (masked), fallback AP mode toggle
-- MQTT: broker host/port, credentials, topic prefix, HA discovery prefix, LWT topic & behavior
-- "Test connection" button (per-action, shows broker round-trip result)
+- MQTT: broker host/IP, port, credentials, base topic. An empty host disables MQTT.
+- HA discovery prefix is fixed to `homeassistant`; discovery is published retained with a MAC-derived node ID.
+- Availability/LWT uses `<base>/status` with `online`/`offline`.
+- "Test MQTT" button queues a non-retained test publication through `/api/mqtt/test`; it reports `202` while the broker is still connecting and `409` when MQTT is disabled.
+- Live status chip shows connected broker, connecting state or disabled.
 
 **3.5.4 Firmware Update**
 - OTA upload (binary) with progress bar; version + build info display
@@ -283,7 +287,7 @@ unchanged frames. Changes must not block `T_io`.
 {
   "ts": 1234567,
   "mode": {"current": "heat", "source": "ha"},
-  "mqtt": {"connected": true, "lastDisconnect": 1720000000},
+  "mqtt": {"connected": true, "state": "connected", "broker": "192.168.2.10", "port": 1883, "connectCount": 3, "lastDisconnect": 1720000000, "errors": 0},
   "circuits": {
     "rad1": {"cmd": 1, "phys": 1, "afterRun": 0},
     "rad2": {"cmd": 0, "phys": 0, "afterRun": 0},
@@ -315,6 +319,7 @@ unchanged frames. Changes must not block `T_io`.
 | GET | `/api/log/events?after=n` | event log tail |
 | GET | `/api/log/slow?from=&to=` | slow log range |
 | POST | `/api/counters/reset` | relay counter reset |
+| POST | `/api/mqtt/test` | queue a test MQTT publication |
 | POST | `/api/system/reboot`, `/api/system/factory-reset` | system actions |
 | POST | `/api/update` | OTA firmware upload |
 | GET | `/api/sim` | emulated carrier + mocked inputs (`HPN_IO_EMULATION` only) |
@@ -430,7 +435,7 @@ Test UI  ──┼──▶ command intake ──▶ Layer 1 arbitration ──�
 |---|---|---|
 | Settings sections | NVS namespaces per section | written only on explicit Save |
 | Event log | NVS ring buffer | append-batched |
-| Relay counters | NVS, wear-leveled | flush every 10 increments / hour change |
+| Relay counters | NVS (`hpnctr`), hardware builds only | hourly flush when dirty; immediate after explicit reset |
 | Slow log | LittleFS file(s), ring | periodic flush |
 
 Factory reset clears settings + counters (logged before clearing if possible), keeps logs optionally.

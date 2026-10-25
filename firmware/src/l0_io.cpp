@@ -250,6 +250,7 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
     state.pump_power_w[0] = read_power_w(CurrentChannel::PumpFloor);
     state.pump_power_w[1] = read_power_w(CurrentChannel::PumpRad1);
     state.pump_power_w[2] = read_power_w(CurrentChannel::PumpRad2);
+    state.mixer_power_w = read_power_w(CurrentChannel::Mixer);
   }
 
   // The mixer pulse state machine and encoder sampling are still TODO(L0).

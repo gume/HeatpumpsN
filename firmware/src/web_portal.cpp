@@ -7,6 +7,7 @@
 #include <AsyncWebSocket.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
 #include <math.h>
@@ -16,6 +17,7 @@
 
 #include "hpn/web_portal.h"
 #include "hpn/config_store.h"
+#include "hpn/mqtt_client.h"
 #include "hpn/wifi_client.h"
 
 #if defined(HPN_IO_EMULATION)
@@ -81,6 +83,20 @@ enum CounterId : uint8_t {
   CTR_COUNT,
 };
 
+constexpr const char* kCounterNamespace = "hpnctr";
+constexpr const char* kCounterKey = "counters";
+constexpr uint32_t kCounterMagic = 0x48504E54u;  // "HPNT"
+constexpr uint16_t kCounterVersion = 1;
+constexpr uint32_t kCounterSaveIntervalMs = 3600000u;
+
+struct CounterBlob {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+  uint32_t cycles[CTR_COUNT];
+  uint32_t runtime_s[CTR_COUNT];
+};
+
 struct Snapshot {
   SystemState state;
   uint32_t captured_ms;
@@ -88,7 +104,15 @@ struct Snapshot {
   int8_t wifi_rssi;
   char wifi_ip[16];
   char wifi_state[16];
+  bool mqtt_enabled;
   bool mqtt_connected;
+  char mqtt_state[20];
+  char mqtt_broker[64];
+  uint16_t mqtt_port;
+  uint32_t mqtt_connect_count;
+  uint32_t mqtt_disconnect_count;
+  uint32_t mqtt_last_disconnect_ms;
+  uint32_t mqtt_errors;
 };
 
 enum class Sequence : uint8_t { None = 0, AntiSeize };
@@ -124,6 +148,10 @@ uint32_t g_last_slow_ms = 0;
 portMUX_TYPE g_counter_mux = portMUX_INITIALIZER_UNLOCKED;
 CounterEntry g_counters[CTR_COUNT] = {};
 uint32_t g_counter_runtime_ms = 0;
+bool g_counters_dirty = false;
+bool g_counters_persisted = false;
+bool g_counter_save_requested = false;
+uint32_t g_last_counter_save_ms = 0;
 
 portMUX_TYPE g_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
 Snapshot g_snapshot = {};
@@ -345,7 +373,17 @@ void capture_snapshot() {
   s.wifi_rssi = ws.rssi;
   copy_str(s.wifi_ip, sizeof(s.wifi_ip), WiFi.localIP().toString().c_str());
   copy_str(s.wifi_state, sizeof(s.wifi_state), wifi::state_name());
-  s.mqtt_connected = false;
+
+  const mqtt::Status& ms = mqtt::status();
+  s.mqtt_enabled = ms.enabled;
+  s.mqtt_connected = ms.connected;
+  copy_str(s.mqtt_state, sizeof(s.mqtt_state), ms.state);
+  copy_str(s.mqtt_broker, sizeof(s.mqtt_broker), ms.broker);
+  s.mqtt_port = ms.port;
+  s.mqtt_connect_count = ms.connect_count;
+  s.mqtt_disconnect_count = ms.disconnect_count;
+  s.mqtt_last_disconnect_ms = ms.last_disconnect_ms;
+  s.mqtt_errors = ms.errors;
 
   taskENTER_CRITICAL(&g_snapshot_mux);
   g_snapshot = s;
@@ -371,8 +409,15 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   mode["source"] = st.mode == MODE_TEST_OVERRIDE ? "test" : "local";
 
   JsonObject mqtt = doc["mqtt"].to<JsonObject>();
+  mqtt["enabled"] = s.mqtt_enabled;
   mqtt["connected"] = s.mqtt_connected;
-  mqtt["lastDisconnect"] = 0;
+  mqtt["state"] = s.mqtt_state;
+  mqtt["broker"] = s.mqtt_broker;
+  mqtt["port"] = s.mqtt_port;
+  mqtt["connectCount"] = s.mqtt_connect_count;
+  mqtt["disconnectCount"] = s.mqtt_disconnect_count;
+  mqtt["lastDisconnect"] = s.mqtt_last_disconnect_ms;
+  mqtt["errors"] = s.mqtt_errors;
 
   JsonObject circuits = doc["circuits"].to<JsonObject>();
   add_circuit_json(circuits, "rad1", st.pump_rad1_intended, st.pump_rad1_phys, st.after_heating_timer_s);
@@ -446,15 +491,14 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   power["floor"] = st.pump_power_w[0];
   power["rad1"] = st.pump_power_w[1];
   power["rad2"] = st.pump_power_w[2];
+  power["mixer"] = st.mixer_power_w;
 
 #if defined(HPN_IO_EMULATION)
   const sim::Snapshot sim_state = sim::snapshot();
-  power["mixer"] = sim_state.power_w[static_cast<size_t>(CurrentChannel::Mixer)];
   JsonObject sim_obj = doc["sim"].to<JsonObject>();
   sim_obj["enabled"] = true;
   sim_obj["revision"] = sim_state.revision;
 #else
-  power["mixer"] = 0.0f;
   JsonObject sim_obj = doc["sim"].to<JsonObject>();
   sim_obj["enabled"] = false;
   sim_obj["revision"] = 0;
@@ -824,8 +868,103 @@ int counter_index(const char* name) {
   return -1;
 }
 
+bool counter_persistence_enabled() {
+#if defined(HPN_IO_EMULATION)
+  return false;
+#else
+  return true;
+#endif
+}
+
+void counters_load() {
+#if !defined(HPN_IO_EMULATION)
+  Preferences prefs;
+  if (!prefs.begin(kCounterNamespace, false)) {
+    Serial.println("[counters] NVS open failed; starting from zero");
+    return;
+  }
+
+  const size_t stored = prefs.getBytesLength(kCounterKey);
+  CounterBlob blob{};
+  bool ok = false;
+  if (stored == sizeof(blob) &&
+      prefs.getBytes(kCounterKey, &blob, sizeof(blob)) == sizeof(blob) &&
+      blob.magic == kCounterMagic && blob.version == kCounterVersion &&
+      blob.size == sizeof(blob)) {
+    ok = true;
+  }
+  prefs.end();
+
+  if (!ok) {
+    if (stored != 0) {
+      Serial.printf("[counters] ignoring invalid NVS blob (%u bytes)\n",
+                    static_cast<unsigned>(stored));
+    }
+    return;
+  }
+
+  taskENTER_CRITICAL(&g_counter_mux);
+  for (uint8_t i = 0; i < CTR_COUNT; ++i) {
+    g_counters[i] = CounterEntry{};
+    g_counters[i].cycles = blob.cycles[i];
+    g_counters[i].runtime_s = blob.runtime_s[i];
+  }
+  g_counter_runtime_ms = millis();
+  g_counters_dirty = false;
+  g_counters_persisted = true;
+  taskEXIT_CRITICAL(&g_counter_mux);
+
+  Serial.println("[counters] loaded relay counters from NVS");
+#endif
+}
+
+void counters_save() {
+#if !defined(HPN_IO_EMULATION)
+  CounterBlob blob{};
+  blob.magic = kCounterMagic;
+  blob.version = kCounterVersion;
+  blob.size = sizeof(blob);
+
+  taskENTER_CRITICAL(&g_counter_mux);
+  for (uint8_t i = 0; i < CTR_COUNT; ++i) {
+    blob.cycles[i] = g_counters[i].cycles;
+    blob.runtime_s[i] = g_counters[i].runtime_s;
+  }
+  g_counters_dirty = false;
+  taskEXIT_CRITICAL(&g_counter_mux);
+
+  Preferences prefs;
+  if (!prefs.begin(kCounterNamespace, false)) {
+    Serial.println("[counters] NVS open failed; counters not saved");
+    taskENTER_CRITICAL(&g_counter_mux);
+    g_counters_dirty = true;
+    taskEXIT_CRITICAL(&g_counter_mux);
+    return;
+  }
+  const size_t written = prefs.putBytes(kCounterKey, &blob, sizeof(blob));
+  prefs.end();
+
+  if (written == sizeof(blob)) {
+    g_counters_persisted = true;
+    g_last_counter_save_ms = millis();
+    Serial.println("[counters] saved relay counters to NVS");
+  } else {
+    taskENTER_CRITICAL(&g_counter_mux);
+    g_counters_dirty = true;
+    taskEXIT_CRITICAL(&g_counter_mux);
+    Serial.println("[counters] NVS write failed");
+  }
+#else
+  g_counters_dirty = false;
+  g_counters_persisted = false;
+#endif
+}
+
 void reset_counter_locked(CounterId id) {
   g_counters[id] = CounterEntry{};
+  g_counters_dirty = true;
+  g_counters_persisted = false;
+  g_counter_save_requested = true;
 }
 
 void reset_all_counters() {
@@ -834,6 +973,8 @@ void reset_all_counters() {
     reset_counter_locked(static_cast<CounterId>(i));
   }
   g_counter_runtime_ms = millis();
+  g_counters_dirty = true;
+  g_counter_save_requested = true;
   taskEXIT_CRITICAL(&g_counter_mux);
 }
 
@@ -849,6 +990,7 @@ void update_counter_locked(CounterId id, bool on, uint32_t now_ms) {
     counter.last_state = on;
     counter.cycles++;
     counter.last_change_ms = now_ms;
+    g_counters_dirty = true;
   }
 }
 
@@ -867,10 +1009,22 @@ void update_counters(const SystemState& st, uint32_t now_ms) {
   if (now_ms - g_counter_runtime_ms >= 1000) {
     const uint32_t seconds = (now_ms - g_counter_runtime_ms) / 1000;
     g_counter_runtime_ms += seconds * 1000;
-    if (st.heater_phys) g_counters[CTR_HEATER].runtime_s += seconds;
-    if (st.pump_rad1_phys) g_counters[CTR_RAD1].runtime_s += seconds;
-    if (st.pump_rad2_phys) g_counters[CTR_RAD2].runtime_s += seconds;
-    if (st.pump_floor_phys) g_counters[CTR_FLOOR].runtime_s += seconds;
+    if (st.heater_phys) {
+      g_counters[CTR_HEATER].runtime_s += seconds;
+      g_counters_dirty = true;
+    }
+    if (st.pump_rad1_phys) {
+      g_counters[CTR_RAD1].runtime_s += seconds;
+      g_counters_dirty = true;
+    }
+    if (st.pump_rad2_phys) {
+      g_counters[CTR_RAD2].runtime_s += seconds;
+      g_counters_dirty = true;
+    }
+    if (st.pump_floor_phys) {
+      g_counters[CTR_FLOOR].runtime_s += seconds;
+      g_counters_dirty = true;
+    }
   }
   taskEXIT_CRITICAL(&g_counter_mux);
 }
@@ -1199,6 +1353,8 @@ void handle_counters_get(AsyncWebServerRequest* request) {
                                           "Floor pump", "Mixer open", "Mixer close"};
 
   JsonDocument doc;
+  doc["persistenceEnabled"] = counter_persistence_enabled();
+  doc["saveIntervalS"] = kCounterSaveIntervalMs / 1000;
   JsonArray arr = doc["counters"].to<JsonArray>();
   for (uint8_t i = 0; i < CTR_COUNT; ++i) {
     JsonObject o = arr.add<JsonObject>();
@@ -1207,7 +1363,7 @@ void handle_counters_get(AsyncWebServerRequest* request) {
     o["cycles"] = copy[i].cycles;
     o["runtimeHours"] = copy[i].runtime_s / 3600.0f;
     o["lastOperated"] = copy[i].last_change_ms;
-    o["persisted"] = false;
+    o["persisted"] = g_counters_persisted;
   }
   send_json(request, 200, doc);
 }
@@ -1782,6 +1938,20 @@ void handle_status(AsyncWebServerRequest* request) {
   wifi_obj["ip"] = WiFi.localIP().toString();
   wifi_obj["state"] = wifi::state_name();
 
+  const mqtt::Status& ms = mqtt::status();
+  JsonObject mqtt_obj = doc["mqtt"].to<JsonObject>();
+  mqtt_obj["enabled"] = ms.enabled;
+  mqtt_obj["connected"] = ms.connected;
+  mqtt_obj["state"] = ms.state;
+  mqtt_obj["broker"] = ms.broker;
+  mqtt_obj["port"] = ms.port;
+  mqtt_obj["connectCount"] = ms.connect_count;
+  mqtt_obj["disconnectCount"] = ms.disconnect_count;
+  mqtt_obj["lastConnect"] = ms.last_connect_ms;
+  mqtt_obj["lastDisconnect"] = ms.last_disconnect_ms;
+  mqtt_obj["errors"] = ms.errors;
+  mqtt_obj["lastError"] = ms.last_error_code;
+
   JsonObject fs = doc["filesystem"].to<JsonObject>();
   fs["total"] = LittleFS.totalBytes();
   fs["used"] = LittleFS.usedBytes();
@@ -2082,7 +2252,22 @@ void register_routes() {
   g_server.on(AsyncURIMatcher::exact("/api/system/factory-reset"), HTTP_POST,
               handle_system_factory_reset);
   g_server.on(AsyncURIMatcher::exact("/api/mqtt/test"), HTTP_POST, [](AsyncWebServerRequest* request) {
-    send_error(request, 501, "MQTT test is not implemented yet");
+    const mqtt::Status& ms = mqtt::status();
+    if (!ms.enabled) {
+      send_error(request, 409, "MQTT is disabled; set a broker host first");
+      return;
+    }
+
+    mqtt::request_test();
+
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["queued"] = true;
+    doc["connected"] = ms.connected;
+    doc["state"] = ms.state;
+    doc["broker"] = ms.broker;
+    doc["port"] = ms.port;
+    send_json(request, ms.connected ? 200 : 202, doc);
   });
 
   // OTA
@@ -2141,6 +2326,11 @@ void begin(const Config& config, SystemState& state) {
   g_last_slow_ms = 0;
   memset(g_counters, 0, sizeof(g_counters));
   g_counter_runtime_ms = 0;
+  g_counters_dirty = false;
+  g_counters_persisted = false;
+  g_counter_save_requested = false;
+  g_last_counter_save_ms = millis();
+  counters_load();
   g_last_broadcast_ms = 0;
   g_last_cleanup_ms = 0;
   g_last_wifi_connected = wifi::status().connected;
@@ -2200,6 +2390,15 @@ void tick(const Config& config, SystemState& state) {
 
   tick_sequence(now);
   update_counters(state, now);
+
+  if (counter_persistence_enabled()) {
+    const bool hourly_due =
+        g_counters_dirty && (now - g_last_counter_save_ms >= kCounterSaveIntervalMs);
+    if (g_counter_save_requested || hourly_due) {
+      g_counter_save_requested = false;
+      counters_save();
+    }
+  }
 
   if (now - g_last_slow_ms >= kSlowSampleIntervalMs) {
     g_last_slow_ms = now;

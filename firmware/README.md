@@ -4,10 +4,11 @@ PlatformIO project for the ESP32 controller node. It currently implements a
 FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
 HomeNet Heatpumps 1.0 and 2.0, a compile-time **I/O emulation** backend so the
 controller can be developed on a boardless devkit, a station-mode **Wi-Fi
-client**, and a LittleFS-backed **web portal** in L4. Production L1 safety
-arbitration, L2 control, L3 adaptation and MQTT are still TODO; the bench-only
-loopback used by Test Mode is described below. The next implementation steps
-are described in [`../plans/controller node/`](../plans/controller%20node/).
+client**, a **MQTT/Home Assistant** integration, and a LittleFS-backed **web
+portal** in L4. Production L1 safety arbitration, L2 control and L3 adaptation
+are still TODO; the bench-only loopback used by Test Mode is described below.
+The next implementation steps are described in
+[`../plans/controller node/`](../plans/controller%20node/).
 
 ## Targets, carriers and backends
 
@@ -52,7 +53,7 @@ The emulation model, its API and the bench web page are described in
 | `T_io` | 20 ms | high | Core 1 | L0 hardware access, watchdog feeder |
 | `T_control` | `config.tick_ms` (default 2000 ms) | medium | Core 1 | L2 control and coordination |
 | `T_comms` | 50 ms | low | Core 0 | L4 MQTT / HTTP / commands |
-| `T_logger` | 1000 ms | lowest | Core 0 | Event log and NVS persistence |
+| `T_logger` | 1000 ms | lowest | Core 0 | Logger task (portal owns event/slow logs) |
 
 Notes:
 
@@ -64,9 +65,9 @@ Notes:
 - `T_io` subscribes to the task watchdog and feeds it only while the real-time
   tasks are within their deadlines. A hung safety or control task therefore
   resets the controller instead of leaving outputs latched.
-- Task bodies call the corresponding layer `tick()`. L0, the Wi-Fi client and
-  the portal are implemented; L1/L2 currently contain only the bench loopback
-  used by Test Mode, and MQTT is still a stub.
+- Task bodies call the corresponding layer `tick()`. L0, the Wi-Fi client,
+  MQTT/HA and the portal are implemented; L1/L2 currently contain only the
+  bench loopback used by Test Mode.
 
 ## Wi-Fi client
 
@@ -91,6 +92,85 @@ first-boot fallback until the captive-portal provisioning flow exists.
 Verified on the remote ESP32 (`esp32dev_sim`): association with `Testing`
 succeeds, RSSI ≈ −74 dBm, DHCP assigns `192.168.2.14`, and the portal is
 reachable through the user's tunnel at `http://localhost:9090/`.
+
+## MQTT and Home Assistant
+
+`hpn::mqtt` ([`include/hpn/mqtt_client.h`](include/hpn/mqtt_client.h),
+[`src/mqtt_client.cpp`](src/mqtt_client.cpp)) uses
+[`knolleary/PubSubClient`](https://github.com/knolleary/pubsubclient) and the
+official [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+schema. PubSubClient was already the project dependency and is a good fit for a
+small, single-broker controller; the discovery payloads are written explicitly
+instead of adding an abstraction layer. MQTT is enabled when
+`Config::mqtt_host` is non-empty. The broker host/IP, port, optional username
+and password, and base topic are edited on **Settings → Network & MQTT**.
+The broker must be reachable from the controller's Wi-Fi network; an empty host
+disables MQTT and clears the connection state.
+
+The controller uses `<base>/status` for availability (`online` / `offline`,
+retained, with a last-will message), `<base>/cmd/...` for commands, and
+`<base>/state/...` for entity state. Discovery is published retained under
+`homeassistant/<component>/<node_id>/<object_id>/config`, where `<node_id>` is
+derived from the Wi-Fi MAC address.
+
+### Entities
+
+| HA domain | Entity | State topic | Command topic |
+| --- | --- | --- | --- |
+| `switch` | Heater | `state/heater` | `cmd/heater` |
+| `switch` | Pump floor | `state/pump_floor` | `cmd/pump_floor` |
+| `switch` | Pump radiator 1 | `state/pump_rad1` | `cmd/pump_rad1` |
+| `switch` | Pump radiator 2 | `state/pump_rad2` | `cmd/pump_rad2` |
+| `binary_sensor` | Heater virtual | `state/heater_virtual` | — |
+| `binary_sensor` | Heater physical | `state/heater_physical` | — |
+| `binary_sensor` | Pump floor virtual | `state/pump_floor_virtual` | — |
+| `binary_sensor` | Pump floor physical | `state/pump_floor_physical` | — |
+| `binary_sensor` | Pump radiator 1 physical | `state/pump_rad1_physical` | — |
+| `binary_sensor` | Pump radiator 2 physical | `state/pump_rad2_physical` | — |
+| `sensor` | Floor pump power | `state/power_floor` | — |
+| `sensor` | Radiator 1 pump power | `state/power_rad1` | — |
+| `sensor` | Radiator 2 pump power | `state/power_rad2` | — |
+| `sensor` | Mixer motor power | `state/power_mixer` | — |
+| `sensor` | Mixer state (`idle`/`opening`/`closing`) | `state/mixer_state` | — |
+| `sensor` | Boiler supply temperature | `state/temp_boiler` | — |
+| `sensor` | Floor return temperature | `state/temp_return` | — |
+| `sensor` | Mixer forward temperature | `state/temp_mix` | — |
+| `number` | Floor setpoint | `state/floor_setpoint` | `cmd/floor_setpoint` |
+
+The explicit request named “5 binary sensors” but listed heater virtual,
+heater physical, pump 1 physical, pump 2 physical, and pump floor virtual and
+physical. The implementation exposes **six** because the floor virtual and
+floor physical states are separate entities. Remove one discovery call in
+`publish_discovery()` if five was intended.
+
+Switch state topics carry the physical relay state. The virtual binary sensors
+carry the accepted `*_intended` command, while the physical binary sensors
+carry the L1/L0 output state. The floor setpoint command updates
+`Config::floor_setpoint_shadow`; it is an HA-owned runtime shadow, not a
+Category 1 configuration value. MQTT commands set `*_intended`, so on the bench
+they flow through `HPN_BENCH_LOOPBACK` to the emulated carrier; the production
+L2/L1 path is still TODO.
+
+State and discovery are retained. The client reconnects every 5 s while the
+broker is unreachable, and the portal reports `mqtt.state`, broker, connect
+counts and error count through `/api/status` and the live WebSocket snapshot.
+`POST /api/mqtt/test` queues a non-retained test publication; it returns `202`
+when the broker is not connected yet and `409` when no broker host is set.
+
+## Relay counter persistence
+
+Relay cycles and runtime live in the portal's RAM cache. In hardware builds
+(`!HPN_IO_EMULATION`) they are also stored in the separate `hpnctr` NVS
+namespace:
+
+- counters are loaded at boot;
+- a dirty flag is set by a cycle change or by the one-second runtime
+  accumulation;
+- the cache is written at most once per hour, and only when dirty;
+- an explicit counter reset requests an immediate save so a reboot cannot
+  resurrect the old values;
+- emulation builds never load or save counters, so the bench model cannot wear
+  the NVS or leak test data into a hardware configuration.
 
 ## Web portal
 
@@ -122,11 +202,13 @@ task and never blocks the real-time tasks.
   is commanded ON. Activation/deactivation and every command are logged.
 - **Settings** — Safety & Timeouts, Hardware & Pins, Network & MQTT, Firmware
   Update and System. Saves are validated server-side and written to NVS only
-  when the form is submitted.
+  when the form is submitted. The Network page shows the live MQTT state and
+  can queue a test publication.
 - **Runtime Parameters** — read-only HA/observer values.
 
-The event, access and slow logs and the relay counters are RAM-only in this
-build; they reset on reboot. Configuration is persisted in a versioned NVS
+The event, access and slow logs are RAM-only in this build; they reset on
+reboot. Relay counters are persisted hourly in hardware builds and stay in RAM
+under emulation (see above). Configuration is persisted in a versioned NVS
 blob. The access log records every portal request plus WebSocket
 connect/disconnect events.
 
@@ -239,7 +321,8 @@ firmware/
 │   ├── l0_io.h           # L0 interface
 │   ├── l1_safety.h       # L1 interface (bench loopback; production TODO)
 │   ├── l2_control.h      # L2 interface (bench loopback; production TODO)
-│   ├── l4_comms.h        # L4 interface (Wi-Fi + portal; MQTT TODO)
+│   ├── l4_comms.h        # L4 interface (Wi-Fi + MQTT + portal)
+│   ├── mqtt_client.h     # MQTT/HA discovery and command intake
 │   ├── web_portal.h      # portal begin/tick/event-log interface
 │   ├── wifi_client.h     # station-mode Wi-Fi client
 │   └── logger.h          # logger interface (stub)
@@ -255,7 +338,8 @@ firmware/
 │   ├── l0_io.cpp         # carrier logic, the only layer that drives I/O
 │   ├── l1_safety.cpp     # L1 bench loopback + heater interlock; TODO(L1)
 │   ├── l2_control.cpp    # L2 bench pass-through; TODO(L2)
-│   ├── l4_comms.cpp      # L4 integration (Wi-Fi + portal; MQTT TODO)
+│   ├── l4_comms.cpp      # L4 integration (Wi-Fi + MQTT + portal)
+│   ├── mqtt_client.cpp   # MQTT transport, HA discovery, command intake
 │   ├── web_portal.cpp    # HTTP/WS server, API, logs, Test Mode, OTA
 │   ├── remote_upload.json # remote upload SConscript (see above)
 │   ├── wifi_client.cpp   # station-mode Wi-Fi client

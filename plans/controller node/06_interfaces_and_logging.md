@@ -53,18 +53,31 @@ Two distinct log streams are buffered in `T_logger` and published via MQTT (`upt
   2. **Physical State (`*_phys`):** Reports the true hardware relay state (`heater_phys`, `pump_floor_phys`, `pump_rad1_phys`, `pump_rad2_phys`) for monitoring and energy accounting.
 
 #### Subscribed Command Topics (HA $\rightarrow$ Controller)
-Scoped under `<mqtt_base_topic>/cmd/`:
+Scoped under `<mqtt_base_topic>/cmd/`. Implemented today:
 * `<mqtt_base_topic>/cmd/pump_floor` (`ON` / `OFF`)
 * `<mqtt_base_topic>/cmd/pump_rad1` (`ON` / `OFF`)
 * `<mqtt_base_topic>/cmd/pump_rad2` (`ON` / `OFF`)
-* `<mqtt_base_topic>/cmd/heater` (`ON` repeated periodically as keep-alive / `OFF`)
+* `<mqtt_base_topic>/cmd/heater` (`ON` / `OFF`)
 * `<mqtt_base_topic>/cmd/floor_setpoint` ($^{\circ}\text{C}$, ideal floor forwarding temperature $\rightarrow$ `floor_setpoint_shadow`)
+
+Reserved for the full L2/L3 contract:
 * `<mqtt_base_topic>/cmd/dhw_active` (Boolean flag indicating boiler Domestic Hot Water priority is active)
 * `<mqtt_base_topic>/cmd/mode` (`heat` / `summer`)
 * `<mqtt_base_topic>/cmd/mixer_encoder_pos` ($0.0$–$1.0$, forwarded from WiFi accelerometer/encoder when `pos_source == POS_SRC_HA_GENERIC`)
 
 #### Published State Topics (Controller $\rightarrow$ HA & Observer)
-Scoped under `<mqtt_base_topic>/state/` and `<mqtt_base_topic>/log/`:
+The current HA integration uses one retained topic per entity so MQTT discovery
+can bind directly. Implemented today:
+* `<mqtt_base_topic>/status` (`online`/`offline`, retained LWT — strictly for HA visibility; triggers no control action)
+* `<mqtt_base_topic>/state/heater`, `pump_floor`, `pump_rad1`, `pump_rad2` (physical relay state)
+* `<mqtt_base_topic>/state/heater_virtual`, `heater_physical`
+* `<mqtt_base_topic>/state/pump_floor_virtual`, `pump_floor_physical`, `pump_rad1_physical`, `pump_rad2_physical`
+* `<mqtt_base_topic>/state/power_floor`, `power_rad1`, `power_rad2`, `power_mixer` (W)
+* `<mqtt_base_topic>/state/mixer_state` (`idle`, `opening`, `closing`)
+* `<mqtt_base_topic>/state/temp_boiler`, `temp_return`, `temp_mix` ($^{\circ}\text{C}$ or `unknown`)
+* `<mqtt_base_topic>/state/floor_setpoint` ($^{\circ}\text{C}$)
+
+Reserved aggregate/observer topics:
 * `<mqtt_base_topic>/state/temperatures` (`T_boiler`, `T_return_floor`, `T_mix_out`, health flags)
 * `<mqtt_base_topic>/state/mixer` (`pos_est_dr`, `pos_encoder`, `pos_source`)
 * `<mqtt_base_topic>/state/relays` (Intended and physical states for all 3 pumps and heater)
@@ -74,11 +87,26 @@ Scoped under `<mqtt_base_topic>/state/` and `<mqtt_base_topic>/log/`:
 * `<mqtt_base_topic>/state/alarms` (Active alarm/warning bitmask, flush state, config version)
 * `<mqtt_base_topic>/log/slow` (Periodic telemetry log stream)
 * `<mqtt_base_topic>/log/event` (Immediate event log stream)
-* `<mqtt_base_topic>/status` (MQTT LWT: `online`/`offline` — strictly for HA visibility; triggers no control action)
+
+#### Home Assistant Discovery
+Discovery is published retained to
+`homeassistant/<component>/<node_id>/<object_id>/config`, with `<node_id>`
+derived from the Wi-Fi MAC. The current entity set is:
+* 4 switches: heater, pump_floor, pump_rad1, pump_rad2;
+* 6 binary sensors: heater virtual/physical, pump floor virtual/physical,
+  pump radiator 1 physical, pump radiator 2 physical;
+* 4 power sensors: floor pump, radiator 1 pump, radiator 2 pump, mixer motor;
+* 1 mixer-state enum sensor (`idle`/`opening`/`closing`);
+* 3 temperature sensors: boiler supply, floor return, mixer forward;
+* 1 `number` entity for the floor setpoint.
+
+The request said “5 binary sensors” but listed floor virtual and floor
+physical separately, so the implementation exposes six. Drop one discovery
+call if five was intended.
 
 ### 2.2 Local Web Dashboard + WiFi Manager
 
-* **Current state:** the station-mode Wi-Fi client (`hpn::wifi`) and the LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a versioned NVS blob; the portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. The captive-portal provisioning flow, fallback AP and MQTT client are still TODO.
+* **Current state:** the station-mode Wi-Fi client (`hpn::wifi`), MQTT/HA client (`hpn::mqtt`) and LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a versioned NVS blob; the portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. Relay counters are persisted hourly in hardware builds and stay RAM-only under emulation. The captive-portal provisioning flow and fallback AP are still TODO.
 * **Provisioning:** Captive portal and web UI for WiFi credentials, fallback AP settings, and MQTT broker parameters.
 * **Configuration Editor:** Full read/write access to **Category 1 (Long-Term Configuration)** parameters; read-only display of **Category 2 (HA)** and **Category 3 (Observer)** parameters.
 * **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close step pulses), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).
