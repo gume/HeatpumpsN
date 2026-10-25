@@ -1,0 +1,28 @@
+sensor:
+  - platform: dallas_temp
+    address: 0x1
+    id: mixer_forward_temperature
+    name: "Mixer forward temperature"
+    update_interval: 10s
+    filters:
+      - or:
+        - delta: 0.1
+        - throttle: 60s
+  - platform: dallas_temp
+    address: 0x2
+    id: mixer_return_temperature
+    name: "Mixer return temperature"
+    update_interval: 10s
+    filters:
+      - or:
+        - delta: 0.1
+        - throttle: 60s
+  - platform: dallas_temp
+    address: 0x3
+    id: mixer_incoming_temperature
+    name: "Mixer incoming temperature"
+    update_interval: 10s
+    filters:
+      - or:
+        - delta: 0.1
+        - throttle: 60s

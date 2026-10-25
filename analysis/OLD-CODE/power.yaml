@@ -1,0 +1,123 @@
+sensor:
+  - platform: adc
+    id: adc_sensor
+    pin: ${adc_pin}
+    attenuation: 12db
+    update_interval: never
+    filters:
+      # Remove outliers before ct_clamp consumes it
+      - median:
+          window_size: 7
+          send_every: 7
+          send_first_at: 4
+
+  - platform: cd74hc4067
+    id: acs712_2_raw
+    number: 0
+    sensor: adc_sensor
+    update_interval: never
+  - platform: cd74hc4067
+    id: acs712_3_raw
+    number: 1
+    sensor: adc_sensor
+    update_interval: never
+  - platform: cd74hc4067
+    id: acs712_m_raw
+    number: 2
+    sensor: adc_sensor
+    update_interval: never
+  - platform: cd74hc4067
+    id: acs712_1_raw
+    number: 3
+    sensor: adc_sensor
+    update_interval: never
+
+    # The current sensor is 333mV/A, but the real adc value is multiplied by 0.19
+  - platform: ct_clamp
+    name: "Pump 1 Power"
+    id: pump1_power
+    sensor: acs712_1_raw
+    update_interval: never
+    sample_duration: 200ms
+    filters:
+      - calibrate_linear:
+          - 0.004 -> 0
+          - 0.072 -> 40
+      - lambda: |-
+          if (x < 5.0) return 0.0;
+          else return x;
+      - round: 0
+      - or:
+        - delta: 1
+        - throttle: 60s
+    unit_of_measurement: W
+    device_class: energy
+    accuracy_decimals: 0
+    web_server:
+      sorting_group_id: pump_control_group
+  - platform: ct_clamp
+    name: "Pump 2 Power"
+    id: pump2_power
+    sensor: acs712_2_raw
+    update_interval: never
+    sample_duration: 200ms
+    filters:
+      - calibrate_linear:
+          - 0.004 -> 0
+          - 0.072 -> 40
+      - lambda: |-
+          if (x < 5.0) return 0.0;
+          else return x;
+      - round: 0
+      - or:
+        - delta: 1
+        - throttle: 60s
+    unit_of_measurement: W
+    device_class: energy
+    accuracy_decimals: 0
+    web_server:
+      sorting_group_id: pump_control_group
+  - platform: ct_clamp
+    name: "Pump 3 Power"
+    id: pump3_power
+    sensor: acs712_3_raw
+    update_interval: never
+    sample_duration: 200ms
+    filters:
+      - calibrate_linear:
+          - 0.004 -> 0
+          - 0.072 -> 40
+      - lambda: |-
+          if (x < 5.0) return 0.0;
+          else return x;
+      - round: 0
+      - or:
+        - delta: 1
+        - throttle: 60s
+    unit_of_measurement: W
+    device_class: energy
+    accuracy_decimals: 0
+    web_server:
+      sorting_group_id: pump_control_group
+  - platform: ct_clamp
+    name: "Mixer Power"
+    id: mixer_power
+    sensor: acs712_m_raw
+    update_interval: never
+    sample_duration: 1200ms
+    filters:
+      - calibrate_linear:
+          - 0.004 -> 0
+          - 0.072 -> 40
+  #      - lambda: |-
+  #          if (x < 0.3) return 0.0;
+  #          else return x;
+      - round: 2
+      - or:
+        - delta: 1
+        - throttle: 60s
+    unit_of_measurement: W
+    device_class: energy
+    accuracy_decimals: 2
+    web_server:
+      sorting_group_id: mixer_control_group

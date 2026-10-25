@@ -1,0 +1,1270 @@
+substitutions:
+  #device_name: heatpump-hn
+  device_name: heatpumps
+  device_ip: 192.168.2.74
+  ota_pw: !secret otapw
+
+  # Wemos D1 mini R2
+  #data_pin: GPIO15 # D8
+  #clock_pin: GPIO13 # D7
+  #latch_pin: GPIO12 # D6
+  #oe_pin: D5
+  #adc_pin: A0
+  #led_pin: D4
+  #temp_pin: D3
+  #dummy_pin: D0
+
+  # Wemos Lolin C3 mini
+  #data_pin: GPIO5
+  #clock_pin: GPIO4
+  #latch_pin: GPIO0
+  #oe_pin: GPIO1
+  #adc_pin: A3
+  #led_pin: GPIO6
+  #temp_pin: GPIO7
+  #dummy_pin: GPIO2
+
+  # Wemos Lolin S2 mini
+  data_pin: GPIO12
+  clock_pin: GPIO11
+  latch_pin: GPIO9
+  oe_pin: GPIO7
+  adc_pin: GPIO3
+  led_pin: GPIO16
+  led2_pin: GPIO15
+  temp_pin: GPIO18
+  dummy_pin: GPIO5
+
+  mixer_fwd_sensor_address_default: "0x593c26f648ddbf28"
+  mixer_ret_sensor_addrees_default: "0x92c08b7f1f64ff28"
+  mixer_inc_sensor_address_default: "0xc13cdaf648ed0528"
+
+esphome:
+  name: ${device_name}
+  #  on_boot:
+  #    priority: 550.0
+  #    then:
+  #    - light.turn_on:
+  #        id: led1
+  #        brightness: 100%
+  #        red: 100%
+  #        green: 0%
+  #        blue: 0%
+  #        effect: Pulse
+  on_boot:
+    - priority: 550.0
+      then:
+      # Load values from the flash
+      - lambda: |-
+          id(set_keep_alive_time_sec).publish_state(id(cfg_keep_alive_time_sec));
+          id(set_mixer_setpoint).publish_state(id(cfg_mixer_setpoint));
+          auto call = id(pid_climate_controller).make_call();
+          call.set_target_temperature(id(cfg_mixer_setpoint)).perform();
+          id(relay_counter)[0] = id(relay_counter_store)[0];
+          id(relay_counter)[1] = id(relay_counter_store)[1];
+          id(relay_counter)[2] = id(relay_counter_store)[2];
+          id(relay_counter)[3] = id(relay_counter_store)[3];
+          id(relay_counter)[4] = id(relay_counter_store)[4];
+          id(relay_counter)[5] = id(relay_counter_store)[5];
+          id(pid_override).publish_state(false);
+          char tmp[20];
+          sprintf(tmp, "%#018llx", id(cfg_mixer_fwd_temp_sensor_address));
+          id(set_mixer_fwd_temp_sensor_address).publish_state(tmp);
+          sprintf(tmp, "%#018llx", id(cfg_mixer_ret_temp_sensor_address));
+          id(set_mixer_ret_temp_sensor_address).publish_state(tmp);
+          sprintf(tmp, "%#018llx", id(cfg_mixer_inc_temp_sensor_address));
+          id(set_mixer_inc_temp_sensor_address).publish_state(tmp);
+          id(set_floorheating_circuit).publish_state(id(cfg_floorheating_circuit));
+          id(summer_mode).publish_state(id(cfg_summer_mode));
+    - priority: -100.0
+      then:
+      - script.execute: set_dallas
+  project:
+    name: gume.heatpumps
+    version: "1.0.3"
+
+#esp8266:
+#  board: d1_mini
+#esp32:
+#  board: lolin_c3_mini
+esp32:
+  board: lolin_s2_mini
+  framework:
+    type: esp-idf
+
+
+# Enable logging
+logger:
+  level: INFO
+  logs:
+    api: WARN
+    wifi: WARN
+
+# Enable Home Assistant API
+api:
+  reboot_timeout: 15min
+  encryption:
+    key: !secret apikey
+  actions:
+  - action: set_keep_alive_time
+    variables:
+      keep_alive_time_sec: int
+    then:
+      - lambda: |-
+          id(cfg_keep_alive_time_sec) = keep_alive_time_sec;
+          id(set_keep_alive_time_sec).publish_state(keep_alive_time_sec);
+  - action: keep_alive
+    then:
+      - script.execute: keep_alive_script  
+  - action: set_pid
+    variables:
+      set_kp: float
+      set_ki: float
+      set_kd: float
+    then:
+      - climate.pid.set_control_parameters:
+          id: pid_climate_controller
+          kp: !lambda 'return set_kp;'
+          ki: !lambda 'return set_ki;'
+          kd: !lambda 'return set_kd;'
+      - climate.pid.reset_integral_term:
+          id: pid_climate_controller
+  - action: close_mixer
+    then:
+      - script.execute: close_mixer
+  - action: open_mixer
+    then:
+      - script.execute: open_mixer
+
+ota:
+  - platform: esphome
+    password: ${ota_pw}
+    id: my_ota
+
+wifi:
+  power_save_mode: none
+
+captive_portal:
+
+safe_mode:
+
+packages:
+  - !include sensors/temperature.yaml
+  - !include sensors/power.yaml
+  - !include packages/counters.yaml
+  - !include packages/wifi.yaml
+
+external_components:
+  - source:
+      type: local
+      path: ./components
+    components: [ onewire_scanner ]
+
+web_server:
+  version: 3
+  port: 80
+  ota: false
+  sorting_groups:
+    - id: heating_control_group
+      name: "Heating"
+      sorting_weight: 10
+    - id: pump_control_group
+      name: "Pumps"
+      sorting_weight: 20
+    - id: mixer_control_group
+      name: "Mixer"
+      sorting_weight: 30
+    - id: status_group
+      name: "Status"
+      sorting_weight: 40
+    - id: configuration_group
+      name: "Configuration"
+      sorting_weight: 50
+
+globals:
+  - id: my_state
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: keep_alive_state
+    type: long
+    restore_value: no
+    initial_value: '-1'
+  - id: cfg_keep_alive_time_sec
+    type: int
+    restore_value: yes
+    initial_value: '600'
+  - id: cfg_summer_mode
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+  - id: cfg_mixer_setpoint
+    type: float
+    restore_value: yes
+    initial_value: '35.0'
+  - id: mixer_temp_last_seen
+    type: long
+    restore_value: no
+    initial_value: '-1'
+    # Store temperature sensor addresses
+  - id: cfg_mixer_fwd_temp_sensor_address
+    type: unsigned long long int
+    restore_value: yes
+    initial_value: ${mixer_fwd_sensor_address_default}
+  - id: cfg_mixer_ret_temp_sensor_address
+    type: unsigned long long int
+    restore_value: yes
+    initial_value: ${mixer_ret_sensor_addrees_default}
+  - id: cfg_mixer_inc_temp_sensor_address
+    type: unsigned long long int
+    restore_value: yes
+    initial_value: ${mixer_inc_sensor_address_default}
+  - id: mixer_last_run
+    type: long
+    restore_value: no
+    initial_value: '-1'
+  - id: mixer_maximum
+    type: float
+    restore_value: no
+    initial_value: '0.65'
+  - id: mixer_minimum
+    type: float
+    restore_value: no
+    initial_value: '0.40'
+  - id: mixer_residue
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: mixer_set_goal
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: mixer_unsafe
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: pid_disable
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: pid_disable_tmp
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: relay_counter
+    type: long[6]
+    restore_value: no
+#    initial_value: '[0,0,0,0,0,0]'
+  - id: relay_counter_store
+    type: long[6]
+    restore_value: yes
+#    initial_value: '[0,0,0,0,0,0]'
+  - id: stallcheck_number
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: stallcheck_temp
+    type: float
+    restore_value: no
+    initial_value: '0'
+  - id: cfg_floorheating_circuit
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: floorheating
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: safety_override
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: safety_override_start
+    type: long
+    restore_value: no
+    initial_value: '-1'
+
+one_wire:
+  - platform: gpio
+    pin: ${temp_pin}
+    id: dallas
+
+sn74hc595:
+  - id: 'sn74hc595_hub'
+    data_pin: ${data_pin}
+    clock_pin: ${clock_pin}
+    latch_pin: ${latch_pin}
+    oe_pin: ${oe_pin}
+    sr_count: 1
+
+cd74hc4067: # This is a 74HC4051 instead..
+  - id: cd74hc4067_1
+    pin_s0:
+      sn74hc595: sn74hc595_hub
+      number: 2
+    pin_s1:
+      sn74hc595: sn74hc595_hub
+      number: 1
+    pin_s2:
+      # This is a pin which is not used
+      number: ${dummy_pin}
+      allow_other_uses: true
+    pin_s3:
+      # This is a pin which is not used
+      number: ${dummy_pin}
+      allow_other_uses: true
+
+http_request:
+  verify_ssl: false
+
+switch:
+  - platform: template
+    name: "Summer mode"
+    id: summer_mode
+    icon: mdi:weather-sunny
+    lambda: 'return id(cfg_summer_mode);'
+    turn_on_action:
+      - lambda: |-
+          id(cfg_summer_mode) = true;
+          id(summer_mode).publish_state(true);
+    turn_off_action:
+      - lambda: |-
+          id(cfg_summer_mode) = false;
+          id(summer_mode).publish_state(false);
+    web_server:
+      sorting_group_id: heating_control_group
+
+  - platform: gpio
+    name: "Heating"
+    icon: mdi:fire
+    id: relay_0
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 0
+    on_turn_on:
+    - lambda: |-
+        if (id(cfg_summer_mode)) {
+          ESP_LOGW("Heating", "Summer mode active - heating switching is disabled");
+          id(relay_0).turn_off();
+          return;
+        }
+        id(keep_alive_script).execute();
+        id(relay_counter)[0]++;
+    on_turn_off:
+    - lambda: |-      
+        id(floorheating) = false;
+    web_server:
+      sorting_group_id: heating_control_group
+  - platform: gpio
+    name: "Pump 1"
+    icon: mdi:pump
+    id: relay_1
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 5
+    on_turn_on:
+    - lambda: |-
+        if (id(cfg_summer_mode)) {
+          ESP_LOGW("Pump 1", "Summer mode active - pump switching is disabled");
+          id(relay_1).turn_off();
+          return;
+        }
+        id(lights_control).execute();
+        id(keep_alive_script).execute();
+        id(relay_counter)[1]++;
+        if (id(cfg_floorheating_circuit) == 1) id(floorheating) = true;
+    on_turn_off:
+    - lambda: |-
+        id(lights_control).execute();
+        if (id(cfg_floorheating_circuit) == 1) {
+          id(floorheating) = false;
+          if (!id(cfg_summer_mode)) {
+            id(mixer_close)->execute();
+          }
+        }
+    web_server:
+      sorting_group_id: pump_control_group
+  - platform: gpio
+    name: "Pump 2"
+    icon: mdi:pump
+    id: relay_2
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 6
+    on_turn_on:
+    - lambda: |-
+        if (id(cfg_summer_mode)) {
+          ESP_LOGW("Pump 2", "Summer mode active - pump switching is disabled");
+          id(relay_2).turn_off();
+          return;
+        }
+        id(lights_control).execute();
+        id(keep_alive_script).execute();
+        id(relay_counter)[2]++;
+        if (id(cfg_floorheating_circuit) == 2) id(floorheating) = true;
+    on_turn_off:
+    - lambda: |-
+        id(lights_control).execute();
+        if (id(cfg_floorheating_circuit) == 2) {
+          id(floorheating) = false;
+          if (!id(cfg_summer_mode)) {
+            id(mixer_close)->execute();
+          }
+        }
+    web_server:
+      sorting_group_id: pump_control_group
+  - platform: gpio
+    name: "Pump 3"
+    icon: mdi:pump
+    id: relay_3
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 7
+    on_turn_on:
+    - lambda: |-
+        if (id(cfg_summer_mode)) {
+          ESP_LOGW("Pump 3", "Summer mode active - pump switching is disabled");
+          id(relay_3).turn_off();
+          return;
+        }
+        id(lights_control).execute();
+        id(keep_alive_script).execute();
+        id(relay_counter)[3]++;
+        if (id(cfg_floorheating_circuit) == 3) id(floorheating) = true;
+    on_turn_off:
+    - lambda: |-
+        id(lights_control).execute();
+        if (id(cfg_floorheating_circuit) == 3) {
+          id(floorheating) = false;
+          if (!id(cfg_summer_mode)) {
+            id(mixer_close)->execute();
+          }
+        }
+    web_server:
+      sorting_group_id: pump_control_group
+
+  - platform: gpio
+    id: direction
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 3
+    internal: true
+    on_turn_on:
+    - lambda: |-
+        id(relay_counter)[4]++;
+  - platform: gpio
+    id: motion
+    pin:
+      sn74hc595: sn74hc595_hub
+      number: 4
+    internal: true
+    on_turn_on:
+    - lambda: |-
+        id(relay_counter)[5]++;
+
+  - platform: template
+    name: Increase
+    id: increase
+    lambda: 'return id(direction).state && id(motion).state;'
+    turn_on_action:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - switch.turn_off: motion
+            - delay: 20 ms
+            - switch.turn_on: direction
+            - delay: 10 ms
+            - switch.turn_on: motion
+    turn_off_action:
+      - delay: 30 ms
+      - switch.turn_off: motion
+    web_server:
+      sorting_group_id: mixer_control_group
+    internal: true
+
+  - platform: template
+    name: Decrease
+    id: decrease
+    lambda: 'return (not id(direction).state) && id(motion).state;'
+    turn_on_action:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - switch.turn_off: motion
+            - delay: 20 ms
+            - switch.turn_off: direction
+            - delay: 10 ms
+            - switch.turn_on: motion
+    turn_off_action:
+      - delay: 30 ms
+      - switch.turn_off: motion
+    web_server:
+      sorting_group_id: mixer_control_group
+    internal: true
+
+  - platform: template
+    name: PID override
+    id: pid_override
+    lambda: 'return id(pid_disable);'
+    turn_on_action:
+      - globals.set:
+          id: pid_disable
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: pid_disable
+          value: 'false'
+    entity_category: "diagnostic"
+    web_server:
+      sorting_group_id: mixer_control_group
+
+  - platform: template
+    name: Safety override
+    id: safety_override_switch
+    lambda: 'return id(safety_override);'
+    turn_on_action:
+      lambda: |-
+        id(safety_override) = true;
+        id(safety_override_start) = millis() / 1000;
+    turn_off_action:
+      lambda: |-
+        id(safety_override) = false;
+        id(safety_override_start) = -1;
+    entity_category: "diagnostic"
+    web_server:
+      sorting_group_id: mixer_control_group
+      
+sensor:
+  # Mixer state
+  - platform: template
+    name: "Mixer state"
+    id: mixer_state
+    icon: mdi:thermostat
+    accuracy_decimals: 2
+    filters:
+      - or:
+        - delta: 0.01
+        - throttle: 60s
+    unit_of_measurement: "%"
+    web_server:
+      sorting_group_id: mixer_control_group
+
+  - platform: template
+    id: pid_input
+    internal: true
+
+  - platform: uptime
+    name: Uptime Sensor
+    id: uptime_sensor
+    entity_category: "diagnostic"
+    web_server:
+      sorting_group_id: status_group
+
+  - platform: pid
+    name: "PID result"
+    type: RESULT
+  - platform: pid
+    name: "PID error"
+    type: ERROR
+  - platform: pid
+    name: "PID heat"
+    id: pid_heat
+    type: HEAT
+  - platform: pid
+    name: "PID cool"
+    id: pid_cool
+    type: COOL
+
+cover:
+  - platform: time_based
+    name: "Mixer"
+    id: mixer
+    icon: mdi:thermostat
+    open_action:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - switch.turn_on: increase
+    open_duration: 145s
+    close_action:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - switch.turn_on: decrease
+    close_duration: 145s
+    stop_action:
+      - switch.turn_off: motion
+    #manual_control: true
+    web_server:
+      sorting_group_id: mixer_control_group
+
+number:
+  - platform: template
+    name: "Keep alive time (sec)"
+    id: set_keep_alive_time_sec
+    step: 30
+    min_value: 30
+    max_value: 1800
+    icon: mdi:timer
+    unit_of_measurement: "s"
+    optimistic: true
+    entity_category: "config"
+    web_server:
+      sorting_group_id: configuration_group
+
+  - platform: template
+    name: "Floorheating temperature"
+    id: set_mixer_setpoint
+    step: 1
+    min_value: 25
+    max_value: 45
+    icon: mdi:thermostat
+    unit_of_measurement: "°C"
+    optimistic: true
+    web_server:
+      sorting_group_id: configuration_group
+    on_value:
+      then:
+        - lambda: |-
+            auto call = id(pid_climate_controller).make_call();
+            call.set_target_temperature(x).perform();
+
+  - platform: template
+    name: "Floorheating circuit"
+    id: set_floorheating_circuit
+    step: 1
+    min_value: 0
+    max_value: 3
+    icon: mdi:heating-coil
+    optimistic: true
+    web_server:
+      sorting_group_id: configuration_group
+
+  # New: mixer position 0-100% (controls the mixer directly)
+  - platform: template
+    name: "Mixer position (%)"
+    id: mixer_position
+    step: 10
+    min_value: 0
+    max_value: 100
+    unit_of_measurement: "%"
+    icon: mdi:thermostat
+    optimistic: true   # slider just updates the internal state
+#    set_action:
+#    - lambda: |-
+#        // No-op: handled by separate button
+#        return;
+    web_server:
+      sorting_group_id: mixer_control_group
+
+text:
+  - platform: template
+    name: "Mixer forward temperature sensor address"
+    id: set_mixer_fwd_temp_sensor_address
+    optimistic: true
+    mode: text
+    web_server:
+      sorting_group_id: configuration_group
+
+  - platform: template
+    name: "Mixer return temperature sensor address"
+    id: set_mixer_ret_temp_sensor_address
+    optimistic: true
+    mode: text
+    web_server:
+      sorting_group_id: configuration_group
+
+  - platform: template
+    name: "Mixer incoming temperature sensor address"
+    id: set_mixer_inc_temp_sensor_address
+    optimistic: true
+    mode: text
+    web_server:
+      sorting_group_id: configuration_group
+
+text_sensor:
+  - platform: wifi_info
+    ssid:
+      name: Connected SSID
+      web_server:
+        sorting_group_id: status_group
+  - platform: version
+    name: "ESPHome Version"
+    web_server:
+      sorting_group_id: status_group
+  - platform: onewire_scanner
+    name: "Discovered 1-Wire Devices"
+    one_wire_id: dallas
+    entity_category: "diagnostic"
+    web_server:
+      sorting_group_id: status_group
+
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: WS2812
+    pin: ${led_pin}
+    num_leds: 5
+    id: lights
+    rgb_order: GRB
+#    method:
+#      type: esp8266_uart
+#      bus: 1
+#      async: false
+    internal: true
+  - platform: partition
+    id: led_status
+    segments:
+      - id: lights
+        from: 0
+        to: 0
+    effects:
+      - pulse:
+    internal: true
+  - platform: partition
+    id: led1
+    segments:
+      - id: lights
+        from: 1
+        to: 1
+    internal: true
+  - platform: partition
+    id: led2
+    segments:
+      - id: lights
+        from: 2
+        to: 2
+    internal: true
+  - platform: partition
+    id: led3
+    segments:
+      - id: lights
+        from: 3
+        to: 3
+    internal: true
+  - platform: partition
+    id: ledm
+    segments:
+      - id: lights
+        from: 4
+        to: 4
+    internal: true
+
+button:
+  - platform: template
+    name: "Toggle summer mode"
+    icon: mdi:weather-sunny
+    on_press:
+      - switch.toggle: summer_mode
+    web_server:
+      sorting_group_id: heating_control_group
+
+  # Keep alive button, which prevents the relays from turning off
+  - platform: template
+    name: "Keep alive"
+    on_press:
+      - script.execute: keep_alive_script
+    web_server:
+      sorting_group_id: heating_control_group
+  # Save the settings
+  - platform: template
+    name: "Save settings"
+    on_press: 
+      - lambda: |-
+          id(cfg_keep_alive_time_sec) = id(set_keep_alive_time_sec).state;
+          id(cfg_mixer_setpoint) = id(set_mixer_setpoint).state;
+          id(cfg_floorheating_circuit) = id(set_floorheating_circuit).state;
+          id(cfg_summer_mode) = id(summer_mode).state;
+
+          char *endprt;
+          unsigned long long int y;
+          y = strtoull(id(set_mixer_fwd_temp_sensor_address).state.c_str(), &endprt, 16);
+          if (*endprt != '\0') {
+            ESP_LOGE("Mixer", "Invalid address for forward sensor");
+          }
+          else {
+            id(cfg_mixer_fwd_temp_sensor_address) = y;
+          }
+          y = strtoull(id(set_mixer_ret_temp_sensor_address).state.c_str(), &endprt, 16);
+          if (*endprt != '\0') {
+            ESP_LOGE("Mixer", "Invalid address for return sensor");
+          }
+          else {
+            id(cfg_mixer_ret_temp_sensor_address) = y;
+          }
+          y = strtoull(id(set_mixer_inc_temp_sensor_address).state.c_str(), &endprt, 16);
+          if (*endprt != '\0') {
+            ESP_LOGE("Mixer", "Invalid address for incoming sensor");
+          }
+          else {
+            id(cfg_mixer_inc_temp_sensor_address) = y;
+          }
+
+    web_server:
+      sorting_group_id: configuration_group
+
+  # close mixer
+  - platform: template
+    name: Close mixer
+    on_press:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - script.execute: close_mixer
+
+    web_server:
+      sorting_group_id: mixer_control_group
+
+  # open mixer
+  - platform: template
+    name: Open mixer
+    on_press:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            - script.execute: open_mixer
+
+    web_server:
+      sorting_group_id: mixer_control_group
+
+  - platform: template
+    name: "Mixer position set"
+    on_press:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          float pos = id(mixer_position).state / 100.0;
+          ESP_LOGI("Mixer", "Setting mixer position to %f %%", pos * 100.0);
+          id(mixer_set)->execute(pos);
+    web_server:
+      sorting_group_id: mixer_control_group
+
+  - platform: restart
+    name: "Restart device"
+    web_server:
+      sorting_group_id: configuration_group
+
+  - platform: safe_mode
+    name: "Restart device (Safe Mode)"
+    web_server:
+      sorting_group_id: configuration_group
+
+output:
+  - platform: template
+    type: float
+    id: mixer_up
+    write_action:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          if (state == 0) return;
+          if (id(pid_disable)) return;
+          if (!id(relay_3).state) {
+            return;
+          }
+          if (state < 0.02) {
+            id(mixer_residue) += state;
+            state = id(mixer_residue);
+          }
+          if (id(mixer).position < 0.8 && state > 0.02) {
+            ESP_LOGW("Mixer up", "value: %f", state);
+            id(mixer_residue) = 0;
+            id(mixer_increase)->execute(state);
+          }
+          return;
+
+  - platform: template
+    type: float
+    id: mixer_down
+    write_action:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          if (state == 0) return;
+          if (id(pid_disable)) return;
+          if (!id(relay_3).state) {
+            return;
+          }
+          if (state < 0.02) {
+            id(mixer_residue) -= state;
+            state = -id(mixer_residue);
+          }
+          if (id(mixer).position > 0.2 && state > 0.02) {
+            ESP_LOGW("Mixer down", "value: %f", state);
+            id(mixer_residue) = 0;
+            id(mixer_decrease)->execute(state);
+          }
+          return;
+
+climate:
+  - platform: pid
+    name: "PID Climate Controller"
+    id: pid_climate_controller
+    sensor: pid_input # 5s updated sensor to control
+    default_target_temperature: 35°C
+    heat_output: mixer_up
+    cool_output: mixer_down
+    control_parameters:
+      kp: 0.005
+      ki: 0
+      kd: 0.3
+      #output_averaging_samples: 5      # smooth the output over 5 samples
+      #derivative_averaging_samples: 5  # smooth the derivative value over 10 samples
+    deadband_parameters:
+      threshold_high: 0.3°C       # deadband within +/-0.5°C of target_temperature
+      threshold_low: -0.5°C
+    visual:
+      min_temperature: 20°C
+      max_temperature: 50°C
+    internal: true
+
+interval:
+  # Status LED on API and WiFi
+  - interval: 1s
+    then:
+      if:
+        condition:
+          wifi.connected:
+        then:
+          - if:
+              condition:
+                api.connected:
+              then:
+                - if:
+                    condition:
+                      lambda: 'return id(my_state) != 2;'
+                    then:
+                      - light.turn_on:
+                          id: led_status
+                          color_mode: rgb
+                          green: 100%
+                          red: 0%
+                          blue: 0%
+                          effect: none
+                      - globals.set:
+                          id: my_state
+                          value: '2'
+
+              else:
+                - if:
+                    condition:
+                      lambda: 'return id(my_state) != 1;'
+                    then:
+                      - light.turn_on:
+                          id: led_status
+                          color_mode: rgb
+                          green: 100%
+                          red: 100%
+                          blue: 0%
+                          effect: pulse
+                      - globals.set:
+                          id: my_state
+                          value: '1'
+        else:
+          - if:
+              condition:
+                lambda: 'return id(my_state) != 0;'
+              then:
+                - light.turn_on:
+                    id: led_status
+                    color_mode: rgb
+                    red: 100%
+                    green: 0%
+                    blue: 0%
+                    effect: pulse
+                - globals.set:
+                    id: my_state
+                    value: '0'
+
+  # Update power sensors
+  - interval: 2s
+    then:
+      - component.update: pump1_power
+      - delay: 250 ms
+      - component.update: pump2_power
+      - delay: 250 ms
+      - component.update: pump3_power
+      - delay: 250 ms
+      # Relay M is the last, as the measurement is longer
+      - component.update: mixer_power
+
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(safety_override)) {
+            if (millis()*1000 - id(safety_override_start) > 60) {
+              ESP_LOGW("Safety override", "One minute passed, disabling safety override");
+              id(safety_override) = false;
+              id(safety_override_start) = -1;
+            }
+          }
+
+  # Keep alive script
+  - interval: 5s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (id(cfg_summer_mode)) return false;
+              return id(relay_0).state || id(relay_1).state || id(relay_2).state || id(relay_3).state;
+          then:
+            - if:
+                condition:
+                  lambda: |-
+                    return id(keep_alive_state) + id(cfg_keep_alive_time_sec) < millis() / 1000;
+                then:
+                  - logger.log: "Keep alive expired, turning off all relays"
+                  - switch.turn_off: relay_0
+                  - delay: 100 ms
+                  - switch.turn_off: relay_1
+                  - delay: 100 ms
+                  - switch.turn_off: relay_2
+                  - delay: 100 ms
+                  - switch.turn_off: relay_3
+                  - delay: 100 ms
+                  - switch.turn_off: direction
+                  - delay: 100 ms
+                  - switch.turn_off: motion
+
+  # Update the mixer state
+  - interval: 1s
+    then:
+      - lambda: |-
+          id(mixer_state).publish_state(id(mixer).position * 100);
+
+  - interval: 20s
+    then:
+      - lambda: |-
+          id(pid_input).publish_state(id(mixer_forward_temperature).state);
+
+  # Store relay counters
+  - interval: 10min
+    then:
+    - lambda: |-
+        for (int i = 0; i < 6; i++) {
+          ESP_LOGW("counters", "Relay %d count: %i", i, id(relay_counter)[i]);
+          id(relay_counter_store)[i] = id(relay_counter)[i];
+        }
+
+  # Check mixer state
+  - interval: 5s
+    then:
+    - lambda: |-
+        if (id(cfg_summer_mode)) return;
+        if (id(pid_disable)) return;
+        if (!id(floorheating)) return;
+        
+        float inc = id(mixer_incoming_temperature).state;
+        float fwd = id(mixer_forward_temperature).state;
+
+        if (inc > 60.0) id(mixer_maximum) = 0.70;
+        else if (inc > 50.0) id(mixer_maximum) = 0.75;
+        else if (inc > 40.0) id(mixer_maximum) = 0.80;
+        else id(mixer_maximum) = 0.90;
+
+        if (fwd > id(set_mixer_setpoint).state) id(mixer_maximum) = 0.60;
+
+        if (id(mixer).position < id(mixer_minimum)-0.02) {
+          id(mixer_set)->execute(id(mixer_minimum));
+        }
+        else if (id(mixer).position > id(mixer_maximum)+0.02) {
+          id(mixer_set)->execute(id(mixer_maximum));
+        }
+        
+        if (fwd > id(set_mixer_setpoint).state + 3.0) {
+          ESP_LOGE("Mixer", "UNSAFE! Forward temperature too high, set to minimum");
+          ESP_LOGI("Mixer", "Forward temperature: %f, Setpoint: %f", fwd, id(set_mixer_setpoint));
+          id(mixer_unsafe) = true;
+          id(mixer_set)->execute(id(mixer_minimum));
+        }
+        if (id(mixer_unsafe) && fwd < id(set_mixer_setpoint).state - 1.0) {
+          ESP_LOGI("Mixer", "Forward temperature settled. SAFE to move");
+          ESP_LOGI("Mixer", "Forward temperature: %f, Setpoint: %f", fwd, id(set_mixer_setpoint));
+          id(mixer_unsafe) = false;
+        }
+
+  # Check stall condition
+  - interval: 30s
+    then:
+    - lambda: |-
+        if (id(cfg_summer_mode)) return;
+        if (!id(floorheating)) return;
+
+        if (id(stallcheck_temp) == id(mixer_incoming_temperature).state) {
+          id(stallcheck_number)++;
+          if (id(stallcheck_number) == 4) {
+            ESP_LOGE("Mixer", "Stall detected! Close mixer");
+            id(close_mixer)->execute();
+          }
+        }
+        else {
+          id(stallcheck_number) = 0;
+          id(stallcheck_temp) = id(mixer_incoming_temperature).state;
+        }
+
+script:
+  - id: set_dallas
+    then:
+      - lambda: |-
+          id(mixer_forward_temperature).set_address(id(cfg_mixer_fwd_temp_sensor_address));
+          id(mixer_return_temperature).set_address(id(cfg_mixer_ret_temp_sensor_address));
+          id(mixer_incoming_temperature).set_address(id(cfg_mixer_inc_temp_sensor_address));
+
+  - id: lights_control
+    then:
+      - if:
+          condition:
+            - switch.is_on: relay_1
+          then:
+            - light.turn_on:
+                id: led1
+                color_mode: rgb
+                red: !lambda 'return id(relay_0).state ? 1.0 : 0;'
+                blue: !lambda 'return not id(relay_0).state ? 1.0 : 0;'
+                green: 0
+          else:
+            - light.turn_off: led1
+      - if:
+          condition:
+            - switch.is_on: relay_2
+          then:
+            - light.turn_on:
+                id: led2
+                color_mode: rgb
+                red: !lambda 'return id(relay_0).state ? 1.0 : 0;'
+                blue: !lambda 'return not id(relay_0).state ? 1.0 : 0;'
+                green: 0
+          else:
+            - light.turn_off: led2
+      - if:
+          condition:
+            - switch.is_on: relay_3
+          then:
+            - light.turn_on:
+                id: led3
+                color_mode: rgb
+                red: !lambda 'return id(relay_0).state ? 1.0 : 0;'
+                blue: !lambda 'return not id(relay_0).state ? 1.0 : 0;'
+                green: 0
+          else:
+            - light.turn_off: led3
+
+  - id: keep_alive_script
+    then:
+      - logger.log: "Keep alive for the next period"
+      - lambda: |-
+          id(keep_alive_state) = millis() / 1000;
+          ESP_LOGI("Keep alive", "Updated keep alive time to %ld", id(keep_alive_state));
+
+  - id: mixer_set
+    parameters:
+      value: float
+    then:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          if (!safety_override) {
+            if (id(stallcheck_number) > 3) return;
+
+            float mmax = id(mixer_maximum);
+            float mmin = id(mixer_minimum);
+            bool unsafe = id(mixer_unsafe);
+            
+            if (unsafe) value = mmin;
+            else if (value > mmax) value = mmax;
+            else if (value < mmin) value = mmin;
+          }
+
+          if (value > id(mixer).position - 0.015 && value < id(mixer).position + 0.015) return;
+          if (value == id(mixer_set_goal)) return;
+
+          id(mixer_set_goal) = value;
+          ESP_LOGI("Mixer", "Set mixer to %f", value);
+          auto call = id(mixer).make_call();
+          call.set_position(value).perform();
+
+  - id: mixer_close
+    then:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          id(mixer_minimum) = 0;
+          id(mixer_set)->execute(0.0);
+
+  - id: mixer_increase
+    parameters:
+      value: float
+    then:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          float m = id(mixer).position + value;
+          id(mixer_set)->execute(m);
+
+  - id: mixer_decrease
+    parameters:
+      value: float
+    then:
+      - lambda: |-
+          if (id(cfg_summer_mode)) return;
+          float m = id(mixer).position - value;
+          id(mixer_set)->execute(m);
+
+  - id: close_mixer
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            # Move back to assumed 0 and then run a whole cycle with decreasing
+            - logger.log: "Mixer close phase 1"
+            - lambda: |-
+                id(pid_disable_tmp) = id(pid_disable);
+                id(pid_override).publish_state(true);
+                id(pid_disable) = true;
+                auto call = id(mixer).make_call();
+                call.set_position(0.0).perform();
+                id(mixer_set_goal) = 0.0;
+            - delay: 180s
+
+            - logger.log: "Mixer close phase 2"
+            - switch.turn_on: decrease
+            - delay: 180s
+            - switch.turn_off: decrease
+
+            # restore the PID state
+            - lambda: |-
+                id(mixer_set_goal) = 0.0;
+                id(pid_disable) = id(pid_disable_tmp);
+                id(pid_override).publish_state(id(pid_disable));
+
+            - logger.log: "Mixer close done"
+
+  - id: open_mixer
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(cfg_summer_mode);'
+          then:
+            # Move back to assumed 0 and then run a whole cycle with decreasing
+            - logger.log: "Mixer open phase 1"
+            - lambda: |-
+                id(pid_disable_tmp) = id(pid_disable);
+                id(pid_override).publish_state(true);
+                id(pid_disable) = true;
+                auto call = id(mixer).make_call();
+                call.set_position(1.0).perform();
+                id(mixer_set_goal) = 1.0;
+            - delay: 180s
+
+            - logger.log: "Mixer open phase 2"
+            - switch.turn_on: increase
+            - delay: 180s
+            - switch.turn_off: increase
+
+            # restore the PID state
+            - lambda: |-
+                id(mixer_set_goal) = 1.0;
+                id(pid_disable) = id(pid_disable_tmp);
+                id(pid_override).publish_state(id(pid_disable));
+
+            - logger.log: "Mixer open done"

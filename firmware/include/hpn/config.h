@@ -1,0 +1,102 @@
+#pragma once
+
+#include <stdint.h>
+
+// Sentinel for "GPIO not assigned yet". Plans 02 still marks most pins TBD.
+#define HPN_GPIO_UNASSIGNED 0xFF
+
+// Canonical configuration contract.
+//
+// Source of truth: plans/controller node/01_config_and_contracts.md (§1).
+// Keep this struct in sync with the plan. Parameter ownership is documented
+// there; do not add values here that bypass the three ownership categories.
+struct Config {
+  // =========================================================================
+  // CATEGORY 1: Long-Term Configuration (Owner: Human via Web Dashboard ONLY)
+  // =========================================================================
+
+  // --- Provisioning --------------------------------------------------------
+  char wifi_ssid[33];
+  char wifi_password[64];
+  char ap_ssid[33];
+  char ap_password[32];
+  char mqtt_host[64];
+  uint16_t mqtt_port;
+  char mqtt_user[33];
+  char mqtt_pass[65];
+  char mqtt_base_topic[48];
+
+  // --- Safety & Supervision Bounds -----------------------------------------
+  float t_max_hard;
+  float t_max_warn;
+  float t_overtemp_hysteresis;
+  float grad_limit;
+  float mix_safe_pos;
+  uint32_t boiler_min_off_ms;
+  uint32_t demand_timeout_s;
+  uint32_t pump_stop_after_heating_s;
+  uint32_t long_pause_s;
+  uint32_t anti_seize_interval_s;
+  uint32_t test_mode_max_s;
+  uint8_t sensor_error_threshold;
+
+  // --- Hardware & Actuator Constants ---------------------------------------
+  float setpoint_default;
+  float deadband_pos;
+  float deadband_temp;
+  uint32_t min_pulse_ms;
+  uint32_t max_pulse_ms;
+  uint32_t pulse_cooldown_ms;
+  uint32_t travel_time_ms;
+  uint32_t tick_ms;
+  uint32_t temp_poll_interval_ms;
+  float recalc_threshold;
+  uint32_t encoder_check_interval_s;
+  uint32_t encoder_check_pulses;
+  uint32_t encoder_staleness_s;
+  uint8_t pos_source;
+
+  // --- I/O Assignment (pins TBD pending board layout) ----------------------
+  uint8_t gpio_pump_floor;
+  uint8_t gpio_pump_rad1;
+  uint8_t gpio_pump_rad2;
+  uint8_t gpio_heater;
+  uint8_t gpio_mix_open;
+  uint8_t gpio_mix_close;
+  uint8_t gpio_onewire;
+  uint8_t gpio_led_data;
+  uint8_t num_leds;
+  bool has_pump_power[3];
+  uint8_t i2c_sda;
+  uint8_t i2c_scl;
+  char sensor_id_boiler[17];
+  char sensor_id_ret[17];
+  char sensor_id_mix[17];
+
+  // =========================================================================
+  // CATEGORY 2: Dynamic Heating Parameters (Owner: Home Assistant, shadowed)
+  // =========================================================================
+  float floor_setpoint_shadow;
+  bool summer_mode;
+
+  // =========================================================================
+  // CATEGORY 3: Control Loop Tuning (Owner: Observer ONLY, L3-validated)
+  // =========================================================================
+  float delay_s;
+  float gain;
+  float ff_boiler;
+  float ff_return;
+  float kp;
+  float ki;
+  float rad_coupling_ff;
+  uint32_t start_flush_ms;
+  float flush_max_pos;
+  float flush_delta_t_ok;
+  float min_useful_delta_t;
+  uint32_t floor_pause_duration_s;
+};
+
+// Compiled-in defaults used before NVS has valid data. All values are safe
+// placeholders; safety-relevant numbers must be finalized in the plan and
+// bounded by L1/L3 validation.
+Config config_defaults();

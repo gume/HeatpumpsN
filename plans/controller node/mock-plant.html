@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heating Controller — Plant (mock)</title>
+<style>
+:root{
+  --bg:#1a1d21; --panel:#23272e; --panel2:#1f2329; --text:#e6e9ec;
+  --muted:#8a919a; --accent:#3b82f6; --readonly:#6b7280;
+  --test:#e5484d; --ok:#30a46c; --warn:#f5a623; --err:#e5484d;
+  --card-border:#2f343d;
+}
+[data-theme="light"]{ --bg:#f4f5f7; --panel:#ffffff; --panel2:#eef0f3; --text:#1c1f24; --muted:#6b7280; --card-border:#d6dae0; }
+*{box-sizing:border-box; margin:0; padding:0; font-family:"Segoe UI",system-ui,sans-serif;}
+body{background:var(--bg); color:var(--text); display:flex; min-height:100vh;}
+
+/* ── Sidebar ─────────────────────────── */
+nav{width:230px; background:var(--panel); border-right:1px solid var(--card-border);
+    display:flex; flex-direction:column; flex-shrink:0;}
+.brand{padding:18px 20px; border-bottom:1px solid var(--card-border); display:flex; align-items:center; gap:10px;}
+.brand .logo{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#9333ea);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#fff;}
+.brand b{font-size:15px;}
+.badge{margin-left:auto;font-size:11px;padding:3px 9px;border-radius:20px;background:#0f2e1d;color:var(--ok);
+       border:1px solid #1d5c3a; white-space:nowrap;}
+.badge.test{background:#3a1215;color:var(--test);border-color:#6b2327;}
+.badge.test .cnt{color:var(--warn);}
+.navlist{padding:12px 10px; display:flex; flex-direction:column; gap:2px; flex:1;}
+.navitem{display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px;
+         color:var(--muted); font-size:13.5px; cursor:pointer; text-decoration:none;}
+.navitem:hover{background:var(--panel2); color:var(--text);}
+.navitem.active{background:#263043; color:#fff;}
+.navitem .ico{width:18px; text-align:center; opacity:.85;}
+.navsub{margin-left:28px; font-size:12.5px;}
+.navsep{margin:12px 10px; border-top:1px solid var(--card-border); position:relative;}
+.navsep span{position:absolute; top:-8px; left:0; background:var(--panel); padding-right:6px;
+             font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);}
+.lock{font-size:11px;}
+footer.nav{padding:12px 16px; border-top:1px solid var(--card-border); font-size:11.5px; color:var(--muted); line-height:1.7;}
+footer.nav .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:6px;}
+footer.nav .dot.warn{background:var(--warn);}
+
+/* ── Main ────────────────────────────── */
+main{flex:1; padding:24px 28px; max-width:1200px;}
+.topbar{display:flex; align-items:center; margin-bottom:22px;}
+.topbar h1{font-size:20px; font-weight:600;}
+.topbar .sub{color:var(--muted); font-size:13px; margin-top:3px;}
+.syschips{margin-left:auto; display:flex; gap:8px;}
+.chip{font-size:11.5px; padding:5px 11px; border-radius:20px; background:var(--panel);
+      border:1px solid var(--card-border); color:var(--muted);}
+.chip b{color:var(--text); font-weight:600;}
+.chip.ok b{color:var(--ok);} .chip.warn b{color:var(--warn);}
+
+/* ── Cards / grid ────────────────────── */
+.grid{display:grid; grid-template-columns:1fr 1fr 1.6fr; gap:14px;}
+.grid.temps{grid-template-columns:1fr 1fr 1fr; margin-top:14px;}
+.heater{margin-top:14px;}
+.card{background:var(--panel); border:1px solid var(--card-border); border-radius:10px; padding:16px 18px;}
+.card h3{font-size:13px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+         color:var(--muted); margin-bottom:12px; display:flex; align-items:center; gap:8px;}
+.card h3 .tag{margin-left:auto; font-size:10px; padding:2px 8px; border-radius:10px;
+              background:var(--panel2); color:var(--readonly); letter-spacing:0;}
+.row{display:flex; justify-content:space-between; align-items:baseline; padding:5px 0; font-size:13.5px;}
+.row .k{color:var(--muted);}
+.row .v{font-weight:600; font-variant-numeric:tabular-nums;}
+.state-on{color:var(--ok);} .state-off{color:var(--muted);}
+.mismatch{color:var(--err); font-weight:700;}
+.warnTxt{color:var(--warn);}
+.big{font-size:26px; font-weight:700; font-variant-numeric:tabular-nums;}
+.big small{font-size:14px; color:var(--muted); font-weight:500;}
+.check{color:var(--ok); font-size:12px; margin-left:6px;}
+.stale{font-size:11px; color:var(--muted); font-weight:400; margin-left:6px;}
+.pipe{height:6px; border-radius:3px; background:var(--panel2); margin:10px 0 4px; position:relative; overflow:hidden;}
+.pipe .fill{position:absolute; top:0; bottom:0; border-radius:3px;}
+.temp-card .val{display:flex; align-items:baseline; margin-top:4px;}
+.sublabel{font-size:11.5px; color:var(--muted);}
+.healthchip{font-size:10px; padding:2px 7px; border-radius:10px; border:1px solid; margin-left:auto;}
+.healthchip.ok{color:var(--ok); border-color:#1d5c3a; background:#0f2e1d;}
+.healthchip.stale{color:var(--warn); border-color:#7a5a12; background:#33250a;}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand"><div class="logo">HC</div><b>Heating Controller</b><span class="badge">Heat</span></div>
+  <div class="navlist">
+    <a class="navitem"><span class="ico">▦</span>Dashboard</a>
+    <a class="navitem active"><span class="ico">♨</span>Plant</a>
+    <a class="navitem"><span class="ico">▤</span>Diagnostics ▸</a>
+    <a class="navitem navsub">Event Log</a>
+    <a class="navitem navsub">Slow Log</a>
+    <a class="navitem navsub">Sensor Health</a>
+    <a class="navitem navsub">Relay Counters</a>
+    <a class="navitem"><span class="ico">✋</span>Test Mode</a>
+    <a class="navitem"><span class="ico">⚙</span>Settings ▸</a>
+    <a class="navitem navsub">Safety &amp; Timeouts</a>
+    <a class="navitem navsub">Hardware &amp; Pins</a>
+    <a class="navitem navsub">Network &amp; MQTT</a>
+    <a class="navitem navsub">Firmware Update</a>
+    <a class="navitem navsub">System</a>
+    <div class="navsep"><span>read-only</span></div>
+    <a class="navitem"><span class="ico">🔒</span>Runtime Parameters</a>
+  </div>
+  <footer class="nav">
+    <div><span class="dot"></span>MQTT: connected</div>
+    <div><span class="dot warn"></span>WS: push 5 Hz</div>
+  </footer>
+</nav>
+
+<main>
+  <div class="topbar">
+    <div>
+      <h1>Plant</h1>
+      <div class="sub">Live plant state — read-only. Manual control available in <b>Test Mode</b>.</div>
+    </div>
+    <div class="syschips">
+      <span class="chip ok">mode <b>heat (HA)</b></span>
+      <span class="chip">uptime <b>6 d 04:12</b></span>
+      <span class="chip">rssi <b>−58 dBm</b></span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Radiator 1 <span class="tag">🔒 read-only</span></h3>
+      <div class="row"><span class="k">pump state</span><span class="v state-on">● ON</span></div>
+      <div class="row"><span class="k">command</span><span class="v">on</span></div>
+      <div class="row"><span class="k">cmd/phys</span><span class="v state-on">match ✓</span></div>
+      <div class="row"><span class="k">after-run</span><span class="v">—</span></div>
+    </div>
+    <div class="card">
+      <h3>Radiator 2 <span class="tag">🔒 read-only</span></h3>
+      <div class="row"><span class="k">pump state</span><span class="v state-off">○ OFF</span></div>
+      <div class="row"><span class="k">command</span><span class="v">off</span></div>
+      <div class="row"><span class="k">cmd/phys</span><span class="v state-on">match ✓</span></div>
+      <div class="row"><span class="k">after-run</span><span class="v">—</span></div>
+    </div>
+    <div class="card">
+      <h3>Floor Circuit (Mixer) <span class="tag">🔒 read-only</span></h3>
+      <div class="row"><span class="k">pump state</span><span class="v state-on">● ON</span></div>
+      <div class="row"><span class="k">command</span><span class="v">on</span></div>
+      <div class="row"><span class="k">mixer position</span><span class="v big">42<small> %</small></span></div>
+      <div class="pipe"><div class="fill" style="left:0;width:42%;background:var(--accent);"></div></div>
+      <div class="row"><span class="k">vs. encoder</span><span class="v">41 % <span class="check">✓ match</span></span></div>
+      <div class="row"><span class="k">last travel</span><span class="v">opening · 6 s ago</span></div>
+    </div>
+  </div>
+
+  <div class="grid temps">
+    <div class="card temp-card">
+      <h3>Boiler supply <span class="healthchip ok">ok</span></h3>
+      <div class="val"><span class="big">62.4<small> °C</small></span><span class="stale">2 s ago</span></div>
+      <div class="sublabel">mixer hot inlet · sensor 28-ff-1c</div>
+      <div class="pipe"><div class="fill" style="left:0;width:78%;background:linear-gradient(90deg,#f5a623,#e5484d);"></div></div>
+    </div>
+    <div class="card temp-card">
+      <h3>Return <span class="healthchip ok">ok</span></h3>
+      <div class="val"><span class="big">38.1<small> °C</small></span><span class="stale">2 s ago</span></div>
+      <div class="sublabel">mixer cold inlet · sensor 28-ff-9a</div>
+      <div class="pipe"><div class="fill" style="left:0;width:48%;background:linear-gradient(90deg,#3b82f6,#f5a623);"></div></div>
+    </div>
+    <div class="card temp-card">
+      <h3>Mixer forward <span class="healthchip ok">ok</span></h3>
+      <div class="val"><span class="big">34.2<small> °C</small></span><span class="stale">2 s ago</span></div>
+      <div class="sublabel">mixed output (controlled value) · sensor 28-ff-3e</div>
+      <div class="pipe"><div class="fill" style="left:0;width:43%;background:linear-gradient(90deg,#3b82f6,#f5a623);"></div></div>
+    </div>
+  </div>
+
+  <div class="heater card">
+    <h3>Heater <span class="tag">🔒 read-only</span></h3>
+    <div style="display:flex; gap:24px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:220px;">
+        <div class="row"><span class="k">command</span><span class="v state-on">ON</span></div>
+        <div class="row"><span class="k">physical state</span><span class="v state-on">ON <span class="check">✓ match</span></span></div>
+        <div class="row"><span class="k">demand keep-alive</span><span class="v">last seen 12 s ago <span class="check">✓ fresh</span></span></div>
+      </div>
+      <div style="flex:1.4; min-width:260px;">
+        <div class="row"><span class="k">reason (current)</span><span class="v">rad1 pump active</span></div>
+        <div class="row"><span class="k">last off-reason</span><span class="v state-off">n/a — continuously on for 4 h 12 min</span></div>
+        <div class="row"><span class="k">today's runtime</span><span class="v">3 h 48 min</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="heater card">
+    <h3>Active safety flags <span class="tag">🔒 read-only</span></h3>
+    <div class="row"><span class="v" style="color:var(--ok); font-weight:500;">none — all safety circuits nominal ✓</span></div>
+  </div>
+</main>
+
+</body>
+</html>
