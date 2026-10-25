@@ -29,13 +29,13 @@ relay bits as the real one.
 
 | Environment | Carrier | Backend |
 | --- | --- | --- |
-| `esp32dev_sim` | HomeNet Heatpumps 1.0 | **emulated** — daily development |
+| `esp32dev_sim` | HomeNet Heatpumps 1.0 | **emulated** — default env |
 | `esp32dev` | boardless | hardware, no pins assigned |
 | `esp32s2` | HomeNet Heatpumps 1.0 | hardware |
 | `esp32s3` / `esp32c3` | boardless | hardware, 2.0 targets pending |
 
 ```bash
-pio run -e esp32dev_sim
+pio run -e esp32dev_sim         # default environment
 pio run -e esp32dev_sim -t upload
 ```
 

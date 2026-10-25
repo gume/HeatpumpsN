@@ -51,7 +51,7 @@ pio remote agent list
 Build and flash from the repository root:
 
 ```bash
-# Build the default target (classic ESP32 DevKit)
+# Build the default target (boardless devkit, emulated Heatpumps 1.0)
 pio remote run -d firmware
 
 # Build and flash
@@ -63,10 +63,10 @@ timeout 10s pio remote device monitor -d firmware -b 115200 || true
 
 Never run `pio remote device monitor` without a timeout: it blocks the session.
 
-Additional targets:
+Explicit targets:
 
 ```bash
-pio remote run -d firmware -e esp32dev_sim   # boardless + emulated Heatpumps 1.0
+pio remote run -d firmware -e esp32dev       # boardless, real GPIO, no carrier
 pio remote run -d firmware -e esp32s2        # Heatpumps 1.0 hardware (S2 Mini)
 pio remote run -d firmware -e esp32s3
 pio remote run -d firmware -e esp32c3
@@ -107,10 +107,10 @@ map, MUX channels, current-sensor scaling and safety caveats are documented in
 [`firmware/docs/hhn-1.0.md`](firmware/docs/hhn-1.0.md).
 
 The day-to-day development target is a **boardless ESP32 devkit** running the
-1.0 carrier **emulated** (`-DHPN_IO_EMULATION`, env `esp32dev_sim`): L0 drives an
-in-memory model of the carrier, mocked temperatures and pump power can be
-edited, and no pin is touched. The planned web dashboard gets a board-emulation
-page built on the same model. See
+1.0 carrier **emulated** (`-DHPN_IO_EMULATION`, env `esp32dev_sim`, the default
+PlatformIO environment): L0 drives an in-memory model of the carrier, mocked
+temperatures and pump power can be edited, and no pin is touched. The planned
+web dashboard gets a board-emulation page built on the same model. See
 [`firmware/docs/io-emulation.md`](firmware/docs/io-emulation.md).
 
 ## Git

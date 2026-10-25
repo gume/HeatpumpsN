@@ -12,8 +12,8 @@ implementation steps described in
 
 | Environment | MCU board | Core | Carrier | Backend |
 | --- | --- | --- | --- | --- |
+| `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — default env |
 | `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
-| `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — daily dev |
 | `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, 74HC595 + MUX |
 | `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, 2.0 target |
 | `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, 2.0 target |
@@ -83,6 +83,10 @@ blocks the session.
 The remote agent is authenticated through the PlatformIO account
 (`pio account login`). Check availability with `pio remote agent list`, and
 start it on the runner with `pio remote agent start`.
+
+`pio remote run` without `-e` builds `esp32dev_sim`, the default environment:
+boardless devkit with the emulated Heatpumps 1.0 carrier. Name a hardware
+environment explicitly when the target must drive real pins.
 
 Local `pio run` remains available as an offline compile-only fallback, but
 build/flash/monitor operations for the target board use the remote agent.
