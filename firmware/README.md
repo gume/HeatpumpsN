@@ -17,19 +17,28 @@ steps described in [`../plans/controller node/`](../plans/controller%20node/).
 `esp32s2` uses the LOLIN S2 Mini board definition. Change it to
 `lolin_s2_pico` in `platformio.ini` if the physical board is a PICO.
 
-## Commands
+## Commands (remote agent)
+
+The target board is attached to a remote runner. Run these from this
+directory (or add `-d firmware` from the repository root):
 
 ```bash
-pio run                    # default target (esp32dev)
-pio run -e esp32s2         # build a specific target
-pio run -t upload          # upload default target
-pio run -e esp32s2 -t upload
-pio device monitor         # 115200 baud, exception decoder enabled
-pio run -t clean
+pio remote run                              # build default target (esp32dev)
+pio remote run -e esp32s2                   # build a specific target
+pio remote run --target upload              # build + flash
+pio remote run -e esp32s2 --target upload
+timeout 10s pio remote device monitor -b 115200 || true
 ```
 
-To add dashboard assets (LittleFS), place files under `data/` and run
-`pio run -t buildfs`.
+Always bound `pio remote device monitor` with `timeout`; an unbounded monitor
+blocks the session.
+
+The remote agent is authenticated through the PlatformIO account
+(`pio account login`). Check availability with `pio remote agent list`, and
+start it on the runner with `pio remote agent start`.
+
+Local `pio run` remains available as an offline compile-only fallback, but
+build/flash/monitor operations for the target board use the remote agent.
 
 ## Layout
 

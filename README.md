@@ -28,25 +28,47 @@ These are intentionally **not tracked**:
 They stay on the development machine and can be regenerated or re-cloned.
 See [`.gitignore`](.gitignore).
 
-## Firmware quick start
+## Firmware quick start (remote)
 
-PlatformIO Core 6.x and the pioarduino ESP32 platform are required.
+The ESP32 is attached to a remote runner running a PlatformIO remote agent
+(currently agent `EDI`, device `/dev/ttyUSB0`). Build, flash, and monitor
+through the remote agent.
+
+On the runner, start the agent if it is not already running:
+
+```bash
+pio remote agent start
+```
+
+On this host, authenticate once with your PlatformIO account and confirm the
+agent is visible:
+
+```bash
+pio account login
+pio remote agent list
+```
+
+Build and flash from the repository root:
 
 ```bash
 # Build the default target (classic ESP32 DevKit)
-pio -d firmware run
+pio remote run -d firmware
 
-# Upload and open the serial monitor
-pio run -d firmware -t upload
-pio device monitor -d firmware
+# Build and flash
+pio remote run -d firmware --target upload
+
+# Inspect boot logs; always bound the monitor with a timeout
+timeout 10s pio remote device monitor -d firmware -b 115200 || true
 ```
+
+Never run `pio remote device monitor` without a timeout: it blocks the session.
 
 Additional targets:
 
 ```bash
-pio -d firmware run -e esp32s3
-pio -d firmware run -e esp32s2   # current physical board: LOLIN S2 Mini
-pio -d firmware run -e esp32c3
+pio remote run -d firmware -e esp32s3
+pio remote run -d firmware -e esp32s2   # current physical board: LOLIN S2 Mini
+pio remote run -d firmware -e esp32c3
 ```
 
 See [`firmware/README.md`](firmware/README.md) for target details and the
