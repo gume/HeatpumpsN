@@ -93,14 +93,107 @@ Adafruit_NeoPixel g_leds;
 bool g_leds_ready = false;
 uint16_t g_led_count = 0;
 uint8_t g_onewire_pin = HPN_GPIO_UNASSIGNED;
+const Config* g_config = nullptr;
+OneWire* g_onewire = nullptr;
+DallasTemperature* g_dallas = nullptr;
+uint32_t g_dallas_request_ms = 0;
+bool g_dallas_read_pending = false;
+float g_dallas_c[3] = {};
+bool g_dallas_valid[3] = {};
 
 bool pin_assigned(uint8_t pin) { return pin != HPN_GPIO_UNASSIGNED; }
+
+uint8_t role_index(TempRole role) {
+  switch (role) {
+    case TempRole::Boiler:
+      return 0;
+    case TempRole::ReturnFloor:
+      return 1;
+    case TempRole::MixOut:
+      return 2;
+    default:
+      return 0xFF;
+  }
+}
+
+const char* sensor_id_for_role(const Config& config, TempRole role) {
+  switch (role) {
+    case TempRole::Boiler:
+      return config.sensor_id_boiler;
+    case TempRole::ReturnFloor:
+      return config.sensor_id_ret;
+    case TempRole::MixOut:
+      return config.sensor_id_mix;
+    default:
+      return "";
+  }
+}
+
+uint8_t hex_nibble(char c) {
+  if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+  if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(c - 'a' + 10);
+  if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(c - 'A' + 10);
+  return 0xFF;
+}
+
+bool parse_hex_address(const char* hex, DeviceAddress out) {
+  if (hex == nullptr || strlen(hex) < 16) {
+    return false;
+  }
+  for (uint8_t i = 0; i < 8; ++i) {
+    const uint8_t high = hex_nibble(hex[i * 2]);
+    const uint8_t low = hex_nibble(hex[i * 2 + 1]);
+    if (high == 0xFF || low == 0xFF) {
+      return false;
+    }
+    out[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
+
+void dallas_poll(uint32_t now_ms) {
+  if (g_dallas == nullptr || g_config == nullptr) {
+    return;
+  }
+  if (g_dallas_read_pending && now_ms - g_dallas_request_ms >= 750u) {
+    const TempRole roles[] = {TempRole::Boiler, TempRole::ReturnFloor, TempRole::MixOut};
+    for (uint8_t i = 0; i < 3; ++i) {
+      DeviceAddress address{};
+      if (!parse_hex_address(sensor_id_for_role(*g_config, roles[i]), address)) {
+        g_dallas_valid[i] = false;
+        continue;
+      }
+      const float celsius = g_dallas->getTempC(address);
+      const bool valid = celsius > -100.0f && celsius < 150.0f;
+      g_dallas_c[i] = celsius;
+      g_dallas_valid[i] = valid;
+    }
+    g_dallas_read_pending = false;
+  }
+  if (now_ms - g_dallas_request_ms >= 1000u) {
+    g_dallas->requestTemperatures();
+    g_dallas_request_ms = now_ms;
+    g_dallas_read_pending = true;
+  }
+}
 
 }  // namespace
 
 void begin(const Config& config, const BoardConfig& board) {
   (void)board;
+  g_config = &config;
   g_onewire_pin = config.gpio_onewire;
+  static OneWire onewire;
+  static DallasTemperature dallas(&onewire);
+  if (pin_assigned(g_onewire_pin)) {
+    onewire.begin(g_onewire_pin);
+    dallas.begin();
+    dallas.setWaitForConversion(false);
+    g_onewire = &onewire;
+    g_dallas = &dallas;
+    g_dallas_request_ms = 0;
+    g_dallas_read_pending = false;
+  }
 }
 
 void pin_mode(uint8_t pin, uint8_t mode) {
@@ -159,9 +252,15 @@ void delay_us(uint32_t us) {
 }
 
 bool read_temperature(TempRole role, float& celsius) {
-  // TODO(L0): 1-Wire broadcast convert + MATCH ROM reads (plan 02 §2.4).
-  (void)role;
-  (void)celsius;
+  const uint8_t index = role_index(role);
+  if (index == 0xFF || g_dallas == nullptr || g_config == nullptr) {
+    return false;
+  }
+  dallas_poll(millis());
+  if (g_dallas_valid[index]) {
+    celsius = g_dallas_c[index];
+    return true;
+  }
   return false;
 }
 

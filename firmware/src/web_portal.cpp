@@ -602,6 +602,7 @@ void fill_hardware(JsonObject o, const Config& c) {
   // Observer-owned control-loop tuning (plan 01 Cat 3). Exposed for bench
   // tuning until the observer node owns these over MQTT.
   o["delay_s"] = c.delay_s;
+  o["mix_ff_offset"] = c.mix_ff_offset;
   o["ff_boiler"] = c.ff_boiler;
   o["ff_return"] = c.ff_return;
   o["rad_coupling_ff"] = c.rad_coupling_ff;
@@ -881,6 +882,7 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
     return false;
 
   if (!json_float(in, "delay_s", c.delay_s, 0.0f, 600.0f, err)) return false;
+  if (!json_float(in, "mix_ff_offset", c.mix_ff_offset, -20.0f, 20.0f, err)) return false;
   if (!json_float(in, "ff_boiler", c.ff_boiler, -2.0f, 2.0f, err)) return false;
   if (!json_float(in, "ff_return", c.ff_return, -2.0f, 2.0f, err)) return false;
   if (!json_float(in, "rad_coupling_ff", c.rad_coupling_ff, -10.0f, 10.0f, err)) return false;
@@ -1317,6 +1319,89 @@ void tick_sequence(uint32_t now_ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Anti-seize schedule (NVS, deferred persistence)
+// ---------------------------------------------------------------------------
+
+constexpr const char* kAntiSeizeNamespace = "hpnanti";
+constexpr const char* kAntiSeizeKey = "next_day";
+constexpr uint32_t kAntiSeizeWriteIntervalMs = 300000;  // 5 min
+
+uint32_t g_anti_seize_next_day = 0;
+uint32_t g_anti_seize_last_write_ms = 0;
+bool g_anti_seize_dirty = false;
+bool g_anti_seize_loaded = false;
+
+void anti_seize_load() {
+  Preferences prefs;
+  if (prefs.begin(kAntiSeizeNamespace, true)) {
+    g_anti_seize_next_day = prefs.getUInt(kAntiSeizeKey, 0);
+    prefs.end();
+  }
+  g_anti_seize_loaded = true;
+}
+
+void anti_seize_flush(uint32_t now_ms) {
+  if (!g_anti_seize_dirty) {
+    return;
+  }
+  if (now_ms - g_anti_seize_last_write_ms < kAntiSeizeWriteIntervalMs) {
+    return;
+  }
+  Preferences prefs;
+  if (prefs.begin(kAntiSeizeNamespace, false)) {
+    prefs.putUInt(kAntiSeizeKey, g_anti_seize_next_day);
+    prefs.end();
+    g_anti_seize_dirty = false;
+    g_anti_seize_last_write_ms = now_ms;
+  }
+}
+
+void anti_seize_flush_now(uint32_t now_ms) {
+  g_anti_seize_last_write_ms = 0;
+  anti_seize_flush(now_ms);
+}
+
+void anti_seize_service(const Config& config, SystemState& state, uint32_t now_ms) {
+  if (!g_anti_seize_loaded) {
+    anti_seize_load();
+  }
+  const uint64_t epoch = state.wall_time_epoch_s;
+  if (epoch < 1600000000ULL) {
+    return;
+  }
+  const uint32_t today = static_cast<uint32_t>(epoch / 86400ULL);
+  uint32_t interval_days = config.anti_seize_interval_s / 86400u;
+  if (interval_days == 0) {
+    interval_days = 1;
+  }
+
+  if (!config.summer_mode) {
+    if (g_anti_seize_next_day != 0) {
+      g_anti_seize_next_day = 0;
+      g_anti_seize_dirty = true;
+    }
+    anti_seize_flush(now_ms);
+    return;
+  }
+
+  if (g_anti_seize_next_day == 0) {
+    g_anti_seize_next_day = today + interval_days;
+    g_anti_seize_dirty = true;
+    log_event(0, 1440, "Anti-seize schedule created");
+  } else if (today >= g_anti_seize_next_day) {
+    if (g_sequence == Sequence::None && !g_test_active) {
+      g_sequence = Sequence::AntiSeize;
+      g_sequence_step = 0;
+      g_sequence_next_ms = now_ms;
+      log_event(0, 1441, "Scheduled anti-seize sequence started");
+    }
+    g_anti_seize_next_day = today + interval_days;
+    g_anti_seize_dirty = true;
+  }
+  anti_seize_flush(now_ms);
+}
+
+// ---------------------------------------------------------------------------
 // Configuration handlers
 // ---------------------------------------------------------------------------
 
@@ -1410,6 +1495,7 @@ void handle_config_put(AsyncWebServerRequest* request, JsonVariant& json, const 
     send_error(request, 500, "NVS write failed");
     return;
   }
+  anti_seize_flush_now(millis());
 
   if (strcmp(section, "system") == 0 && !g_test_active && g_state != nullptr) {
     g_state->mode = active.summer_mode ? MODE_SUMMER : MODE_HEAT;
@@ -1537,6 +1623,7 @@ void handle_config_import(AsyncWebServerRequest* request, JsonVariant& json) {
     send_error(request, 500, "NVS write failed");
     return;
   }
+  anti_seize_flush_now(millis());
 
   if (!g_test_active && g_state != nullptr) {
     g_state->mode = active.summer_mode ? MODE_SUMMER : MODE_HEAT;
@@ -2389,6 +2476,32 @@ void handle_status(AsyncWebServerRequest* request) {
   doc["sdk"] = ESP.getSdkVersion();
   doc["uptime"] = millis() / 1000;
   doc["freeHeap"] = ESP.getFreeHeap();
+  doc["minFreeHeap"] = ESP.getMinFreeHeap();
+  doc["taskCount"] = static_cast<uint32_t>(uxTaskGetNumberOfTasks());
+#if defined(configUSE_TRACE_FACILITY) && configUSE_TRACE_FACILITY
+  {
+    static TaskStatus_t task_status[24];
+    uint32_t total_run_time = 0;
+    UBaseType_t wanted = uxTaskGetNumberOfTasks();
+    if (wanted > 24) wanted = 24;
+    const UBaseType_t got = uxTaskGetSystemState(task_status, wanted, &total_run_time);
+    uint32_t idle_run_time = 0;
+    for (UBaseType_t i = 0; i < got; ++i) {
+      if (task_status[i].pcTaskName != nullptr &&
+          strncmp(task_status[i].pcTaskName, "IDLE", 4) == 0) {
+        idle_run_time += task_status[i].ulRunTimeCounter;
+      }
+    }
+    doc["taskCount"] = static_cast<uint32_t>(got);
+    if (total_run_time > 0) {
+      float load = 100.0f * (1.0f - static_cast<float>(idle_run_time) /
+                                       static_cast<float>(total_run_time));
+      if (load < 0.0f) load = 0.0f;
+      if (load > 100.0f) load = 100.0f;
+      doc["cpuLoad"] = load;
+    }
+  }
+#endif
   doc["hostname"] = WiFi.getHostname();
 
   const time_t epoch = time(nullptr);
@@ -2399,6 +2512,14 @@ void handle_status(AsyncWebServerRequest* request) {
   ntp["epoch"] = ntp_synced ? static_cast<uint64_t>(epoch) : 0;
   ntp["server"] = g_config != nullptr ? g_config->ntp_server : "";
   ntp["timezone"] = g_config != nullptr ? g_config->timezone : "";
+  doc["antiSeizeNextDay"] = g_anti_seize_next_day;
+  if (ntp_synced && g_anti_seize_next_day != 0) {
+    const uint32_t today = static_cast<uint32_t>(static_cast<uint64_t>(epoch) / 86400ULL);
+    doc["antiSeizeInDays"] =
+        g_anti_seize_next_day > today ? g_anti_seize_next_day - today : 0;
+  } else {
+    doc["antiSeizeInDays"] = nullptr;
+  }
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();
   const wifi::Status& ws = wifi::status();
@@ -2816,6 +2937,10 @@ void begin(const Config& config, SystemState& state) {
   g_counter_save_requested = false;
   g_last_counter_save_ms = millis();
   counters_load();
+  g_anti_seize_next_day = 0;
+  g_anti_seize_dirty = false;
+  g_anti_seize_loaded = false;
+  g_anti_seize_last_write_ms = millis();
   g_last_broadcast_ms = 0;
   g_last_cleanup_ms = 0;
   g_last_wifi_connected = wifi::status().connected;
@@ -2873,6 +2998,7 @@ void tick(const Config& config, SystemState& state) {
     }
   }
 
+  anti_seize_service(config, state, now);
   tick_sequence(now);
   update_counters(state, now);
 

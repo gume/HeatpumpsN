@@ -1509,6 +1509,7 @@ function renderSettingsControl() {
           <p class="small faint">Feedforward + PI defaults derived from the analysis dataset. Observer node will own these once it is online.</p>
           <div class="form-grid">
             ${fieldNumber('delay_s', 'Transport delay', cfg.delay_s, 0, 600, 1, 'Dead time between mixer movement and temperature response.', 'number', 's')}
+            ${fieldNumber('mix_ff_offset', 'Feedforward offset', cfg.mix_ff_offset, -20, 20, 0.05, 'Analysis model intercept (K).', 'number', 'K')}
             ${fieldNumber('ff_boiler', 'Hot-side feedforward', cfg.ff_boiler, -2, 2, 0.01, 'Gain on the hot input (mixer hot in).', 'number', '')}
             ${fieldNumber('ff_return', 'Cold-side feedforward', cfg.ff_return, -2, 2, 0.01, 'Gain on the cold input (mixer cold in / return).', 'number', '')}
             ${fieldNumber('rad_coupling_ff', 'Radiator coupling', cfg.rad_coupling_ff, -10, 10, 0.1, 'Temperature offset when a radiator pump is running.', 'number', 'K')}
@@ -1738,10 +1739,12 @@ function renderSettingsSystem() {
         <dt>Firmware</dt><dd>${esc(status.version || '?')} · ${esc(status.build || '?')}</dd>
         <dt>Chip</dt><dd>${esc(status.chip || '?')} · ${esc(status.cores || '?')} cores</dd>
         <dt>Uptime</dt><dd>${fmtUptime(status.uptime || 0)}</dd>
-        <dt>Free heap</dt><dd>${fmtBytes(status.freeHeap)}</dd>
+        <dt>Free heap</dt><dd>${fmtBytes(status.freeHeap)}${status.minFreeHeap !== undefined ? ` · min ${fmtBytes(status.minFreeHeap)}` : ''}</dd>
+        <dt>CPU load</dt><dd>${status.cpuLoad !== undefined ? `${num(status.cpuLoad, 0).toFixed(1)} %` : 'n/a'}${status.taskCount !== undefined ? ` · ${status.taskCount} tasks` : ''}</dd>
         <dt>Wi-Fi</dt><dd>${esc(status.wifi?.ip || '—')} · ${esc(status.wifi?.state || '—')}</dd>
         <dt>Hostname</dt><dd>${esc(status.hostname || cfg.hostname || '—')}</dd>
         <dt>Time</dt><dd>${ntp.synced ? `synchronized · ${esc(fmtEpoch(ntp.epoch))}` : (ntp.enabled ? 'waiting for NTP sync' : 'NTP disabled')}</dd>
+        <dt>Anti-seize</dt><dd>${status.antiSeizeNextDay ? `next in ${num(status.antiSeizeInDays, 0)} day(s)` : 'not scheduled'}</dd>
       </div>
     </section>
 

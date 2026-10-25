@@ -131,6 +131,10 @@ struct Config {
   char dhw_meter_entity[33];
   char dhw_meter_field[33];
   char dhw_meter_topic[96];
+
+  // Analysis model B intercept (K). Observer-owned; kept configurable so the
+  // feedforward can be recalibrated without a firmware change.
+  float mix_ff_offset;
 };
 
 // Compiled-in defaults used before NVS has valid data. All values are safe

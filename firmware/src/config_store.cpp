@@ -11,9 +11,10 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 3;
+constexpr uint16_t kVersion = 4;
 constexpr uint16_t kVersionV1 = 1;
 constexpr uint16_t kVersionV2 = 2;
+constexpr uint16_t kVersionV3 = 3;
 
 struct ConfigBlobHeader {
   uint32_t magic;
@@ -39,8 +40,12 @@ constexpr size_t kConfigV1Size = offsetof(Config, hostname);
 // struct alignment to recover the exact stored size.
 constexpr size_t kConfigV2Size =
     align_up(offsetof(Config, mixer_meter_device), alignof(Config));
+// v3 ended with a char array; the next field is a float, so the stored size is
+// the next-field offset rounded up to the struct alignment.
+constexpr size_t kConfigV3Size = align_up(offsetof(Config, mix_ff_offset), alignof(Config));
 constexpr size_t kConfigV1BlobSize = sizeof(ConfigBlobHeader) + kConfigV1Size;
 constexpr size_t kConfigV2BlobSize = sizeof(ConfigBlobHeader) + kConfigV2Size;
+constexpr size_t kConfigV3BlobSize = sizeof(ConfigBlobHeader) + kConfigV3Size;
 
 Preferences g_prefs;
 
@@ -78,6 +83,13 @@ bool config_load(Config& config) {
                  stored == kConfigV2BlobSize) {
         Config upgraded = config_defaults();
         memcpy(&upgraded, &blob.config, kConfigV2Size);
+        config = upgraded;
+        ok = true;
+        migrated = true;
+      } else if (blob.header.version == kVersionV3 && blob.header.size == kConfigV3Size &&
+                 stored == kConfigV3BlobSize) {
+        Config upgraded = config_defaults();
+        memcpy(&upgraded, &blob.config, kConfigV3Size);
         config = upgraded;
         ok = true;
         migrated = true;

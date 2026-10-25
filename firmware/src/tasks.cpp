@@ -35,7 +35,7 @@ constexpr uint32_t kLoggerPeriodMs = 1000;
 constexpr uint32_t kSafetyStack = 4096;
 constexpr uint32_t kIoStack = 4096;
 constexpr uint32_t kControlStack = 4096;
-constexpr uint32_t kCommsStack = 6144;
+constexpr uint32_t kCommsStack = 8192;
 constexpr uint32_t kLoggerStack = 3072;
 
 constexpr UBaseType_t kPrioSafety = configMAX_PRIORITIES - 1;

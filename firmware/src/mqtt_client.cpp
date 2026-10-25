@@ -607,13 +607,16 @@ bool extract_payload_field(const char* payload, const char* field, char* out, si
     return false;
   }
 
+  static char line[192];
+  static char key[64];
+  static char value[96];
+  static char qualified[96];
   char section[32] = {};
   const char* cursor = payload;
   while (*cursor != '\0') {
     const char* line_end = strchr(cursor, '\n');
     const size_t raw_len = line_end != nullptr ? static_cast<size_t>(line_end - cursor)
                                                : strlen(cursor);
-    char line[192];
     copy_trimmed(line, sizeof(line), cursor, raw_len);
 
     const size_t len = strlen(line);
@@ -630,13 +633,10 @@ bool extract_payload_field(const char* payload, const char* field, char* out, si
       char* colon = strchr(line, ':');
       if (colon != nullptr) {
         *colon = '\0';
-        char key[64];
-        char value[96];
         copy_trimmed(key, sizeof(key), line, strlen(line));
         copy_trimmed(value, sizeof(value), colon + 1, strlen(colon + 1));
         strip_quotes(value);
 
-        char qualified[96];
         if (section[0] != '\0') {
           snprintf(qualified, sizeof(qualified), "%s.%s", section, key);
         } else {
@@ -775,7 +775,7 @@ void subscribe_meter_topics(const Config& config) {
 }
 
 void refresh_meter_config(const Config& config) {
-  char signature[512];
+  static char signature[512];
   snprintf(signature, sizeof(signature), "%s|%s|%u|%s|%s|%s|%s|%s",
            config.mixer_meter_device, config.mixer_meter_field,
            static_cast<unsigned>(config.mixer_meter_scale), config.mixer_meter_topic,

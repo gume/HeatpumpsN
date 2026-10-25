@@ -363,7 +363,42 @@ bool read_temperature(TempRole role, float& celsius) {
 }
 
 float read_power_w(CurrentChannel channel) {
-  return io::read_power_w(channel);
+  if (io::kEmulated) {
+    return io::read_power_w(channel);
+  }
+  if (!g_board.has_current_mux || !is_assigned(g_board.adc_pin)) {
+    return 0.0f;
+  }
+  if (!select_current_channel(channel)) {
+    return 0.0f;
+  }
+
+  // ACS712/CT front end: sample two mains cycles and remove the DC bias.
+  // Calibration matches the old ESPHome ct_clamp fit (0.004 -> 0 W,
+  // 0.072 -> 40 W) until per-unit calibration is added.
+  const uint32_t start = micros();
+  uint32_t count = 0;
+  float mean = 0.0f;
+  float m2 = 0.0f;
+  while (micros() - start < 40000u) {
+    const float volts =
+        static_cast<float>(io::adc_read(g_board.adc_pin)) * (3.3f / 4095.0f);
+    ++count;
+    const float delta = volts - mean;
+    mean += delta / static_cast<float>(count);
+    m2 += delta * (volts - mean);
+  }
+  if (count < 2) {
+    return 0.0f;
+  }
+  const float rms_volts = sqrtf(m2 / static_cast<float>(count));
+  float watts = (rms_volts - 0.004f) * 588.2f;
+  if (watts < 5.0f) {
+    watts = 0.0f;
+  } else if (watts > 2000.0f) {
+    watts = 2000.0f;
+  }
+  return watts;
 }
 
 uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {

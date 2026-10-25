@@ -98,8 +98,9 @@ Config config_defaults() {
   copy_str(c.mixer_meter_topic, "");
   copy_str(c.dhw_meter_device, "");
   copy_str(c.dhw_meter_entity, "");
-  copy_str(c.dhw_meter_field, "");
+  copy_str(c.dhw_meter_field, "dhw.charging");
   copy_str(c.dhw_meter_topic, "");
+  c.mix_ff_offset = 6.75f;
 
   // --- Dynamic Heating Parameters (HA shadow) ------------------------------
   c.floor_setpoint_shadow = c.setpoint_default;

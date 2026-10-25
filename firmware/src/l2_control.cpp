@@ -11,9 +11,6 @@ namespace {
 
 constexpr float kIntegratorLimit = 0.35f;
 constexpr uint32_t kDeltaTCollapseDebounceMs = 60000u;
-// Analysis model B intercept (analysis/report.md §5d). Kept compiled-in until
-// the observer node owns the full feedforward model.
-constexpr float kFeedforwardOffsetK = 6.75f;
 
 uint32_t g_last_tick_ms = 0;
 uint32_t g_mix_next_req_ms = 0;
@@ -80,7 +77,7 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   const float hot_span = config.ff_boiler * boiler - config.ff_return * ret;
   float pos_ff = 0.0f;
   if (fabsf(hot_span) > 1.0f) {
-    pos_ff = (setpoint - kFeedforwardOffsetK + config.rad_coupling_ff * rad -
+    pos_ff = (setpoint - config.mix_ff_offset + config.rad_coupling_ff * rad -
               config.ff_return * ret) /
              hot_span;
   }
