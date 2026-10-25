@@ -6,7 +6,8 @@
 namespace hpn {
 namespace l4 {
 
-// L4 communications: MQTT/HA, web dashboard, command intake. Idle for now.
+// L4 communications: Wi-Fi, MQTT/HA, web dashboard, command intake.
+// The station-mode Wi-Fi client is implemented; the rest is still idle.
 void begin(const Config& config, SystemState& state);
 void tick(const Config& config, SystemState& state);
 

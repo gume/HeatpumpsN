@@ -5,13 +5,13 @@
 #include "hpn/board.h"
 #include "hpn/build_target.h"
 #include "hpn/config.h"
+#include "hpn/config_store.h"
 #include "hpn/l0_io.h"
 #include "hpn/state.h"
 #include "hpn/tasks.h"
 
 namespace {
 
-Config g_config;
 SystemState g_state;
 bool g_tasks_started = false;
 
@@ -22,7 +22,9 @@ void setup() {
   delay(100);
 
   const hpn::BoardConfig& board = hpn::board_config();
-  g_config = config_defaults();
+  Config& config = config_mutable();
+  config = config_defaults();
+  hpn::config_load(config);
   state_init(g_state);
 
   Serial.printf("\n\nHeatpumpsN controller\n");
@@ -31,10 +33,10 @@ void setup() {
   Serial.printf("board  : %s\n", board.name);
 
   // L0 is the only layer permitted to touch pins (plan 02 §2.1).
-  hpn::l0::begin(g_config, board);
+  hpn::l0::begin(config, board);
   hpn::l0::apply_safe_state();
 
-  if (!hpn::tasks::start(g_config, board, g_state)) {
+  if (!hpn::tasks::start(config, board, g_state)) {
     Serial.println("[boot] RTOS startup failed; safe state held");
     return;
   }

@@ -1,0 +1,54 @@
+"""Remote upload helpers for the ESP32 firmware.
+
+PlatformIO Remote uploads with the ``nobuild`` target. In that mode the
+platform builder does not run the Arduino framework script, so
+``PARTITIONS_TABLE_CSV`` is empty and ``uploadfs`` aborts with::
+
+    Could not find the file  with partitions table.
+
+The pre-script below writes the project's partition table into the build
+directory on the remote host and points the builder at it. The post-script then
+replaces ``UPLOADCMD`` with an explicit application offset, because
+``ESP32_APP_OFFSET`` is also empty under ``nobuild``. The filesystem target
+already has its offset in ``UPLOADERFLAGS``, so it only needs ``SOURCE``
+appended.
+
+This file lives in ``src/`` because PlatformIO Remote synchronizes the source
+directory but not arbitrary project-root helper files.
+"""
+
+Import("env")
+
+import os
+from SCons.Script import COMMAND_LINE_TARGETS
+
+PARTITION_TABLE = """\
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x140000,
+app1,     app,  ota_1,   0x150000,0x140000,
+spiffs,   data, spiffs,  0x290000,0x160000,
+coredump, data, coredump,0x3F0000,0x10000,
+"""
+
+# --- pre: make the partition table discoverable under nobuild ---------------
+if not env.get("HPN_REMOTE_UPLOAD_POST"):
+    build_dir = env.subst("$BUILD_DIR")
+    os.makedirs(build_dir, exist_ok=True)
+    partitions_csv = os.path.join(build_dir, "hpn_partitions.csv")
+    with open(partitions_csv, "w", encoding="utf-8") as fp:
+        fp.write(PARTITION_TABLE)
+    env.Replace(PARTITIONS_TABLE_CSV=partitions_csv)
+    env["HPN_REMOTE_UPLOAD_POST"] = True
+
+# --- post: fix UPLOADCMD after the platform builder has run -----------------
+else:
+    if set(["uploadfs", "uploadfsota"]) & set(COMMAND_LINE_TARGETS):
+        env.Replace(
+            UPLOADCMD='"$PYTHONEXE" "$UPLOADER" $UPLOADERFLAGS "$SOURCE"'
+        )
+    else:
+        env.Replace(
+            UPLOADCMD='"$PYTHONEXE" "$UPLOADER" $UPLOADERFLAGS 0x10000 "$SOURCE"'
+        )

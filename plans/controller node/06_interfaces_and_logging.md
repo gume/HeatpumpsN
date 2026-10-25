@@ -78,6 +78,7 @@ Scoped under `<mqtt_base_topic>/state/` and `<mqtt_base_topic>/log/`:
 
 ### 2.2 Local Web Dashboard + WiFi Manager
 
+* **Current state:** the station-mode Wi-Fi client (`hpn::wifi`) and the LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a versioned NVS blob; the portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. The captive-portal provisioning flow, fallback AP and MQTT client are still TODO.
 * **Provisioning:** Captive portal and web UI for WiFi credentials, fallback AP settings, and MQTT broker parameters.
 * **Configuration Editor:** Full read/write access to **Category 1 (Long-Term Configuration)** parameters; read-only display of **Category 2 (HA)** and **Category 3 (Observer)** parameters.
 * **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close step pulses), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).

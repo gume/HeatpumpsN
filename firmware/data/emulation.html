@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="robots" content="noindex">
+  <title>Board Emulation · HeatpumpsN</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="emu-wrap">
+    <header class="emu-header">
+      <div>
+        <h1>Board Emulation</h1>
+        <p>Mocked carrier I/O for bench development. This page is not linked from the main portal menu.</p>
+      </div>
+      <div class="badges">
+        <span id="emu-status" class="badge">connecting…</span>
+        <a class="btn" href="/">Back to portal</a>
+      </div>
+    </header>
+
+    <div id="emu-root">
+      <div class="card readonly">
+        <div class="empty">Loading emulation model…</div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="js/emulation.js"></script>
+</body>
+</html>

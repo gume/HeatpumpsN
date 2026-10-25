@@ -252,6 +252,16 @@ lets it skip unchanged frames. Changes must not block `T_io`.
 - **REST endpoints** for config read/write, log access, test sequences, OTA.
 - All static assets gzipped, served from LittleFS.
 
+### 4.1.1 Stack decision
+
+**Selected:** `ESP32Async/ESPAsyncWebServer` + `ESP32Async/AsyncTCP` (LGPL-3.0), `ArduinoJson` (MIT), and a vanilla HTML/CSS/JS single-page app stored in LittleFS. One WebSocket at `/ws` carries live state; REST endpoints live under `/api/`.
+
+**ESP-DASH — rejected.** ESP-DASH generates the dashboard from C++ and serves its own pre-built frontend from the library (the v5 source embeds a ~592 KB generated `edp.cpp`). It therefore cannot serve this project's pages, CSS and JS from LittleFS, and its customisation is limited to the commercial Pro edition. The Lite edition is GPL-3.0.
+
+**ReactESP — rejected as the web layer.** ReactESP is an MIT asynchronous event-loop library (an alternative to `loop()`), not a web server or a UI toolkit. It would still need a web server and a frontend, and it would duplicate the existing FreeRTOS `T_comms` scheduler. EMS-ESP's real-time UI is React + ESPAsyncWebServer; ReactESP is not its web framework. ReactESP may be reconsidered only if the RTOS task set is replaced, which is not planned.
+
+**Consequences:** frontend assets live in `firmware/data/` and are uploaded with `pio run -t uploadfs`; no CDN references; gzip precompression. Async server callbacks run outside the real-time tasks, so the portal reads a published state snapshot rather than touching `SystemState` directly (plan 00, real-time core isolation).
+
 ### 4.2 State object (WebSocket push, sketch)
 
 ```json
@@ -300,8 +310,6 @@ lets it skip unchanged frames. Changes must not block `T_io`.
 Config writes are validated server-side against the same range tables the UI uses; out-of-range writes are rejected with the reason.
 
 ---
-
-## 5. Frontend
 
 ## 5. Frontend
 
@@ -376,9 +384,11 @@ Users can reskin by overriding the custom properties — no structural changes n
 
 ### 6.1 HTTP/WS Server
 
-- `ESPAsyncWebServer` or `ESP-IDF` httpd; static files from LittleFS with gzip precompression
+- `ESP32Async/ESPAsyncWebServer` + `ESP32Async/AsyncTCP` (selected; see §4.1.1). Fallback if LGPL-3.0 becomes a distribution concern: the ESP-IDF `httpd` component (Apache-2.0).
+- Static files from LittleFS with gzip precompression
 - WebSocket endpoint `/ws`; REST endpoints under `/api/` (see §4.3)
-- JSON via a small library (ArduinoJson); state object built from the controller's state module, not by polling hardware directly
+- JSON via ArduinoJson; state object built from the controller's state module, not by polling hardware directly
+- Server work runs in the AsyncTCP task, never in `T_safety`, `T_io` or `T_control`; expose a locked/double-buffered snapshot of `SystemState` to the portal
 
 ### 6.2 Integration with the Controller (§5 architecture)
 

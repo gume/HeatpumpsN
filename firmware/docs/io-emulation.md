@@ -100,22 +100,27 @@ electronics:
   directly;
 - no relay or pump physics, no mixer mechanics, no flow or temperature
   response of the plant;
-- no Wi-Fi/MQTT: L4 is still a stub.
+- no Wi-Fi/MQTT radio physics: the station-mode Wi-Fi client and the web portal
+  are real, MQTT is still a stub.
 
 The emulated `l0::read_current_raw()` returns `0`. Use `l0::read_power_w()`.
 On real hardware both current paths are still TODO.
 
-## 5. Web dashboard integration (next step)
+## 5. Web dashboard integration
 
-The planned web UI gets a second page, *Board emulation*, next to the normal
-status page. It only needs two calls:
+The portal serves a separate **Board emulation** page at `/emulation.html`.
+It is not linked from the main menu and is only registered when the firmware is
+built with `HPN_IO_EMULATION`, so it does not exist in hardware builds. The
+page uses:
 
 - `hpn::sim::snapshot()` to render the virtual carrier (temperatures, pump
   power, relay/mixer state, LED colours);
-- the `set_*` functions above when the user edits a field.
+- the `set_*` functions above when the user edits a field;
+- the emulation-only REST endpoints `/api/sim`, `/api/sim/temperature`,
+  `/api/sim/power` and `/api/sim/reset`.
 
-Because L4 runs in `T_comms` and L0 in `T_io`, the page never blocks the
-control loop. Suggested page contents:
+Because the HTTP server runs in the AsyncTCP task and L0 in `T_io`, the page
+never blocks the control loop. The page contains:
 
 1. Three temperature sliders/inputs with a validity toggle (boiler, floor
    return, mix out).
@@ -124,8 +129,8 @@ control loop. Suggested page contents:
    mixer direction/motion, MUX channel, LED strip.
 4. A reset button.
 
-Guard the page with `#if defined(HPN_IO_EMULATION)` so it does not exist in
-hardware builds.
+The live dashboard reads the same snapshot through `/ws`; changes made on the
+emulation page appear there after the next L0 poll.
 
 ## 6. Adding HomeNet Heatpumps 2.0
 

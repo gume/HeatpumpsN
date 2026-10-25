@@ -7,6 +7,8 @@
 
 namespace {
 
+Config g_active_config{};
+
 template <size_t N>
 void copy_str(char (&dst)[N], const char* src) {
   snprintf(dst, N, "%s", src);
@@ -14,12 +16,18 @@ void copy_str(char (&dst)[N], const char* src) {
 
 }  // namespace
 
+Config& config_mutable() { return g_active_config; }
+const Config& config_active() { return g_active_config; }
+
 Config config_defaults() {
   Config c{};
 
   // --- Provisioning ---------------------------------------------------------
-  copy_str(c.wifi_ssid, "");
-  copy_str(c.wifi_password, "");
+  // Temporary bench credentials. These belong in NVS once the Wi-Fi manager /
+  // provisioning portal exists; Config is already the intended source.
+  // Note: the bench AP SSID is case-sensitive ("Testing", not "testing").
+  copy_str(c.wifi_ssid, "Testing");
+  copy_str(c.wifi_password, "testing123");
   copy_str(c.ap_ssid, "HeatpumpsN-Setup");
   copy_str(c.ap_password, "heatpumps-setup");
   copy_str(c.mqtt_host, "");

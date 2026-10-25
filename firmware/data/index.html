@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>HeatpumpsN Controller</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">■</span>
+        <div class="brand-text">
+          <strong>HeatpumpsN</strong>
+          <small>controller node</small>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav" aria-label="Main navigation">
+        <a href="#dashboard" data-route="dashboard"><span class="ico">◉</span><span>Dashboard</span></a>
+        <a href="#plant" data-route="plant"><span class="ico">▤</span><span>Plant</span></a>
+
+        <div class="nav-group" data-group="diagnostics">
+          <button type="button" class="nav-group-toggle" aria-expanded="true">
+            <span class="ico">▦</span><span>Diagnostics</span><span class="chev">▾</span>
+          </button>
+          <div class="nav-sub">
+            <a href="#log/events" data-route="log/events"><span>Event Log</span></a>
+            <a href="#log/slow" data-route="log/slow"><span>Slow Log</span></a>
+            <a href="#log/sensors" data-route="log/sensors"><span>Sensor Health</span></a>
+            <a href="#log/counters" data-route="log/counters"><span>Relay Counters</span></a>
+          </div>
+        </div>
+
+        <a href="#test" data-route="test" class="guarded-nav"><span class="ico">⚡</span><span>Test Mode</span></a>
+
+        <div class="nav-group" data-group="settings">
+          <button type="button" class="nav-group-toggle" aria-expanded="true">
+            <span class="ico">⚙</span><span>Settings</span><span class="chev">▾</span>
+          </button>
+          <div class="nav-sub">
+            <a href="#settings/safety" data-route="settings/safety"><span>Safety &amp; Timeouts</span></a>
+            <a href="#settings/hardware" data-route="settings/hardware"><span>Hardware &amp; Pins</span></a>
+            <a href="#settings/network" data-route="settings/network"><span>Network &amp; MQTT</span></a>
+            <a href="#settings/firmware" data-route="settings/firmware"><span>Firmware Update</span></a>
+            <a href="#settings/system" data-route="settings/system"><span>System</span></a>
+          </div>
+        </div>
+
+        <div class="nav-sep"></div>
+        <a href="#runtime" data-route="runtime" class="readonly-nav"><span class="ico">🔒</span><span>Runtime Parameters</span></a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span id="ws-dot" class="dot dot-off"></span>
+        <span id="ws-state">connecting…</span>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button id="menu-toggle" class="icon-btn" type="button" aria-label="Toggle menu">☰</button>
+        <div class="topbar-title">
+          <h1 id="page-title">Dashboard</h1>
+          <p id="page-subtitle">Live overview</p>
+        </div>
+        <div class="badges" id="badges">
+          <span id="dirty-badge" class="badge badge-warn hidden">Unsaved</span>
+          <span id="mode-badge" class="badge">Heat</span>
+          <span id="test-badge" class="badge badge-test hidden">Test 2:00:00</span>
+          <span id="mqtt-badge" class="badge">MQTT off</span>
+          <span id="wifi-badge" class="badge">Wi-Fi …</span>
+        </div>
+      </header>
+
+      <main id="view" class="view" tabindex="-1" aria-live="polite"></main>
+
+      <footer class="footer">
+        <span id="conn-status">WebSocket: connecting…</span>
+        <span id="build-info">HeatpumpsN</span>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <h2 id="modal-title">Confirm</h2>
+      <p id="modal-body"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger" id="modal-ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

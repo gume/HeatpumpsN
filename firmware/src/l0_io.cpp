@@ -1,6 +1,7 @@
 #include "hpn/l0_io.h"
 
 #include <Arduino.h>
+#include <math.h>
 
 #include "hpn/io_backend.h"
 
@@ -18,6 +19,8 @@ BoardConfig g_board{};
 uint8_t g_sr_cache = 0;
 uint16_t g_led_count = 0;
 bool g_leds_ready = false;
+uint32_t g_last_temp_poll_ms = 0;
+uint32_t g_last_power_poll_ms = 0;
 
 bool is_assigned(uint8_t pin) {
   return pin != HPN_GPIO_UNASSIGNED;
@@ -164,6 +167,8 @@ void begin(const Config& config, const BoardConfig& board) {
   g_sr_cache = 0;
   g_leds_ready = false;
   g_led_count = 0;
+  g_last_temp_poll_ms = 0;
+  g_last_power_poll_ms = 0;
 
   Serial.printf("[l0] carrier   %s (%s)\n", g_board.name,
                 g_board.output_backend == OutputBackend::ShiftRegister ? "74HC595" : "direct GPIO");
@@ -212,13 +217,43 @@ void apply_safe_state() {
 }
 
 void tick(const Config& config, const BoardConfig& board, SystemState& state) {
-  // Placeholder for the L0 pulse state machine, 1-Wire conversion scheduling,
-  // encoder sampling, and pump-power plausibility checks. The sensor seam is
-  // already in place: read_temperature() and read_power_w() answer from the
-  // emulation model under HPN_IO_EMULATION.
-  (void)config;
+  const uint32_t now = millis();
+
+  // Poll the temperature seam. On hardware the 1-Wire backend still reports
+  // "no data"; under emulation these are the mocked values from hpn::sim.
+  if (now - g_last_temp_poll_ms >= config.temp_poll_interval_ms) {
+    g_last_temp_poll_ms = now;
+
+    SensorReading* readings[] = {&state.T_boiler, &state.T_return_floor, &state.T_mix_out};
+    const TempRole roles[] = {TempRole::Boiler, TempRole::ReturnFloor, TempRole::MixOut};
+
+    for (uint8_t i = 0; i < 3; ++i) {
+      float celsius = 0.0f;
+      SensorReading& reading = *readings[i];
+      if (read_temperature(roles[i], celsius) && isfinite(celsius)) {
+        reading.value_c = celsius;
+        reading.is_valid = true;
+        reading.last_valid_ms = now;
+        reading.consecutive_errors = 0;
+      } else {
+        reading.is_valid = false;
+        if (reading.consecutive_errors < 255) {
+          reading.consecutive_errors++;
+        }
+      }
+    }
+  }
+
+  // Optional pump-power feedback, at the same cadence as the temperatures.
+  if (now - g_last_power_poll_ms >= config.temp_poll_interval_ms) {
+    g_last_power_poll_ms = now;
+    state.pump_power_w[0] = read_power_w(CurrentChannel::PumpFloor);
+    state.pump_power_w[1] = read_power_w(CurrentChannel::PumpRad1);
+    state.pump_power_w[2] = read_power_w(CurrentChannel::PumpRad2);
+  }
+
+  // The mixer pulse state machine and encoder sampling are still TODO(L0).
   (void)board;
-  (void)state;
 }
 
 void set_relay(Relay relay, bool on) {

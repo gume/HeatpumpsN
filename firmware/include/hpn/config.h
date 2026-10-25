@@ -100,3 +100,9 @@ struct Config {
 // placeholders; safety-relevant numbers must be finalized in the plan and
 // bounded by L1/L3 validation.
 Config config_defaults();
+
+// The single active configuration instance. Tasks hold a const reference to
+// this object, so a settings write becomes visible on the next tick. Writes
+// must go through the web portal's validated section handlers.
+Config& config_mutable();
+const Config& config_active();

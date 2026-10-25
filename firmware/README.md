@@ -2,11 +2,12 @@
 
 PlatformIO project for the ESP32 controller node. It currently implements a
 FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
-HomeNet Heatpumps 1.0 and 2.0, and a compile-time **I/O emulation** backend so
-the controller can be developed on a boardless devkit. L1 safety arbitration,
-L2 control, L3 adaptation, and L4 communications are idle stubs and the next
-implementation steps described in
-[`../plans/controller node/`](../plans/controller%20node/).
+HomeNet Heatpumps 1.0 and 2.0, a compile-time **I/O emulation** backend so the
+controller can be developed on a boardless devkit, a station-mode **Wi-Fi
+client**, and a LittleFS-backed **web portal** in L4. Production L1 safety
+arbitration, L2 control, L3 adaptation and MQTT are still TODO; the bench-only
+loopback used by Test Mode is described below. The next implementation steps
+are described in [`../plans/controller node/`](../plans/controller%20node/).
 
 ## Targets, carriers and backends
 
@@ -34,7 +35,7 @@ ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety caveats of that
 wiring. The 2.0 carrier is still under planning and has no profile yet;
 ESP32-C3 and ESP32-S3 are its primary targets.
 
-The emulation model, its API and the planned web page are described in
+The emulation model, its API and the bench web page are described in
 [`docs/io-emulation.md`](docs/io-emulation.md).
 
 `esp32s2` uses the `lolin_s2_mini` board definition; switch it to
@@ -63,24 +64,122 @@ Notes:
 - `T_io` subscribes to the task watchdog and feeds it only while the real-time
   tasks are within their deadlines. A hung safety or control task therefore
   resets the controller instead of leaving outputs latched.
-- Task bodies are minimal stubs calling the corresponding layer `tick()`.
+- Task bodies call the corresponding layer `tick()`. L0, the Wi-Fi client and
+  the portal are implemented; L1/L2 currently contain only the bench loopback
+  used by Test Mode, and MQTT is still a stub.
+
+## Wi-Fi client
+
+`hpn::wifi` ([`include/hpn/wifi_client.h`](include/hpn/wifi_client.h),
+[`src/wifi_client.cpp`](src/wifi_client.cpp)) is a minimal station-mode client
+started by L4:
+
+- credentials come from `Config::wifi_ssid` / `Config::wifi_password`; both are
+  editable from the portal's **Network & MQTT** page and persisted to NVS
+- association is non-blocking; `T_comms` supervises the link and retries every
+  10 s
+- modem sleep is off, so the link stays responsive for the portal
+- if the configured AP is not visible, the client resets the station and logs
+  one diagnostic scan of nearby 2.4 GHz SSIDs
+- link state, RSSI and the DHCP address are logged
+
+Current bench defaults in `config_defaults()` are SSID `Testing` and password
+`testing123`. The SSID is case-sensitive. The Network page can already update
+and persist credentials in NVS; these compiled-in values are only the
+first-boot fallback until the captive-portal provisioning flow exists.
+
+Verified on the remote ESP32 (`esp32dev_sim`): association with `Testing`
+succeeds, RSSI ≈ −74 dBm, DHCP assigns `192.168.2.14`, and the portal is
+reachable through the user's tunnel at `http://localhost:9090/`.
+
+## Web portal
+
+The portal is a vanilla HTML/CSS/JS single-page app served from LittleFS. L4
+starts it after Wi-Fi connects; the HTTP server runs on port 80 in the AsyncTCP
+task and never blocks the real-time tasks.
+
+- `GET /` serves `data/index.html`; assets live under `/css/` and `/js/`.
+- `GET /ws` is the WebSocket carrying the live state snapshot at 4 Hz
+  (250 ms).
+- REST endpoints under `/api/` cover state, status, runtime, configuration
+  sections, Test Mode, logs, relay counters, system actions and OTA.
+- Precompressed `.gz` siblings are served when the client sends
+  `Accept-Encoding: gzip`. Regenerate them after editing an asset:
+
+  ```bash
+  gzip -9 -c data/js/app.js > data/js/app.js.gz
+  ```
+
+### Pages
+
+- **Dashboard** — mode, uptime, heap, Wi-Fi, Test Mode, circuits, temperatures,
+  heater/safety state and recent events.
+- **Plant** — read-only circuits, pumps, after-run timers and mixer feedback.
+- **Diagnostics** — Event Log, Slow Log (10 s samples), Sensor Health and Relay
+  Counters.
+- **Test Mode** — time-limited manual control through the same
+  `*_intended` → `*_requested` intake as HA. The heater is refused unless a pump
+  is commanded ON. Activation/deactivation and every command are logged.
+- **Settings** — Safety & Timeouts, Hardware & Pins, Network & MQTT, Firmware
+  Update and System. Saves are validated server-side and written to NVS only
+  when the form is submitted.
+- **Runtime Parameters** — read-only HA/observer values.
+
+The event, access and slow logs and the relay counters are RAM-only in this
+build; they reset on reboot. Configuration is persisted in a versioned NVS
+blob. The access log records every portal request plus WebSocket
+connect/disconnect events.
+
+### Test Mode and the bench loopback
+
+`HPN_BENCH_LOOPBACK` is compiled only into `esp32dev_sim`. L2 copies
+`*_intended` to `*_requested`, and L1 applies those requests to the emulated
+carrier. The only L1 interlock in this path is "heater requires an active
+pump"; over-temperature, gradient, sensor-posture and demand/after-heating
+rules remain TODO(L1). The loopback is a bench aid, **not** safety
+arbitration, and never appears in a hardware build.
+
+Test Mode expires after `safety.test_mode_max_s` (default 7200 s).
+Deactivation clears manual outputs and returns the controller to its configured
+mode. The anti-seize sequence is implemented; mixer-sweep, endstop-home and
+heater-pump return HTTP 501 until their observers exist.
+
+### Emulation page
+
+When `HPN_IO_EMULATION` is defined, `GET /emulation.html` serves a separate
+bench page for the in-memory carrier: temperature/power inputs, relay and mixer
+state, LED frame and a reset button. It is deliberately not linked from the
+main menu and does not exist in hardware builds. See
+[`docs/io-emulation.md`](docs/io-emulation.md).
 
 ## Commands (remote agent)
 
-The target board is attached to a remote runner. Run these from this
-directory (or add `-d firmware` from the repository root):
+The target board is attached to a remote runner. The upload commands below
+include `-d firmware` so they work from the repository root; drop that option
+when you are already in `firmware/`.
 
 ```bash
 pio remote run -e esp32dev_sim                # daily dev: boardless + emulated HHN 1.0
 pio remote run -e esp32s2                     # real HHN 1.0 carrier
-pio remote run -e esp32dev_sim --target upload
+pio remote run --force-remote -d firmware --target uploadfs   # LittleFS assets
+pio remote run --force-remote -d firmware --target upload     # application
 timeout 10s pio remote device monitor -b 115200 || true
 ```
 
+`--force-remote` makes PlatformIO Remote re-sync the project instead of reusing
+its cached copy; use it after editing frontend assets or firmware sources.
+Upload the filesystem **before** the application when both changed, then reset
+the board (the uploader does this automatically) so LittleFS and the app match.
+
 Always bound `pio remote device monitor` with `timeout`; an unbounded monitor
 blocks the session. The monitor also needs a terminal: `pio remote device
-monitor` refuses piped or redirected stdin. For scripted captures, open the
-serial port directly (the agent runs on the host that owns it).
+monitor` refuses piped or redirected stdin. For scripted captures, wrap it in
+`script`, for example:
+
+```bash
+timeout 15s script -qec "pio remote device monitor -b 115200" /dev/null 2>&1 \
+  | sed -r 's/\x1B\[[0-9;]*[mK]//g' | tr -d '\r'
+```
 
 The remote agent is authenticated through the PlatformIO account
 (`pio account login`). Check availability with `pio remote agent list`, and
@@ -95,19 +194,26 @@ build/flash/monitor operations for the target board use the remote agent.
 
 ### Remote upload workaround
 
-`pio remote run --target upload` uploads with the `nobuild` target. That skips
-the ESP32 platform's `checkprogsize`/partition parsing, so `ESP32_APP_OFFSET`
-used to expire empty and esptool rejected the call with `Address
-".pio/build/<env>/firmware.bin" must be a number`. `[env] upload_command` in
-`platformio.ini` therefore spells out `0x10000` explicitly.
+PlatformIO Remote uploads both the application and the filesystem with the
+`nobuild` target. That skips the ESP32 platform's `checkprogsize`/partition
+parsing and the Arduino framework script, so `PARTITIONS_TABLE_CSV` and
+`ESP32_APP_OFFSET` are empty. `uploadfs` then aborts with `Could not find the
+file  with partitions table`, and `upload` calls esptool with `Address
+".pio/build/<env>/firmware.bin" must be a number`.
 
-Consequence: remote uploads only write the application image. A device that has
-never been flashed (no bootloader or partition table) needs one local
-`pio run -t upload` first. PlatformIO Remote also does not sync arbitrary
-project files, only `platformio.ini`, `src/`, `include/`, `lib/`, `data/` and
-the built binaries, so the workaround must live in `platformio.ini` — an
-`extra_scripts` helper at the project root fails remotely with
-`missing SConscript file`.
+`src/remote_upload.json` is a Python SConscript loaded through `extra_scripts`.
+It is named `.json` on purpose: PlatformIO Remote only syncs `platformio.ini`,
+`src/`, `include/`, `lib/`, `data/` and the built binaries, and a `.py` helper
+at the project root would not be transferred (`missing SConscript file`). The
+pre-hook writes the project partition table to `$BUILD_DIR/hpn_partitions.csv`
+and points `PARTITIONS_TABLE_CSV` at it. The post-hook replaces `UPLOADCMD`
+with an explicit `0x10000` application offset, or appends `$SOURCE` to
+`$UPLOADERFLAGS` for the filesystem image.
+
+Consequence: remote uploads only write the application or filesystem image. A
+device that has never been flashed (no bootloader or partition table) needs one
+local `pio run -t upload` first. Keep the helper inside `src/` and keep the
+`.json` extension unless PlatformIO Remote's sync rules change.
 
 ## Layout
 
@@ -124,12 +230,15 @@ firmware/
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
+│   ├── config_store.h    # active/mutable config + NVS persistence
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
 │   ├── l0_io.h           # L0 interface
-│   ├── l1_safety.h       # L1 interface (stub)
-│   ├── l2_control.h      # L2 interface (stub)
-│   ├── l4_comms.h        # L4 interface (stub)
+│   ├── l1_safety.h       # L1 interface (bench loopback; production TODO)
+│   ├── l2_control.h      # L2 interface (bench loopback; production TODO)
+│   ├── l4_comms.h        # L4 interface (Wi-Fi + portal; MQTT TODO)
+│   ├── web_portal.h      # portal begin/tick/event-log interface
+│   ├── wifi_client.h     # station-mode Wi-Fi client
 │   └── logger.h          # logger interface (stub)
 ├── src/
 │   ├── main.cpp          # boot sequence, carrier selection, RTOS start
@@ -137,22 +246,39 @@ firmware/
 │   ├── io_backend.cpp    # hardware or emulated I/O implementation
 │   ├── sim.cpp           # emulation model (only under HPN_IO_EMULATION)
 │   ├── config.cpp        # compiled-in safe defaults
+│   ├── config_store.cpp  # NVS-backed configuration blob
 │   ├── tasks.cpp         # task creation, priorities, core placement, WDT
 │   ├── state.cpp         # boot-safe SystemState initialization
 │   ├── l0_io.cpp         # carrier logic, the only layer that drives I/O
-│   ├── l1_safety.cpp     # L1 stub
-│   ├── l2_control.cpp    # L2 stub
-│   ├── l4_comms.cpp      # L4 stub
+│   ├── l1_safety.cpp     # L1 bench loopback + heater interlock; TODO(L1)
+│   ├── l2_control.cpp    # L2 bench pass-through; TODO(L2)
+│   ├── l4_comms.cpp      # L4 integration (Wi-Fi + portal; MQTT TODO)
+│   ├── web_portal.cpp    # HTTP/WS server, API, logs, Test Mode, OTA
+│   ├── remote_upload.json # remote upload SConscript (see above)
+│   ├── wifi_client.cpp   # station-mode Wi-Fi client
 │   └── logger.cpp        # logger stub
 ├── lib/                  # project-local libraries
 ├── test/                 # unit/native tests
-└── data/                 # LittleFS contents for the web dashboard
+└── data/                 # LittleFS portal assets
+    ├── index.html        # main SPA shell
+    ├── emulation.html    # bench-only carrier page
+    ├── favicon.svg
+    ├── css/style.css
+    └── js/app.js, js/emulation.js
 ```
+
+Precompressed `.gz` siblings live next to every asset. `src/remote_upload.json`
+is a Python SConscript despite its extension; see the remote upload section.
 
 ## Safety notes for this scaffold
 
 - Check the `[l0] backend` boot line. `esp32dev_sim` is emulated and must never
   be expected to drive real relays; `esp32s2` is hardware.
+- `HPN_BENCH_LOOPBACK` is enabled only for `esp32dev_sim`. It is a wiring aid
+  for the portal, not L1 safety arbitration. Never add it to a hardware build.
+- The portal's Test Mode and configuration editor are not safety-rated. The
+  external hardware over-temperature cutout and pump-cut switch remain
+  mandatory and independent of this firmware.
 - On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX select lines
   share one 74HC595. Keep a single writer (`T_io`); the safe byte is `0x00`.
   See [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
