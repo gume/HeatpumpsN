@@ -1465,15 +1465,40 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   power["rad2"] = snapshot.power_w[static_cast<size_t>(CurrentChannel::PumpRad2)];
   power["mixer"] = snapshot.power_w[static_cast<size_t>(CurrentChannel::Mixer)];
 
+  JsonObject power_set = doc["powerSet"].to<JsonObject>();
+  power_set["floor"] = snapshot.power_set_w[static_cast<size_t>(CurrentChannel::PumpFloor)];
+  power_set["rad1"] = snapshot.power_set_w[static_cast<size_t>(CurrentChannel::PumpRad1)];
+  power_set["rad2"] = snapshot.power_set_w[static_cast<size_t>(CurrentChannel::PumpRad2)];
+  power_set["mixer"] = snapshot.power_set_w[static_cast<size_t>(CurrentChannel::Mixer)];
+
   JsonObject relays = doc["relays"].to<JsonObject>();
   relays["heater"] = snapshot.relay_on[static_cast<size_t>(Relay::Heater)];
   relays["rad1"] = snapshot.relay_on[static_cast<size_t>(Relay::PumpRad1)];
   relays["rad2"] = snapshot.relay_on[static_cast<size_t>(Relay::PumpRad2)];
   relays["floor"] = snapshot.relay_on[static_cast<size_t>(Relay::PumpFloor)];
 
+  JsonObject relay_override = doc["relayOverride"].to<JsonObject>();
+  relay_override["heater"] = snapshot.relay_override[static_cast<size_t>(Relay::Heater)];
+  relay_override["rad1"] = snapshot.relay_override[static_cast<size_t>(Relay::PumpRad1)];
+  relay_override["rad2"] = snapshot.relay_override[static_cast<size_t>(Relay::PumpRad2)];
+  relay_override["floor"] = snapshot.relay_override[static_cast<size_t>(Relay::PumpFloor)];
+
+  JsonObject relay_manual = doc["relayManual"].to<JsonObject>();
+  relay_manual["heater"] = snapshot.relay_manual_on[static_cast<size_t>(Relay::Heater)];
+  relay_manual["rad1"] = snapshot.relay_manual_on[static_cast<size_t>(Relay::PumpRad1)];
+  relay_manual["rad2"] = snapshot.relay_manual_on[static_cast<size_t>(Relay::PumpRad2)];
+  relay_manual["floor"] = snapshot.relay_manual_on[static_cast<size_t>(Relay::PumpFloor)];
+
   JsonObject mixer = doc["mixer"].to<JsonObject>();
   mixer["motion"] = snapshot.mixer_motion;
   mixer["open"] = snapshot.mixer_open;
+  mixer["override"] = snapshot.mixer_override;
+  mixer["manualMotion"] = snapshot.mixer_manual_motion;
+  mixer["manualOpen"] = snapshot.mixer_manual_open;
+
+  doc["followController"] = snapshot.follow_controller;
+  doc["realisticPower"] = snapshot.realistic_power;
+  doc["realisticBoiler"] = snapshot.realistic_boiler;
 
   doc["muxChannel"] = snapshot.mux_channel;
   doc["outputByte"] = snapshot.output_byte;
@@ -1564,8 +1589,8 @@ void handle_sim_power(AsyncWebServerRequest* request, JsonVariant& json) {
     return;
   }
 
-  if (!isfinite(watts) || watts < 0.0f || watts > 2000.0f) {
-    send_error(request, 400, "watts out of range");
+  if (!isfinite(watts) || watts < 0.0f || watts > 40.0f) {
+    send_error(request, 400, "watts out of range (0-40 W)");
     return;
   }
 
@@ -1585,6 +1610,123 @@ void handle_sim_power(AsyncWebServerRequest* request, JsonVariant& json) {
 void handle_sim_reset(AsyncWebServerRequest* request) {
   sim::reset();
   log_event(0, 1502, "Simulation model reset");
+  JsonDocument doc;
+  doc["ok"] = true;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_relay(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>()) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+  JsonObject in = json.as<JsonObject>();
+  const char* relay_name = in["relay"] | "";
+  if (!in["on"].is<bool>()) {
+    send_error(request, 400, "on is required");
+    return;
+  }
+  const bool on = in["on"].as<bool>();
+
+  Relay relay;
+  if (strcmp(relay_name, "heater") == 0) {
+    relay = Relay::Heater;
+  } else if (strcmp(relay_name, "floor") == 0) {
+    relay = Relay::PumpFloor;
+  } else if (strcmp(relay_name, "rad1") == 0) {
+    relay = Relay::PumpRad1;
+  } else if (strcmp(relay_name, "rad2") == 0) {
+    relay = Relay::PumpRad2;
+  } else {
+    send_error(request, 400, "unknown relay");
+    return;
+  }
+
+  sim::set_relay_manual(relay, on);
+
+  char detail[96];
+  snprintf(detail, sizeof(detail), "Sim relay %s = %s (manual)", relay_name,
+           on ? "ON" : "OFF");
+  log_event(0, 1503, detail);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["relay"] = relay_name;
+  doc["on"] = on;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_mixer(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>()) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+  JsonObject in = json.as<JsonObject>();
+  if (!in["motion"].is<bool>()) {
+    send_error(request, 400, "motion is required");
+    return;
+  }
+  const bool motion = in["motion"].as<bool>();
+  const bool open = in["open"] | false;
+
+  sim::set_mixer_manual(motion, motion && open);
+
+  char detail[96];
+  snprintf(detail, sizeof(detail), "Sim mixer = %s (manual)",
+           motion ? (open ? "open" : "close") : "stop");
+  log_event(0, 1504, detail);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["motion"] = motion;
+  doc["open"] = motion && open;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_mode(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>()) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+  JsonObject in = json.as<JsonObject>();
+  bool changed = false;
+
+  if (in["followController"].is<bool>()) {
+    sim::set_follow_controller(in["followController"].as<bool>());
+    changed = true;
+  }
+  if (in["realisticPower"].is<bool>()) {
+    sim::set_realistic_power(in["realisticPower"].as<bool>());
+    changed = true;
+  }
+  if (in["realisticBoiler"].is<bool>()) {
+    sim::set_realistic_boiler(in["realisticBoiler"].as<bool>());
+    changed = true;
+  }
+  if (!changed) {
+    send_error(request, 400, "no emulation mode field provided");
+    return;
+  }
+
+  const sim::Snapshot snapshot = sim::snapshot();
+  char detail[128];
+  snprintf(detail, sizeof(detail), "Sim mode: follow=%s realisticPower=%s realisticBoiler=%s",
+           snapshot.follow_controller ? "on" : "off",
+           snapshot.realistic_power ? "on" : "off",
+           snapshot.realistic_boiler ? "on" : "off");
+  log_event(0, 1505, detail);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["followController"] = snapshot.follow_controller;
+  doc["realisticPower"] = snapshot.realistic_power;
+  doc["realisticBoiler"] = snapshot.realistic_boiler;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_clear_overrides(AsyncWebServerRequest* request) {
+  sim::clear_manual_overrides();
+  log_event(0, 1506, "Sim manual overrides cleared");
   JsonDocument doc;
   doc["ok"] = true;
   send_json(request, 200, doc);
@@ -1957,6 +2099,20 @@ void register_routes() {
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_sim_power(request, json);
               });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/relay"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_relay(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/mixer"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_mixer(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/mode"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_mode(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/overrides/clear"), HTTP_POST,
+              handle_sim_clear_overrides);
   g_server.on(AsyncURIMatcher::exact("/api/sim/reset"), HTTP_POST, handle_sim_reset);
 #endif
 

@@ -113,7 +113,7 @@ task and never blocks the real-time tasks.
 ### Pages
 
 - **Dashboard** — mode, uptime, heap, Wi-Fi, Test Mode, circuits, temperatures,
-  heater/safety state and recent events.
+  heater/safety state, the five carrier status LEDs and recent events.
 - **Plant** — read-only circuits, pumps, after-run timers and mixer feedback.
 - **Diagnostics** — Event Log, Slow Log (10 s samples), Sensor Health and Relay
   Counters.
@@ -147,10 +147,13 @@ heater-pump return HTTP 501 until their observers exist.
 ### Emulation page
 
 When `HPN_IO_EMULATION` is defined, `GET /emulation.html` serves a separate
-bench page for the in-memory carrier: temperature/power inputs, relay and mixer
-state, LED frame and a reset button. It is deliberately not linked from the
-main menu and does not exist in hardware builds. See
-[`docs/io-emulation.md`](docs/io-emulation.md).
+bench page for the in-memory carrier: compact relay buttons, mixer
+open/stop/close, follow-controller and realistic-behaviour switches,
+temperature/power inputs (0–40 W), a carrier readout and a reset button. It is
+a direct board control surface and deliberately bypasses L1; there is no
+heater/pump interlock on that page. The page is not linked from the main menu
+and does not exist in hardware builds. Status LEDs live on the main dashboard.
+See [`docs/io-emulation.md`](docs/io-emulation.md).
 
 ## Commands (remote agent)
 

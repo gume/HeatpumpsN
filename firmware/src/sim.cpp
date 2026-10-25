@@ -1,6 +1,7 @@
 #include "hpn/sim.h"
 
 #include <Arduino.h>
+#include <math.h>
 #include <string.h>
 
 #if defined(HPN_IO_EMULATION)
@@ -9,6 +10,14 @@ namespace hpn {
 namespace sim {
 namespace {
 
+// Placeholder boiler-supply shape. The real logged form will replace this;
+// for now it is a slow sine wave between 60 and 70 °C.
+constexpr float kBoilerSineCenterC = 65.0f;
+constexpr float kBoilerSineAmplitudeC = 5.0f;
+constexpr uint32_t kBoilerSinePeriodMs = 120000u;
+constexpr float kTwoPi = 6.28318530718f;
+constexpr float kMaxEmulatedPowerW = 40.0f;
+
 struct Model {
   Config config;
   BoardConfig board;
@@ -16,9 +25,18 @@ struct Model {
   uint8_t pin_level[kMaxGpio];  // 0 = low, 1 = high
   uint8_t output_byte;          // 74HC595 latch value
 
-  float temperature_c[kTempRoleCount];
+  float temperature_set_c[kTempRoleCount];
   bool temperature_valid[kTempRoleCount];
-  float power_w[kCurrentChannelCount];
+  float power_set_w[kCurrentChannelCount];
+
+  bool follow_controller;
+  bool realistic_power;
+  bool realistic_boiler;
+  bool relay_override[kRelayCount];
+  bool relay_manual_on[kRelayCount];
+  bool mixer_override;
+  bool mixer_manual_motion;
+  bool mixer_manual_open;
 
   uint16_t led_count;
   uint8_t led_rgb[kMaxLeds * 3];
@@ -74,14 +92,14 @@ bool pin_is_high(const Model& model, uint8_t pin) {
   return is_assigned(pin) && pin < kMaxGpio && model.pin_level[pin] != 0;
 }
 
-bool relay_state(const Model& model, Relay relay) {
+bool controller_relay_state(const Model& model, Relay relay) {
   if (model.board.output_backend == OutputBackend::ShiftRegister) {
     return bit_is_set(model.output_byte, relay_bit(model.board, relay));
   }
   return pin_is_high(model, relay_pin(model.config, relay));
 }
 
-bool mixer_motion(const Model& model) {
+bool controller_mixer_motion(const Model& model) {
   if (model.board.output_backend == OutputBackend::ShiftRegister) {
     return bit_is_set(model.output_byte, model.board.sr_bit_mix_motion);
   }
@@ -90,11 +108,79 @@ bool mixer_motion(const Model& model) {
          pin_is_high(model, model.config.gpio_mix_close);
 }
 
-bool mixer_open(const Model& model) {
+bool controller_mixer_open(const Model& model) {
   if (model.board.output_backend == OutputBackend::ShiftRegister) {
     return bit_is_set(model.output_byte, model.board.sr_bit_mix_direction);
   }
   return pin_is_high(model, model.config.gpio_mix_open);
+}
+
+bool effective_relay_state(const Model& model, Relay relay) {
+  const size_t index = static_cast<size_t>(relay);
+  if (model.relay_override[index]) {
+    return model.relay_manual_on[index];
+  }
+  if (!model.follow_controller) {
+    return model.relay_manual_on[index];
+  }
+  return controller_relay_state(model, relay);
+}
+
+bool effective_mixer_motion(const Model& model) {
+  if (model.mixer_override) {
+    return model.mixer_manual_motion;
+  }
+  if (!model.follow_controller) {
+    return model.mixer_manual_motion;
+  }
+  return controller_mixer_motion(model);
+}
+
+bool effective_mixer_open(const Model& model) {
+  if (model.mixer_override) {
+    return model.mixer_manual_open;
+  }
+  if (!model.follow_controller) {
+    return model.mixer_manual_open;
+  }
+  return controller_mixer_open(model);
+}
+
+float effective_temperature(const Model& model, TempRole role, uint32_t now_ms) {
+  const size_t index = static_cast<size_t>(role);
+  if (role == TempRole::Boiler && model.realistic_boiler) {
+    const float phase =
+        kTwoPi * static_cast<float>(now_ms % kBoilerSinePeriodMs) /
+        static_cast<float>(kBoilerSinePeriodMs);
+    return kBoilerSineCenterC + kBoilerSineAmplitudeC * sinf(phase);
+  }
+  return model.temperature_set_c[index];
+}
+
+Relay relay_for_channel(CurrentChannel channel) {
+  switch (channel) {
+    case CurrentChannel::PumpFloor:
+      return Relay::PumpFloor;
+    case CurrentChannel::PumpRad1:
+      return Relay::PumpRad1;
+    case CurrentChannel::PumpRad2:
+      return Relay::PumpRad2;
+    default:
+      return Relay::Heater;
+  }
+}
+
+float effective_power(const Model& model, CurrentChannel channel) {
+  const size_t index = static_cast<size_t>(channel);
+  if (!model.realistic_power) {
+    return model.power_set_w[index];
+  }
+  if (channel == CurrentChannel::Mixer) {
+    return effective_mixer_motion(model) ? model.power_set_w[index] : 0.0f;
+  }
+  return effective_relay_state(model, relay_for_channel(channel))
+             ? model.power_set_w[index]
+             : 0.0f;
 }
 
 uint8_t mux_channel(const Model& model) {
@@ -129,13 +215,25 @@ void reset_locked(Model& model) {
   for (uint8_t i = 0; i < kTempRoleCount; ++i) {
     model.temperature_valid[i] = true;
   }
-  model.temperature_c[static_cast<size_t>(TempRole::Boiler)] = 45.0f;
-  model.temperature_c[static_cast<size_t>(TempRole::ReturnFloor)] = 30.0f;
-  model.temperature_c[static_cast<size_t>(TempRole::MixOut)] = 35.0f;
+  model.temperature_set_c[static_cast<size_t>(TempRole::Boiler)] = 45.0f;
+  model.temperature_set_c[static_cast<size_t>(TempRole::ReturnFloor)] = 30.0f;
+  model.temperature_set_c[static_cast<size_t>(TempRole::MixOut)] = 35.0f;
 
   for (uint8_t i = 0; i < kCurrentChannelCount; ++i) {
-    model.power_w[i] = 0.0f;
+    model.power_set_w[i] = 10.0f;
   }
+  model.power_set_w[static_cast<size_t>(CurrentChannel::Mixer)] = 2.0f;
+
+  model.follow_controller = true;
+  model.realistic_power = true;
+  model.realistic_boiler = false;
+  for (uint8_t i = 0; i < kRelayCount; ++i) {
+    model.relay_override[i] = false;
+    model.relay_manual_on[i] = false;
+  }
+  model.mixer_override = false;
+  model.mixer_manual_motion = false;
+  model.mixer_manual_open = false;
 
   model.led_count = 0;
   memset(model.led_rgb, 0, sizeof(model.led_rgb));
@@ -175,23 +273,36 @@ void begin(const Config& config, const BoardConfig& board) {
 
 Snapshot snapshot() {
   Snapshot out{};
+  const uint32_t now_ms = millis();
 
   taskENTER_CRITICAL(&g_mux);
   const Model& model = g_model;
 
   out.revision = model.revision;
   for (uint8_t i = 0; i < kTempRoleCount; ++i) {
-    out.temperature_c[i] = model.temperature_c[i];
-    out.temperature_valid[i] = model.temperature_valid[i];
+    const TempRole role = static_cast<TempRole>(i);
+    out.temperature_c[i] = effective_temperature(model, role, now_ms);
+    out.temperature_valid[i] =
+        (role == TempRole::Boiler && model.realistic_boiler) ? true
+                                                             : model.temperature_valid[i];
   }
   for (uint8_t i = 0; i < kCurrentChannelCount; ++i) {
-    out.power_w[i] = model.power_w[i];
+    out.power_w[i] = effective_power(model, static_cast<CurrentChannel>(i));
+    out.power_set_w[i] = model.power_set_w[i];
   }
   for (uint8_t i = 0; i < kRelayCount; ++i) {
-    out.relay_on[i] = relay_state(model, static_cast<Relay>(i));
+    out.relay_on[i] = effective_relay_state(model, static_cast<Relay>(i));
+    out.relay_override[i] = model.relay_override[i];
+    out.relay_manual_on[i] = model.relay_manual_on[i];
   }
-  out.mixer_motion = mixer_motion(model);
-  out.mixer_open = mixer_open(model);
+  out.mixer_motion = effective_mixer_motion(model);
+  out.mixer_open = effective_mixer_open(model);
+  out.mixer_override = model.mixer_override;
+  out.mixer_manual_motion = model.mixer_manual_motion;
+  out.mixer_manual_open = model.mixer_manual_open;
+  out.follow_controller = model.follow_controller;
+  out.realistic_power = model.realistic_power;
+  out.realistic_boiler = model.realistic_boiler;
   out.mux_channel = mux_channel(model);
   out.output_byte = model.output_byte;
   out.output_enabled = output_enabled(model);
@@ -209,8 +320,12 @@ void set_temperature(TempRole role, float celsius, bool valid) {
   const size_t index = static_cast<size_t>(role);
 
   taskENTER_CRITICAL(&g_mux);
-  g_model.temperature_c[index] = celsius;
+  g_model.temperature_set_c[index] = celsius;
   g_model.temperature_valid[index] = valid;
+  if (role == TempRole::Boiler) {
+    // A manual boiler value is an explicit override of the sine-wave shape.
+    g_model.realistic_boiler = false;
+  }
   touch(g_model);
   taskEXIT_CRITICAL(&g_mux);
 }
@@ -220,9 +335,88 @@ void set_power_w(CurrentChannel channel, float watts) {
     return;
   }
   const size_t index = static_cast<size_t>(channel);
+  if (!isfinite(watts)) {
+    return;
+  }
+  if (watts < 0.0f) {
+    watts = 0.0f;
+  } else if (watts > kMaxEmulatedPowerW) {
+    watts = kMaxEmulatedPowerW;
+  }
 
   taskENTER_CRITICAL(&g_mux);
-  g_model.power_w[index] = watts > 0.0f ? watts : 0.0f;
+  g_model.power_set_w[index] = watts;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void set_relay_manual(Relay relay, bool on) {
+  if (static_cast<uint8_t>(relay) >= kRelayCount) {
+    return;
+  }
+  const size_t index = static_cast<size_t>(relay);
+
+  taskENTER_CRITICAL(&g_mux);
+  g_model.relay_manual_on[index] = on;
+  g_model.relay_override[index] = g_model.follow_controller;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void set_mixer_manual(bool motion, bool open) {
+  taskENTER_CRITICAL(&g_mux);
+  g_model.mixer_manual_motion = motion;
+  g_model.mixer_manual_open = motion && open;
+  g_model.mixer_override = g_model.follow_controller;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void set_follow_controller(bool on) {
+  taskENTER_CRITICAL(&g_mux);
+  if (on != g_model.follow_controller) {
+    if (on) {
+      for (uint8_t i = 0; i < kRelayCount; ++i) {
+        g_model.relay_override[i] = false;
+      }
+      g_model.mixer_override = false;
+    } else {
+      for (uint8_t i = 0; i < kRelayCount; ++i) {
+        g_model.relay_manual_on[i] =
+            effective_relay_state(g_model, static_cast<Relay>(i));
+        g_model.relay_override[i] = false;
+      }
+      g_model.mixer_manual_motion = effective_mixer_motion(g_model);
+      g_model.mixer_manual_open =
+          g_model.mixer_manual_motion ? effective_mixer_open(g_model) : false;
+      g_model.mixer_override = false;
+    }
+    g_model.follow_controller = on;
+    touch(g_model);
+  }
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void set_realistic_power(bool on) {
+  taskENTER_CRITICAL(&g_mux);
+  g_model.realistic_power = on;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void set_realistic_boiler(bool on) {
+  taskENTER_CRITICAL(&g_mux);
+  g_model.realistic_boiler = on;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void clear_manual_overrides() {
+  taskENTER_CRITICAL(&g_mux);
+  for (uint8_t i = 0; i < kRelayCount; ++i) {
+    g_model.relay_override[i] = false;
+  }
+  g_model.mixer_override = false;
   touch(g_model);
   taskEXIT_CRITICAL(&g_mux);
 }
@@ -277,12 +471,14 @@ bool read_temperature(TempRole role, float& celsius) {
   if (!valid_temp_role(role)) {
     return false;
   }
-  const size_t index = static_cast<size_t>(role);
+  const uint32_t now_ms = millis();
 
   bool valid = false;
   taskENTER_CRITICAL(&g_mux);
-  valid = g_model.temperature_valid[index];
-  celsius = g_model.temperature_c[index];
+  celsius = effective_temperature(g_model, role, now_ms);
+  valid = (role == TempRole::Boiler && g_model.realistic_boiler)
+              ? true
+              : g_model.temperature_valid[static_cast<size_t>(role)];
   taskEXIT_CRITICAL(&g_mux);
   return valid;
 }
@@ -291,11 +487,10 @@ float read_power_w(CurrentChannel channel) {
   if (!valid_channel(channel)) {
     return 0.0f;
   }
-  const size_t index = static_cast<size_t>(channel);
 
   float watts = 0.0f;
   taskENTER_CRITICAL(&g_mux);
-  watts = g_model.power_w[index];
+  watts = effective_power(g_model, channel);
   taskEXIT_CRITICAL(&g_mux);
   return watts;
 }

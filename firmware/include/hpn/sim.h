@@ -24,12 +24,25 @@ struct Snapshot {
   // Mocked sensor answers (web UI writes these).
   float temperature_c[kTempRoleCount];
   bool temperature_valid[kTempRoleCount];
-  float power_w[kCurrentChannelCount];
+  float power_w[kCurrentChannelCount];      // effective current-sense answer
+  float power_set_w[kCurrentChannelCount];  // user-set on/moving wattage
 
-  // Observed outputs (L0 writes these through the I/O backend).
+  // Effective emulated outputs (controller output plus manual overrides).
   bool relay_on[kRelayCount];
+  bool relay_override[kRelayCount];   // manual override active for this relay
+  bool relay_manual_on[kRelayCount];  // manual state (valid when overridden)
   bool mixer_motion;
   bool mixer_open;
+  bool mixer_override;
+  bool mixer_manual_motion;
+  bool mixer_manual_open;
+
+  // Emulation behaviour switches.
+  bool follow_controller;  // relays/mixer follow L0 unless overridden
+  bool realistic_power;    // pump/mixer power follows relay/motion
+  bool realistic_boiler;   // boiler supply is a placeholder sine wave
+
+  // Observed outputs (L0 writes these through the I/O backend).
   uint8_t mux_channel;  // 0xFF when the carrier has no current MUX
   uint8_t output_byte;  // last 74HC595 latch value (0 for direct-GPIO carriers)
   bool output_enabled;  // 74HC595 OE state
@@ -43,10 +56,20 @@ void begin(const Config& config, const BoardConfig& board);
 // Thread-safe copy of the whole model.
 Snapshot snapshot();
 
-// Mocked sensor inputs. Defaults: 45.0 / 30.0 / 35.0 °C, all valid, 0 W.
+// Mocked sensor inputs. Defaults: 45.0 / 30.0 / 35.0 °C, all valid.
+// Pump/mixer power defaults to 10 W / 10 W / 10 W / 2 W.
 void set_temperature(TempRole role, float celsius, bool valid = true);
 void set_power_w(CurrentChannel channel, float watts);
 void reset();
+
+// Manual emulation controls. Manual relay/mixer changes override the
+// controller output for that channel; the follow switch re-enables tracking.
+void set_relay_manual(Relay relay, bool on);
+void set_mixer_manual(bool motion, bool open);
+void set_follow_controller(bool on);
+void set_realistic_power(bool on);
+void set_realistic_boiler(bool on);
+void clear_manual_overrides();
 
 // --- Backend hooks, called by hpn::io only --------------------------------
 void record_pin(uint8_t pin, bool high);

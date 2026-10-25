@@ -58,18 +58,26 @@ An `esp32dev_sim` image must never be expected to drive real relays. Verify the
 
 | Field | Meaning |
 | --- | --- |
-| `temperature_c[3]`, `temperature_valid[3]` | Mocked boiler / floor-return / mix-out answers, indexed by `TempRole` |
-| `power_w[4]` | Mocked pump and mixer power, indexed by `CurrentChannel` |
-| `relay_on[4]` | Decoded relay state, indexed by `Relay` |
-| `mixer_motion`, `mixer_open` | Decoded mixer bits |
+| `temperature_c[3]`, `temperature_valid[3]` | Effective boiler / floor-return / mix-out answers, indexed by `TempRole` |
+| `power_w[4]` | Effective pump and mixer current-sense answer, indexed by `CurrentChannel` |
+| `power_set_w[4]` | User-set on/moving wattage (0–40 W) |
+| `relay_on[4]` | Effective emulated relay state, indexed by `Relay` |
+| `relay_override[4]`, `relay_manual_on[4]` | Per-relay manual override flag and state |
+| `mixer_motion`, `mixer_open` | Effective mixer bits |
+| `mixer_override`, `mixer_manual_motion`, `mixer_manual_open` | Manual mixer override |
+| `follow_controller` | Relays/mixer follow L0 unless manually overridden |
+| `realistic_power` | Pump power follows its relay; mixer power follows motion |
+| `realistic_boiler` | Boiler supply is the placeholder sine wave around 65 °C |
 | `mux_channel` | Decoded MUX channel, `0xFF` if the carrier has none |
-| `output_byte` | Last byte latched into the 74HC595 |
+| `output_byte` | Last byte latched into the 74HC595 (controller output) |
 | `output_enabled` | `OE` state of the shift register |
 | `led_count`, `led_rgb[]` | Last LED frame, logical RGB |
 | `revision` | Bumped on every change; cheap change detection for the UI |
 
-Defaults after boot: 45.0 / 30.0 / 35.0 °C, all sensors valid, 0 W everywhere,
-all outputs off, LEDs black. A reboot resets the model.
+Defaults after boot: 45.0 / 30.0 / 35.0 °C, all sensors valid, pump on-power
+10 W, mixer moving-power 2 W, follow-controller on, realistic current sensors
+on, realistic boiler off, all outputs off, LEDs black. A reboot resets the
+model.
 
 Inputs the UI can write:
 
@@ -77,10 +85,27 @@ Inputs the UI can write:
 hpn::sim::set_temperature(hpn::TempRole::Boiler, 52.5f);
 hpn::sim::set_temperature(hpn::TempRole::MixOut, 41.0f);
 hpn::sim::set_temperature(hpn::TempRole::ReturnFloor, 30.0f, false);  // fault
-hpn::sim::set_power_w(hpn::CurrentChannel::PumpFloor, 42.0f);
-hpn::sim::set_power_w(hpn::CurrentChannel::Mixer, 18.0f);
+hpn::sim::set_power_w(hpn::CurrentChannel::PumpFloor, 24.0f);          // 0–40 W
+hpn::sim::set_power_w(hpn::CurrentChannel::Mixer, 2.0f);
+hpn::sim::set_relay_manual(hpn::Relay::Heater, true);                  // bypass L1
+hpn::sim::set_mixer_manual(true, true);                                // open
+hpn::sim::set_follow_controller(true);
+hpn::sim::set_realistic_power(true);
+hpn::sim::set_realistic_boiler(true);
+hpn::sim::clear_manual_overrides();
 hpn::sim::reset();
 ```
+
+With `follow_controller` on, L0 drives the emulated relays and mixer. A manual
+relay or mixer command overrides only that channel until the overrides are
+cleared or follow mode is toggled off/on. With follow mode off, the manual
+states are the only source of truth. Manual relay control deliberately bypasses
+L1: it represents the carrier, not the controller's safety arbitration.
+
+With `realistic_power` on, a pump reports its configured on-power while its
+relay is on and 0 W while off. The mixer reports its configured moving-power
+while motion is commanded and 0 W while idle. Turn the switch off to write the
+current-sense answer directly (useful for dry-run and welded-relay tests).
 
 `read_power_w()` is the seam L1 will use for dry-run and welded-relay
 supervision: set `0 W` while the relay is on to simulate a dry run, or nonzero
@@ -96,8 +121,10 @@ electronics:
 
 - no 1-Wire bus timing, ROM search, CRC or conversion time: only the
   temperature answer and a validity flag;
-- no ADC waveform, median filter or ACS712 physics: power is set in watts
-  directly;
+- no ADC waveform, median filter or ACS712 physics: power is either set in
+  watts directly or follows the relay/motion with a configured on/moving value;
+- no logged boiler-temperature shape yet: the realistic mode uses a placeholder
+  60–70 °C sine wave until the real form is collected;
 - no relay or pump physics, no mixer mechanics, no flow or temperature
   response of the plant;
 - no Wi-Fi/MQTT radio physics: the station-mode Wi-Fi client and the web portal
@@ -111,26 +138,37 @@ On real hardware both current paths are still TODO.
 The portal serves a separate **Board emulation** page at `/emulation.html`.
 It is not linked from the main menu and is only registered when the firmware is
 built with `HPN_IO_EMULATION`, so it does not exist in hardware builds. The
-page uses:
+page is a direct board control surface: it does **not** run L1 and there is no
+heater/pump interlock. It uses:
 
-- `hpn::sim::snapshot()` to render the virtual carrier (temperatures, pump
-  power, relay/mixer state, LED colours);
+- `hpn::sim::snapshot()` to render the virtual carrier;
 - the `set_*` functions above when the user edits a field;
 - the emulation-only REST endpoints `/api/sim`, `/api/sim/temperature`,
-  `/api/sim/power` and `/api/sim/reset`.
+  `/api/sim/power`, `/api/sim/relay`, `/api/sim/mixer`, `/api/sim/mode`,
+  `/api/sim/overrides/clear` and `/api/sim/reset`.
 
 Because the HTTP server runs in the AsyncTCP task and L0 in `T_io`, the page
 never blocks the control loop. The page contains:
 
-1. Three temperature sliders/inputs with a validity toggle (boiler, floor
-   return, mix out).
-2. Four power inputs (floor, radiator 1, radiator 2, mixer).
-3. A read-only rendering of the carrier: shift-register byte, relay states,
-   mixer direction/motion, MUX channel, LED strip.
-4. A reset button.
+1. Four compact relay buttons (heater, floor, radiator 1, radiator 2) that
+   override the emulated carrier directly.
+2. Mixer open/stop/close buttons.
+3. Behaviour switches: follow controller, realistic current sensors and the
+   placeholder realistic boiler sine wave.
+4. Three temperature sliders/inputs with a validity toggle (boiler, floor
+   return, mix out). The boiler input is disabled while the sine wave is on.
+5. Four power inputs (floor, radiator 1, radiator 2, mixer), limited to
+   0–40 W. With realistic current sensors on, the input sets the on/moving
+   wattage and the page shows the effective power separately.
+6. A carrier readout (controller output byte, MUX, OE, model revision) and a
+   reset button.
 
-The live dashboard reads the same snapshot through `/ws`; changes made on the
-emulation page appear there after the next L0 poll.
+Status LEDs are shown on the main dashboard, not on the emulation page. They
+are derived from the controller's live state (system/comms, boiler, floor,
+radiator 1, radiator 2) using the HHN 1.0 semantics in
+[`../../plans/controller node/02_hardware_and_l0.md`](../../plans/controller%20node/02_hardware_and_l0.md).
+The live dashboard reads the controller state through `/ws`; changes made on
+the emulation page appear there after the next L0 poll.
 
 ## 6. Adding HomeNet Heatpumps 2.0
 

@@ -469,6 +469,23 @@ td.mono, th.mono { font-family: var(--mono); }
 .field .inline { display: flex; align-items: center; gap: 8px; }
 .range-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px auto; gap: 8px; align-items: center; }
 .range-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+.range-row input[type="number"] {
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  outline: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.range-row input[type="number"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.range-row input[type="number"]:disabled { opacity: .5; cursor: not-allowed; }
 .range-row .unit { color: var(--faint); font-size: 11px; min-width: 28px; }
 .checkbox-row { display: flex; align-items: center; gap: 8px; min-height: 34px; }
 .checkbox-row input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -578,6 +595,39 @@ td.mono, th.mono { font-family: var(--mono); }
 .sequence-card h4 { font-size: 12.5px; }
 .sequence-card p { color: var(--faint); font-size: 11px; flex: 1; }
 
+/* Carrier status LEDs on the dashboard */
+.status-leds { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.status-led-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.status-led {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--faint);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+.status-led.green { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+.status-led.orange { background: var(--safety); box-shadow: 0 0 10px var(--safety); }
+.status-led.yellow { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+.status-led.red { background: var(--err); box-shadow: 0 0 10px var(--err); }
+.status-led.cyan { background: #35d0d0; box-shadow: 0 0 10px #35d0d0; }
+.status-led.magenta { background: #d05cff; box-shadow: 0 0 10px #d05cff; }
+.status-led.blue { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.status-led.purple { background: #9b7cff; box-shadow: 0 0 10px #9b7cff; }
+.status-led.off { background: var(--faint); box-shadow: none; }
+.status-led-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.status-led-label strong { font-size: 10.5px; letter-spacing: .02em; }
+.status-led-label small { color: var(--faint); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* Emulation page */
 .emu-wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
 .emu-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -621,6 +671,40 @@ td.mono, th.mono { font-family: var(--mono); }
 .emu-relay { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel); font-size: 12px; }
 .emu-relay .lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); }
 .emu-relay.on .lamp { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+.emu-relay-buttons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.emu-relay-btn {
+  min-height: 34px;
+  padding: 5px 7px;
+  gap: 4px;
+  justify-content: space-between;
+  border: 1px solid rgba(143, 160, 180, .38);
+  background: var(--panel-3);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .05), inset 0 0 0 1px rgba(0, 0, 0, .12);
+  cursor: pointer;
+  font-size: 10.5px;
+  line-height: 1.15;
+}
+.emu-relay-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+.emu-relay-btn:active { transform: translateY(1px); }
+.emu-relay-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.emu-relay-btn > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emu-relay-btn-state { color: var(--muted); font-family: var(--mono); font-size: 10px; font-weight: 700; }
+.emu-relay-btn.is-on { border-color: rgba(53, 208, 127, .75); background: var(--ok-soft); color: var(--ok); box-shadow: 0 0 12px rgba(53, 208, 127, .12); }
+.emu-relay-btn.is-on .emu-relay-btn-state { color: var(--ok); }
+.emu-manual {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(245, 184, 76, .4);
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
 .emu-leds { display: flex; gap: 6px; flex-wrap: wrap; }
 .emu-led { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: #000; }
 .emu-readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -639,6 +723,7 @@ td.mono, th.mono { font-family: var(--mono); }
 }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
+  .status-leds { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -666,7 +751,9 @@ td.mono, th.mono { font-family: var(--mono); }
   .emu-wrap { padding: 14px 12px; }
   .emu-pumps { grid-template-columns: 1fr; }
   .emu-relays { grid-template-columns: 1fr; }
+  .emu-relay-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .emu-readout { grid-template-columns: 1fr; }
+  .status-leds { grid-template-columns: 1fr; }
 }
 
 /* Small utility additions */

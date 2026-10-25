@@ -627,6 +627,61 @@ function sensorTable(sensors) {
 /* Dashboard                                                                  */
 /* ------------------------------------------------------------------------- */
 
+function dashboardLeds(live) {
+  const wifi = live.wifi || {};
+  const mqtt = live.mqtt || {};
+  const heater = live.heater || {};
+  const circuits = live.circuits || {};
+  const safety = live.safety || {};
+  const system = live.system || {};
+  const flags = Array.isArray(safety.flags) ? safety.flags : [];
+  const latched = Array.isArray(safety.latched) ? safety.latched : [];
+  const errorCode = num(safety.errorCode, 0);
+  const critical = latched.length > 0 || errorCode !== 0;
+  const warning = flags.length > 0;
+  const heaterOn = !!num(heater.phys, 0);
+  const floorOn = !!num((circuits.floor || {}).phys, 0);
+  const rad1On = !!num((circuits.rad1 || {}).phys, 0);
+  const rad2On = !!num((circuits.rad2 || {}).phys, 0);
+  const divergence = String(system.divergence || 'none');
+
+  let systemLed;
+  if (critical) {
+    systemLed = { color: 'red', text: 'Alarm', note: `error ${errorCode}` };
+  } else if (!wifi.connected) {
+    systemLed = { color: 'red', text: 'Offline', note: 'Wi-Fi down' };
+  } else if (warning) {
+    systemLed = { color: 'yellow', text: 'Warning', note: flags[0] };
+  } else if (!mqtt.connected) {
+    systemLed = { color: 'yellow', text: 'Wi-Fi only', note: 'MQTT off' };
+  } else {
+    systemLed = { color: 'green', text: 'Online', note: 'Wi-Fi + MQTT' };
+  }
+
+  let floorLed;
+  if (divergence === 'floor_delta_t_collapsed') {
+    floorLed = { color: 'magenta', text: 'ΔT pause', note: 'floor divergence' };
+  } else if (floorOn) {
+    floorLed = { color: 'green', text: 'Running', note: 'pump ON' };
+  } else {
+    floorLed = { color: 'off', text: 'Idle', note: 'pump OFF' };
+  }
+
+  const pumpLed = (on) => on
+    ? { color: 'orange', text: 'Running', note: 'pump ON' }
+    : { color: 'off', text: 'Idle', note: 'pump OFF' };
+
+  return [
+    { label: 'LED 0 · System', ...systemLed },
+    heaterOn
+      ? { label: 'LED 1 · Boiler', color: 'orange', text: 'Heating', note: 'heater ON' }
+      : { label: 'LED 1 · Boiler', color: 'off', text: 'Standby', note: 'heater OFF' },
+    { label: 'LED 2 · Floor', ...floorLed },
+    { label: 'LED 3 · Rad 1', ...pumpLed(rad1On) },
+    { label: 'LED 4 · Rad 2', ...pumpLed(rad2On) }
+  ];
+}
+
 function renderDashboard() {
   const live = state.live;
   if (!live) {
@@ -709,6 +764,19 @@ function renderDashboard() {
         <div class="metric-row" style="margin-top:10px"><span class="k">Error code</span><span class="v">${esc(safety.errorCode ?? 0)}</span></div>
       </section>
     </div>
+
+    <section class="card readonly">
+      <div class="card-head">
+        <div><h2>Status LEDs</h2><p>Carrier LED semantics from plan 02 §1.2</p></div>
+        <span class="chip">5 LEDs</span>
+      </div>
+      <div class="status-leds">
+        ${dashboardLeds(live).map((led) => `<div class="status-led-row" title="${esc(led.note)}">
+          <span class="status-led ${esc(led.color)}"></span>
+          <div class="status-led-label"><strong>${esc(led.label)}</strong><small>${esc(led.text)} · ${esc(led.note)}</small></div>
+        </div>`).join('')}
+      </div>
+    </section>
 
     <div class="grid cols-2">
       <section class="card readonly">

@@ -217,30 +217,45 @@ This page exists only when the firmware is compiled with the emulated I/O
 backend (`esp32dev_sim`); in hardware builds it is not served at all. It is a
 development aid, not a plant control.
 
-**Writable — mocked sensor answers** (mapped to `hpn::sim`):
+The page is a direct emulated-carrier control surface. It does not run L1 and
+has no heater/pump interlock: every relay can be toggled independently.
+
+**Writable — emulated board and mocked sensor answers** (mapped to `hpn::sim`):
 
 | Element | Range / values | Effect |
 |---|---|---|
-| Boiler temperature | −20 … 120 °C + valid toggle | `sim::set_temperature(TempRole::Boiler, …)` |
+| Relay buttons (heater, floor, rad1, rad2) | ON/OFF | `sim::set_relay_manual(…)`; overrides that relay |
+| Mixer buttons | open / stop / close | `sim::set_mixer_manual(…)` |
+| Follow controller | on/off | `sim::set_follow_controller(…)` |
+| Realistic current sensors | on/off | `sim::set_realistic_power(…)` |
+| Realistic boiler supply | on/off | `sim::set_realistic_boiler(…)`; placeholder sine around 65 °C |
+| Clear manual overrides | button | `sim::clear_manual_overrides()` |
+| Boiler temperature | −20 … 120 °C + valid toggle | `sim::set_temperature(TempRole::Boiler, …)`; disables the sine |
 | Floor return temperature | −20 … 120 °C + valid toggle | `… ReturnFloor …` |
 | Mixer output temperature | −20 … 120 °C + valid toggle | `… MixOut …` |
-| Floor / Rad 1 / Rad 2 power | 0 … 2000 W | `sim::set_power_w(CurrentChannel::Pump*, …)` |
-| Mixer power | 0 … 2000 W | `sim::set_power_w(CurrentChannel::Mixer, …)` |
-| Reset | button | `sim::reset()` — defaults 45/30/35 °C, 0 W |
+| Floor / Rad 1 / Rad 2 power | 0 … 40 W | `sim::set_power_w(CurrentChannel::Pump*, …)` |
+| Mixer power | 0 … 40 W | `sim::set_power_w(CurrentChannel::Mixer, …)` |
+| Reset | button | `sim::reset()` — defaults 45/30/35 °C, 10 W pumps, 2 W mixer |
 
-Setting 0 W while a pump relay is on simulates a dry run; nonzero power while
-off simulates a welded relay — useful to exercise L1 once it exists.
+With follow-controller on, L0 drives the emulated relays and mixer; a manual
+button overrides only that channel until overrides are cleared or follow mode
+is toggled. With realistic current sensors on, pump power follows its relay
+(default on-power 10 W) and mixer power follows motion (default moving-power
+2 W). The user can set a different on/moving wattage. Setting 0 W while a pump
+relay is on simulates a dry run; nonzero power while off simulates a welded
+relay — useful to exercise L1 once it exists.
 
 **Read-only — emulated carrier:**
 
-- 74HC595 output byte and `OE` state
-- decoded relay states (heater, rad1, rad2, floor)
+- 74HC595 controller output byte and `OE` state
+- effective relay states (heater, rad1, rad2, floor) and manual-override badges
 - mixer direction + motion
 - selected MUX channel
-- LED chain colours (5 pixels on HHN 1.0)
+- model revision
 
-The page polls or subscribes to `hpn::sim::snapshot()`; the `revision` field
-lets it skip unchanged frames. Changes must not block `T_io`.
+Status LEDs are shown on the main dashboard, not on this page. The page polls
+or subscribes to `hpn::sim::snapshot()`; the `revision` field lets it skip
+unchanged frames. Changes must not block `T_io`.
 
 ---
 
@@ -304,7 +319,11 @@ lets it skip unchanged frames. Changes must not block `T_io`.
 | POST | `/api/update` | OTA firmware upload |
 | GET | `/api/sim` | emulated carrier + mocked inputs (`HPN_IO_EMULATION` only) |
 | POST | `/api/sim/temperature` | mock a temperature answer (emulation only) |
-| POST | `/api/sim/power` | mock pump/mixer power (emulation only) |
+| POST | `/api/sim/power` | set pump/mixer on-power, 0–40 W (emulation only) |
+| POST | `/api/sim/relay` | manually override one emulated relay (emulation only) |
+| POST | `/api/sim/mixer` | manually drive/stop the emulated mixer (emulation only) |
+| POST | `/api/sim/mode` | follow/realistic behaviour switches (emulation only) |
+| POST | `/api/sim/overrides/clear` | clear manual relay/mixer overrides (emulation only) |
 | POST | `/api/sim/reset` | reset the emulation model (emulation only) |
 
 Config writes are validated server-side against the same range tables the UI uses; out-of-range writes are rejected with the reason.
