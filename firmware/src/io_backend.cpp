@@ -67,6 +67,10 @@ float read_power_w(CurrentChannel channel) {
   return sim::read_power_w(channel);
 }
 
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {
+  return sim::discover_temperature_sensors(out, max_count);
+}
+
 }  // namespace io
 }  // namespace hpn
 
@@ -74,6 +78,8 @@ float read_power_w(CurrentChannel channel) {
 
 #include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
+#include <DallasTemperature.h>
+#include <OneWire.h>
 
 // -----------------------------------------------------------------------------
 // Hardware backend: real pins, real shift register, real ADC and LED strip.
@@ -86,12 +92,15 @@ namespace {
 Adafruit_NeoPixel g_leds;
 bool g_leds_ready = false;
 uint16_t g_led_count = 0;
+uint8_t g_onewire_pin = HPN_GPIO_UNASSIGNED;
+
+bool pin_assigned(uint8_t pin) { return pin != HPN_GPIO_UNASSIGNED; }
 
 }  // namespace
 
 void begin(const Config& config, const BoardConfig& board) {
-  (void)config;
   (void)board;
+  g_onewire_pin = config.gpio_onewire;
 }
 
 void pin_mode(uint8_t pin, uint8_t mode) {
@@ -162,6 +171,34 @@ float read_power_w(CurrentChannel channel) {
   // power.
   (void)channel;
   return 0.0f;
+}
+
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {
+  if (out == nullptr || max_count == 0 || !pin_assigned(g_onewire_pin)) {
+    return 0;
+  }
+
+  OneWire wire(g_onewire_pin);
+  DallasTemperature sensors(&wire);
+  sensors.begin();
+  sensors.setWaitForConversion(false);
+  sensors.requestTemperatures();
+  // A 12-bit DS18B20 conversion takes up to 750 ms. This path is only used by
+  // the explicit discovery button, never by the control loop.
+  delay(750);
+
+  uint8_t count = 0;
+  DeviceAddress address{};
+  while (count < max_count && sensors.getAddress(address, count)) {
+    snprintf(out[count].id, sizeof(out[count].id),
+             "%02x%02x%02x%02x%02x%02x%02x%02x", address[0], address[1], address[2],
+             address[3], address[4], address[5], address[6], address[7]);
+    const float celsius = sensors.getTempC(address);
+    out[count].valid = celsius > -100.0f && celsius < 150.0f;
+    out[count].celsius = out[count].valid ? celsius : NAN;
+    ++count;
+  }
+  return count;
 }
 
 }  // namespace io

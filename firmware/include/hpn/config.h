@@ -5,6 +5,13 @@
 // Sentinel for "GPIO not assigned yet". Plans 02 still marks most pins TBD.
 #define HPN_GPIO_UNASSIGNED 0xFF
 
+// Mixer actuator wiring. The two logical channels are always open/direction
+// and close/motion; this setting tells L0 how the carrier exposes them.
+enum MixerWiring : uint8_t {
+  MIX_WIRING_DIRECTION_MOTION = 0,  // legacy: direction + motion enable
+  MIX_WIRING_OPEN_CLOSE = 1,        // new: separate open and close relays
+};
+
 // Canonical configuration contract.
 //
 // Source of truth: plans/controller node/01_config_and_contracts.md (§1).
@@ -94,6 +101,22 @@ struct Config {
   float flush_delta_t_ok;
   float min_useful_delta_t;
   uint32_t floor_pause_duration_s;
+
+  // =========================================================================
+  // APPEND-ONLY FIELDS
+  //
+  // Keep new fields at the end so config_store can migrate older NVS blobs by
+  // copying the known prefix and filling the remainder with defaults.
+  // =========================================================================
+
+  // --- Network identity and time -------------------------------------------
+  char hostname[33];
+  bool ntp_enabled;
+  char ntp_server[64];
+  char timezone[40];
+
+  // --- Carrier wiring ------------------------------------------------------
+  uint8_t mixer_wiring;
 };
 
 // Compiled-in defaults used before NVS has valid data. All values are safe

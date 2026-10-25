@@ -80,6 +80,7 @@ void record_led_frame(const uint8_t* rgb, uint16_t count);
 // --- Backend reads --------------------------------------------------------
 bool read_temperature(TempRole role, float& celsius);
 float read_power_w(CurrentChannel channel);
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count);
 
 }  // namespace sim
 }  // namespace hpn

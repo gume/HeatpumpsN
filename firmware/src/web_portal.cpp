@@ -13,10 +13,12 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <vector>
 
 #include "hpn/web_portal.h"
 #include "hpn/config_store.h"
+#include "hpn/l0_io.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/wifi_client.h"
 
@@ -461,9 +463,10 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
 
   JsonArray sensors = doc["sensors"].to<JsonArray>();
   add_sensor_json(sensors, cfg.sensor_id_boiler[0] != '\0' ? cfg.sensor_id_boiler : "boiler",
-                  "Boiler supply", st.T_boiler, cfg.sensor_error_threshold, now_ms);
+                  "Mixer hot in", st.T_boiler, cfg.sensor_error_threshold, now_ms);
   add_sensor_json(sensors, cfg.sensor_id_ret[0] != '\0' ? cfg.sensor_id_ret : "return",
-                  "Floor return", st.T_return_floor, cfg.sensor_error_threshold, now_ms);
+                  "Mixer cold in / return", st.T_return_floor, cfg.sensor_error_threshold,
+                  now_ms);
   add_sensor_json(sensors, cfg.sensor_id_mix[0] != '\0' ? cfg.sensor_id_mix : "mix",
                   "Mixer forward", st.T_mix_out, cfg.sensor_error_threshold, now_ms);
 
@@ -478,6 +481,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   system["divergence"] = divergence_name(st.divergence_reason);
   system["flush"] = flush_name(st.flush_state);
   system["rssi"] = s.wifi_rssi;
+  system["hostname"] = cfg.hostname;
+  system["epoch"] = st.wall_time_epoch_s;
+  system["ntpSynced"] = st.wall_time_epoch_s > 1600000000ULL;
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();
   wifi_obj["configured"] = wifi::status().configured;
@@ -519,6 +525,9 @@ void fill_network(JsonObject o, const Config& c) {
   o["mqtt_user"] = c.mqtt_user;
   o["has_mqtt_password"] = c.mqtt_pass[0] != '\0';
   o["mqtt_base_topic"] = c.mqtt_base_topic;
+  o["ntp_enabled"] = c.ntp_enabled;
+  o["ntp_server"] = c.ntp_server;
+  o["timezone"] = c.timezone;
 }
 
 void fill_safety(JsonObject o, const Config& c) {
@@ -558,6 +567,7 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["gpio_heater"] = c.gpio_heater;
   o["gpio_mix_open"] = c.gpio_mix_open;
   o["gpio_mix_close"] = c.gpio_mix_close;
+  o["mixer_wiring"] = c.mixer_wiring;
   o["gpio_onewire"] = c.gpio_onewire;
   o["gpio_led_data"] = c.gpio_led_data;
   o["num_leds"] = c.num_leds;
@@ -574,6 +584,7 @@ void fill_hardware(JsonObject o, const Config& c) {
 
 void fill_system(JsonObject o, const Config& c) {
   o["summer_mode"] = c.summer_mode;
+  o["hostname"] = c.hostname;
 }
 
 void fill_runtime(JsonObject o, const Config& c) {
@@ -743,6 +754,13 @@ bool apply_network(JsonObject in, Config& c, String& err) {
   if (!json_password(in, "mqtt_pass", c.mqtt_pass, sizeof(c.mqtt_pass), err)) return false;
   if (!json_string(in, "mqtt_base_topic", c.mqtt_base_topic, sizeof(c.mqtt_base_topic), true, err))
     return false;
+  if (!json_bool(in, "ntp_enabled", c.ntp_enabled, err)) return false;
+  if (!json_string(in, "ntp_server", c.ntp_server, sizeof(c.ntp_server), true, err)) return false;
+  if (!json_string(in, "timezone", c.timezone, sizeof(c.timezone), true, err)) return false;
+  if (c.ntp_enabled && c.ntp_server[0] == '\0') {
+    err = "ntp_server must not be empty when NTP is enabled";
+    return false;
+  }
   return true;
 }
 
@@ -794,26 +812,14 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_pin(in, "gpio_heater", c.gpio_heater, err)) return false;
   if (!json_pin(in, "gpio_mix_open", c.gpio_mix_open, err)) return false;
   if (!json_pin(in, "gpio_mix_close", c.gpio_mix_close, err)) return false;
+  if (!json_uint8(in, "mixer_wiring", c.mixer_wiring, 0, 1, err)) return false;
   if (!json_pin(in, "gpio_onewire", c.gpio_onewire, err)) return false;
   if (!json_pin(in, "gpio_led_data", c.gpio_led_data, err)) return false;
-  if (!json_uint8(in, "num_leds", c.num_leds, 0, 8, err)) return false;
   if (!json_pin(in, "i2c_sda", c.i2c_sda, err)) return false;
   if (!json_pin(in, "i2c_scl", c.i2c_scl, err)) return false;
 
-  if (in["has_pump_power"].is<JsonArray>()) {
-    JsonArray arr = in["has_pump_power"].as<JsonArray>();
-    if (arr.size() != 3) {
-      err = "has_pump_power must contain three booleans";
-      return false;
-    }
-    for (uint8_t i = 0; i < 3; ++i) {
-      if (!arr[i].is<bool>()) {
-        err = "has_pump_power must contain three booleans";
-        return false;
-      }
-      c.has_pump_power[i] = arr[i].as<bool>();
-    }
-  }
+  // LED count and pump-power feedback are fixed by the carrier profile, not
+  // user-selectable. They are intentionally not parsed here.
 
   if (!json_string(in, "sensor_id_boiler", c.sensor_id_boiler, sizeof(c.sensor_id_boiler), true, err))
     return false;
@@ -829,8 +835,61 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   return true;
 }
 
+bool network_requires_reboot(const Config& a, const Config& b) {
+  // Wi-Fi, fallback AP and SNTP settings are latched when the radio and time
+  // services start. MQTT is refreshed by the MQTT task on the next tick.
+  return strcmp(a.wifi_ssid, b.wifi_ssid) != 0 ||
+         strcmp(a.wifi_password, b.wifi_password) != 0 ||
+         strcmp(a.ap_ssid, b.ap_ssid) != 0 ||
+         strcmp(a.ap_password, b.ap_password) != 0 ||
+         a.ntp_enabled != b.ntp_enabled ||
+         strcmp(a.ntp_server, b.ntp_server) != 0 ||
+         strcmp(a.timezone, b.timezone) != 0;
+}
+
+bool hardware_requires_reboot(const Config& a, const Config& b) {
+  // GPIO assignment, carrier wiring and task cadence are latched at startup.
+  // Mixer constants, deadbands and sensor IDs are consumed by the next poll or
+  // control cycle and therefore do not need a reboot.
+  return a.gpio_pump_floor != b.gpio_pump_floor ||
+         a.gpio_pump_rad1 != b.gpio_pump_rad1 ||
+         a.gpio_pump_rad2 != b.gpio_pump_rad2 ||
+         a.gpio_heater != b.gpio_heater ||
+         a.gpio_mix_open != b.gpio_mix_open ||
+         a.gpio_mix_close != b.gpio_mix_close ||
+         a.gpio_onewire != b.gpio_onewire ||
+         a.gpio_led_data != b.gpio_led_data ||
+         a.i2c_sda != b.i2c_sda || a.i2c_scl != b.i2c_scl ||
+         a.mixer_wiring != b.mixer_wiring || a.tick_ms != b.tick_ms ||
+         a.temp_poll_interval_ms != b.temp_poll_interval_ms;
+}
+
+bool hostname_valid(const char* hostname) {
+  const size_t len = strlen(hostname);
+  if (len == 0 || len > 32) {
+    return false;
+  }
+  if (hostname[0] == '-' || hostname[len - 1] == '-') {
+    return false;
+  }
+  for (size_t i = 0; i < len; ++i) {
+    const char c = hostname[i];
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '.';
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool apply_system(JsonObject in, Config& c, String& err) {
   if (!json_bool(in, "summer_mode", c.summer_mode, err)) return false;
+  if (!json_string(in, "hostname", c.hostname, sizeof(c.hostname), false, err)) return false;
+  if (!hostname_valid(c.hostname)) {
+    err = "hostname must be 1-32 characters (letters, digits, hyphen or dot)";
+    return false;
+  }
   return true;
 }
 
@@ -1189,14 +1248,15 @@ void handle_config_put(AsyncWebServerRequest* request, JsonVariant& json, const 
 
   if (strcmp(section, "network") == 0) {
     ok = apply_network(in, next, err);
-    reboot_required = true;
+    reboot_required = ok && network_requires_reboot(active, next);
   } else if (strcmp(section, "safety") == 0) {
     ok = apply_safety(in, next, err);
   } else if (strcmp(section, "hardware") == 0) {
     ok = apply_hardware(in, next, err);
-    reboot_required = true;
+    reboot_required = ok && hardware_requires_reboot(active, next);
   } else if (strcmp(section, "system") == 0) {
     ok = apply_system(in, next, err);
+    reboot_required = strcmp(active.hostname, next.hostname) != 0;
   } else {
     send_error(request, 404, "unknown configuration section");
     return;
@@ -1342,6 +1402,31 @@ void handle_log_slow(AsyncWebServerRequest* request) {
   send_json(request, 200, doc);
 }
 
+void handle_sensors_discover(AsyncWebServerRequest* request) {
+  TemperatureSensorInfo found[8] = {};
+  const uint8_t count = l0::discover_temperature_sensors(found, 8);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["count"] = count;
+  JsonArray arr = doc["sensors"].to<JsonArray>();
+  for (uint8_t i = 0; i < count; ++i) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = found[i].id;
+    if (isfinite(found[i].celsius)) {
+      o["temperature"] = found[i].celsius;
+    } else {
+      o["temperature"] = nullptr;
+    }
+    o["valid"] = found[i].valid;
+  }
+
+  char detail[64];
+  snprintf(detail, sizeof(detail), "Sensor discovery: %u found", static_cast<unsigned>(count));
+  log_event(0, 1250, detail);
+  send_json(request, 200, doc);
+}
+
 void handle_counters_get(AsyncWebServerRequest* request) {
   CounterEntry copy[CTR_COUNT] = {};
   taskENTER_CRITICAL(&g_counter_mux);
@@ -1349,8 +1434,15 @@ void handle_counters_get(AsyncWebServerRequest* request) {
   taskEXIT_CRITICAL(&g_counter_mux);
 
   static const char* ids[CTR_COUNT] = {"heater", "rad1", "rad2", "floor", "mix_open", "mix_close"};
-  static const char* labels[CTR_COUNT] = {"Heater", "Radiator 1 pump", "Radiator 2 pump",
-                                          "Floor pump", "Mixer open", "Mixer close"};
+  const bool open_close = g_config != nullptr && g_config->mixer_wiring == MIX_WIRING_OPEN_CLOSE;
+  const char* labels[CTR_COUNT] = {
+      "Heater relay",
+      "Radiator 1 relay",
+      "Radiator 2 relay",
+      "Floor pump relay",
+      open_close ? "Mixer open relay" : "Mixer direction relay",
+      open_close ? "Mixer close relay" : "Mixer motion relay",
+  };
 
   JsonDocument doc;
   doc["persistenceEnabled"] = counter_persistence_enabled();
@@ -1929,6 +2021,16 @@ void handle_status(AsyncWebServerRequest* request) {
   doc["sdk"] = ESP.getSdkVersion();
   doc["uptime"] = millis() / 1000;
   doc["freeHeap"] = ESP.getFreeHeap();
+  doc["hostname"] = WiFi.getHostname();
+
+  const time_t epoch = time(nullptr);
+  const bool ntp_synced = epoch > 1600000000;
+  JsonObject ntp = doc["ntp"].to<JsonObject>();
+  ntp["enabled"] = g_config != nullptr ? g_config->ntp_enabled : false;
+  ntp["synced"] = ntp_synced;
+  ntp["epoch"] = ntp_synced ? static_cast<uint64_t>(epoch) : 0;
+  ntp["server"] = g_config != nullptr ? g_config->ntp_server : "";
+  ntp["timezone"] = g_config != nullptr ? g_config->timezone : "";
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();
   const wifi::Status& ws = wifi::status();
@@ -2241,6 +2343,7 @@ void register_routes() {
   g_server.on(AsyncURIMatcher::exact("/api/log/events"), HTTP_GET, handle_log_events);
   g_server.on(AsyncURIMatcher::exact("/api/log/access"), HTTP_GET, handle_log_access);
   g_server.on(AsyncURIMatcher::exact("/api/log/slow"), HTTP_GET, handle_log_slow);
+  g_server.on(AsyncURIMatcher::exact("/api/sensors/discover"), HTTP_GET, handle_sensors_discover);
   g_server.on(AsyncURIMatcher::exact("/api/counters"), HTTP_GET, handle_counters_get);
   g_server.on(AsyncURIMatcher::exact("/api/counters/reset"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {

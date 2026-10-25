@@ -35,6 +35,11 @@ Config config_defaults() {
   copy_str(c.mqtt_user, "");
   copy_str(c.mqtt_pass, "");
   copy_str(c.mqtt_base_topic, "heatpumpsn/controller");
+  copy_str(c.hostname, "heatpumpsn");
+  c.ntp_enabled = true;
+  copy_str(c.ntp_server, "pool.ntp.org");
+  // POSIX TZ string for central Europe (CET/CEST). Editable in the portal.
+  copy_str(c.timezone, "CET-1CEST,M3.5.0,M10.5.0/3");
 
   // --- Safety & Supervision Bounds -----------------------------------------
   c.t_max_hard = 50.0f;
@@ -85,6 +90,7 @@ Config config_defaults() {
   copy_str(c.sensor_id_boiler, "");
   copy_str(c.sensor_id_ret, "");
   copy_str(c.sensor_id_mix, "");
+  c.mixer_wiring = MIX_WIRING_OPEN_CLOSE;
 
   // --- Dynamic Heating Parameters (HA shadow) ------------------------------
   c.floor_setpoint_shadow = c.setpoint_default;

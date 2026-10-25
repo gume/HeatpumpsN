@@ -16,8 +16,11 @@ const state = {
   events: [],
   access: [],
   slow: [],
+  slowLoading: false,
   counters: [],
   counterPersistence: null,
+  sensorDiscovery: [],
+  sensorDiscoveryLoading: false,
   runtime: null,
   ws: null,
   wsConnected: false,
@@ -31,14 +34,15 @@ const state = {
   lastStatusFetch: 0,
   lastSlowFetch: 0,
   lastEventsFetch: 0,
+  lastCountersFetch: 0,
   lastRuntimeFetch: 0,
   eventsSeq: 0,
   accessSeq: 0,
   otaBusy: false
 };
 
-const LIVE_ROUTES = new Set(['dashboard', 'plant', 'log/sensors', 'test']);
-const SETTINGS_ROUTES = new Set(['settings/safety', 'settings/hardware', 'settings/network', 'settings/firmware', 'settings/system']);
+const LIVE_ROUTES = new Set(['dashboard', 'diagnostics', 'test']);
+const SETTINGS_ROUTES = new Set(['settings/safety', 'settings/hardware', 'settings/control', 'settings/network', 'settings/firmware', 'settings/system']);
 
 /* ------------------------------------------------------------------------- */
 /* Formatting helpers                                                         */
@@ -82,6 +86,13 @@ function fmtAge(seconds) {
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return `${Math.floor(s / 86400)} d ago`;
+}
+
+function fmtEpoch(epoch) {
+  const n = num(epoch);
+  if (n === null || n <= 0) return '—';
+  const date = new Date(n * 1000);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
 }
 
 function fmtUptime(seconds) {
@@ -370,6 +381,7 @@ async function refreshAccess() {
 }
 
 async function refreshSlow() {
+  state.slowLoading = true;
   try {
     const data = await apiGet('/api/log/slow');
     state.slow = Array.isArray(data.samples) ? data.samples : [];
@@ -378,6 +390,8 @@ async function refreshSlow() {
   } catch (err) {
     console.warn('Slow log fetch failed', err);
     return state.slow;
+  } finally {
+    state.slowLoading = false;
   }
 }
 
@@ -389,10 +403,33 @@ async function refreshCounters() {
       enabled: !!data.persistenceEnabled,
       saveIntervalS: num(data.saveIntervalS, 0)
     };
+    state.lastCountersFetch = Date.now();
     return state.counters;
   } catch (err) {
     toast(`Could not load relay counters: ${err.message}`, 'err');
     return state.counters;
+  }
+}
+
+async function discoverSensors() {
+  if (state.sensorDiscoveryLoading) return;
+  state.sensorDiscoveryLoading = true;
+  renderCurrent();
+  try {
+    const data = await apiGet('/api/sensors/discover');
+    state.sensorDiscovery = Array.isArray(data.sensors) ? data.sensors : [];
+    toast(
+      state.sensorDiscovery.length
+        ? `${state.sensorDiscovery.length} sensor(s) found on the 1-Wire bus.`
+        : 'No temperature sensors found.',
+      state.sensorDiscovery.length ? 'ok' : 'warn',
+      4000
+    );
+  } catch (err) {
+    toast(`Sensor discovery failed: ${err.message}`, 'err', 6000);
+  } finally {
+    state.sensorDiscoveryLoading = false;
+    renderCurrent();
   }
 }
 
@@ -460,7 +497,7 @@ function updateNav() {
   });
 
   const groupName = state.route.startsWith('settings/') ? 'settings'
-    : state.route.startsWith('log/') ? 'diagnostics' : null;
+    : (state.route.startsWith('log/') || state.route === 'diagnostics') ? 'diagnostics' : null;
   if (groupName) {
     const group = $(`#nav .nav-group[data-group="${groupName}"]`);
     if (group) {
@@ -572,25 +609,35 @@ function tempTile(label, value, health) {
   </div>`;
 }
 
-function circuitCard(key, label, circuit) {
+function circuitCard(key, label, circuit, powerW = null, options = {}) {
   const c = circuit || {};
   const afterRun = num(c.afterRun, 0);
-  let extra = '';
-  if (key === 'floor') {
-    const pos = Math.max(0, Math.min(100, num(c.mixerPos, 0)));
-    const enc = Math.max(0, Math.min(100, num(c.encoderPos, 0)));
-    extra = `<div class="metric-row"><span class="k">Mixer position</span><span class="v">${pos.toFixed(1)}%</span></div>
-      <div class="bar"><span style="width:${pos.toFixed(1)}%"></span></div>
-      <div class="metric-row"><span class="k">Encoder</span><span class="v">${enc.toFixed(1)}% ${c.encoderValid ? '' : '⚠'}</span></div>`;
+  const on = !!num(c.phys, 0);
+  const cmd = !!num(c.cmd, 0);
+  const isFloor = key === 'floor';
+  const isHeater = key === 'heater';
+  // Radiator relays are assumed to execute their command; only the floor pump
+  // and the safety-owned heater expose a separate physical state.
+  const pill = (isFloor || isHeater) ? mismatchPill(cmd, on) : statePill(on, on ? 'ON' : 'OFF');
+
+  let rows = '';
+  if (isHeater) {
+    rows = `<div class="metric-row"><span class="k">Reason</span><span class="v">${esc(options.reason || '—')}</span></div>
+      <div class="metric-row"><span class="k">Demand age</span><span class="v">${num(options.demandAge, 0) ? fmtAge(options.demandAge) : '—'}</span></div>`;
+  } else {
+    if (isFloor) {
+      rows += `<div class="metric-row"><span class="k">Command</span><span class="v">${cmd ? 'ON' : 'OFF'}</span></div>
+        <div class="metric-row"><span class="k">Physical</span><span class="v">${on ? 'ON' : 'OFF'}</span></div>`;
+    }
+    rows += `<div class="metric-row"><span class="k">After-run</span><span class="v">${afterRun ? fmtAge(afterRun) : '—'}</span></div>`;
+    if (powerW !== null && powerW !== undefined) {
+      rows += `<div class="metric-row"><span class="k">Power</span><span class="v">${fmtNum(powerW, 1)} W</span></div>`;
+    }
   }
+
   return `<div class="circuit">
-    <div class="circuit-head"><strong>${esc(label)}</strong>${mismatchPill(c.cmd, c.phys)}</div>
-    <div class="circuit-body">
-      <div class="metric-row"><span class="k">Command</span><span class="v">${c.cmd ? 'ON' : 'OFF'}</span></div>
-      <div class="metric-row"><span class="k">Physical</span><span class="v">${c.phys ? 'ON' : 'OFF'}</span></div>
-      <div class="metric-row"><span class="k">After-run</span><span class="v">${afterRun ? fmtAge(afterRun) : '—'}</span></div>
-      ${extra}
-    </div>
+    <div class="circuit-head"><strong>${esc(label)}</strong>${pill}</div>
+    <div class="circuit-body">${rows}</div>
   </div>`;
 }
 
@@ -706,6 +753,9 @@ function renderDashboard() {
   const safety = live.safety || {};
   const system = live.system || {};
   const power = live.power || {};
+  const floor = circuits.floor || {};
+  const mixerPos = Math.max(0, Math.min(100, num(floor.mixerPos, 0)));
+  const encoderPos = Math.max(0, Math.min(100, num(floor.encoderPos, 0)));
   const recent = state.events.slice(-6).reverse();
 
   const modeTone = mode.current === 'test' ? 'err' : mode.current === 'summer' ? 'ok' : 'warn';
@@ -722,26 +772,32 @@ function renderDashboard() {
     <div class="grid cols-2">
       <section class="card readonly accent-top">
         <div class="card-head">
-          <div><h2>Circuits</h2><p>Command versus physical pump state</p></div>
+          <div><h2>Circuits</h2><p>Relay state, after-run and electrical draw</p></div>
           <span class="chip">${esc(modeLabel(mode.current))}</span>
         </div>
         <div class="circuit-grid">
-          ${circuitCard('rad1', 'Radiator 1', circuits.rad1)}
-          ${circuitCard('rad2', 'Radiator 2', circuits.rad2)}
-          ${circuitCard('floor', 'Floor loop', circuits.floor)}
+          ${circuitCard('heater', 'Heater', { cmd: heater.cmd, phys: heater.phys }, null, { reason: heater.reason, demandAge: heater.demandAge })}
+          ${circuitCard('floor', 'Floor pump', circuits.floor, power.floor)}
+          ${circuitCard('rad1', 'Radiator 1', circuits.rad1, power.rad1)}
+          ${circuitCard('rad2', 'Radiator 2', circuits.rad2, power.rad2)}
         </div>
       </section>
 
       <section class="card readonly accent-top">
         <div class="card-head">
-          <div><h2>Temperatures</h2><p>Raw readings with age and validity</p></div>
-          <span class="chip ${Object.values(tempHealth).every((h) => h.valid) ? 'chip-ok' : 'chip-warn'}">${Object.values(tempHealth).filter((h) => h.valid).length}/${Object.keys(tempHealth).length || 0} valid</span>
+          <div><h2>Mixer</h2><p>Hydraulic temperatures, power and position</p></div>
+          <span class="chip">${esc(floor.encoderValid ? 'encoder valid' : 'encoder invalid')}</span>
         </div>
-        <div class="temp-grid">
-          ${tempTile('Boiler supply', temps.boilerSupply, tempHealth.boilerSupply)}
+        <div class="temp-grid mixer-temp-grid">
+          ${tempTile('Mixer hot in', temps.mixerHotIn ?? temps.boilerSupply, tempHealth.mixerHotIn ?? tempHealth.boilerSupply)}
+          ${tempTile('Mixer cold in / return', temps.mixerColdIn ?? temps.return, tempHealth.mixerColdIn ?? tempHealth.return)}
           ${tempTile('Mixer forward', temps.mixerForward, tempHealth.mixerForward)}
-          ${tempTile('Return', temps.return, tempHealth.return)}
-          ${tempTile('Mixer cold in', temps.mixerColdIn, tempHealth.mixerColdIn)}
+        </div>
+        <div class="mixer-metrics">
+          <div class="metric-row"><span class="k">Mixer power</span><span class="v">${fmtNum(power.mixer, 1)} W</span></div>
+          <div class="metric-row"><span class="k">Estimated position</span><span class="v">${mixerPos.toFixed(1)}%</span></div>
+          <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
+          <div class="metric-row"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
         </div>
       </section>
     </div>
@@ -749,24 +805,21 @@ function renderDashboard() {
     <div class="grid cols-2">
       <section class="card readonly">
         <div class="card-head">
-          <div><h2>Heater</h2><p>Final authority remains with L1 safety</p></div>
-          ${mismatchPill(heater.cmd, heater.phys)}
-        </div>
-        <div class="kv">
-          <dt>Reason</dt><dd>${esc(heater.reason || '—')}</dd>
-          <dt>Demand age</dt><dd>${num(heater.demandAge, 0) ? fmtAge(heater.demandAge) : '—'}</dd>
-          <dt>Divergence</dt><dd>${esc(system.divergence || 'none')}</dd>
-          <dt>Flush</dt><dd>${esc(system.flush || 'idle')}</dd>
-        </div>
-      </section>
-
-      <section class="card readonly">
-        <div class="card-head">
           <div><h2>Safety</h2><p>Active flags and controller error code</p></div>
           <span class="chip ${(safety.flags || []).length ? 'chip-warn' : 'chip-ok'}">${(safety.flags || []).length} active</span>
         </div>
         ${safetyFlags(safety.flags)}
         <div class="metric-row" style="margin-top:10px"><span class="k">Error code</span><span class="v">${esc(safety.errorCode ?? 0)}</span></div>
+        <div class="metric-row"><span class="k">Divergence</span><span class="v">${esc(system.divergence || 'none')}</span></div>
+        <div class="metric-row"><span class="k">Flush</span><span class="v">${esc(system.flush || 'idle')}</span></div>
+      </section>
+
+      <section class="card readonly">
+        <div class="card-head">
+          <div><h2>Recent events</h2><p>Latest entries from the in-RAM event log</p></div>
+          <a class="btn btn-sm" href="#log/events">Open log</a>
+        </div>
+        ${recent.length ? recent.map(eventRowCompact).join('') : emptyCard('No events yet.')}
       </section>
     </div>
 
@@ -781,90 +834,6 @@ function renderDashboard() {
           <div class="status-led-label"><strong>${esc(led.label)}</strong><small>${esc(led.text)} · ${esc(led.note)}</small></div>
         </div>`).join('')}
       </div>
-    </section>
-
-    <div class="grid cols-2">
-      <section class="card readonly">
-        <div class="card-head"><div><h2>Pump power</h2><p>Estimated electrical draw</p></div></div>
-        <div class="metric-row"><span class="k">Floor pump</span><span class="v">${fmtNum(power.floor, 0)} W</span></div>
-        <div class="metric-row"><span class="k">Radiator 1</span><span class="v">${fmtNum(power.rad1, 0)} W</span></div>
-        <div class="metric-row"><span class="k">Radiator 2</span><span class="v">${fmtNum(power.rad2, 0)} W</span></div>
-        <div class="metric-row"><span class="k">Mixer</span><span class="v">${fmtNum(power.mixer, 0)} W</span></div>
-      </section>
-
-      <section class="card readonly">
-        <div class="card-head">
-          <div><h2>Recent events</h2><p>Latest entries from the in-RAM event log</p></div>
-          <a class="btn btn-sm" href="#log/events">Open log</a>
-        </div>
-        ${recent.length ? recent.map(eventRowCompact).join('') : emptyCard('No events yet.')}
-      </section>
-    </div>
-  </div>`;
-}
-
-/* ------------------------------------------------------------------------- */
-/* Plant                                                                      */
-/* ------------------------------------------------------------------------- */
-
-function renderPlant() {
-  const live = state.live;
-  if (!live) return loadingCard('Waiting for live state…');
-
-  const circuits = live.circuits || {};
-  const temps = live.temps || {};
-  const tempHealth = live.tempHealth || {};
-  const heater = live.heater || {};
-  const sensors = live.sensors || [];
-  const floor = circuits.floor || {};
-  const mixerPos = Math.max(0, Math.min(100, num(floor.mixerPos, 0)));
-  const encoderPos = Math.max(0, Math.min(100, num(floor.encoderPos, 0)));
-
-  return `<div class="stack">
-    <div class="banner info">Read-only reference. Setpoints and mode are owned by Home Assistant; loop tuning is owned by the observer.</div>
-
-    <section class="card readonly accent-top">
-      <div class="card-head"><div><h2>Circuits</h2><p>Pumps and after-run timers</p></div></div>
-      <div class="circuit-grid">
-        ${circuitCard('rad1', 'Radiator 1', circuits.rad1)}
-        ${circuitCard('rad2', 'Radiator 2', circuits.rad2)}
-        ${circuitCard('floor', 'Floor loop', circuits.floor)}
-      </div>
-    </section>
-
-    <div class="grid cols-2">
-      <section class="card readonly">
-        <div class="card-head"><div><h2>Mixer temperatures</h2><p>Hot inlet, cold inlet and mixed flow</p></div></div>
-        <div class="temp-grid">
-          ${tempTile('Hot inlet', temps.mixerHotIn, tempHealth.boilerSupply)}
-          ${tempTile('Cold inlet', temps.mixerColdIn, tempHealth.mixerColdIn)}
-          ${tempTile('Forward', temps.mixerForward, tempHealth.mixerForward)}
-          ${tempTile('Return', temps.return, tempHealth.return)}
-        </div>
-        <div style="margin-top:14px">
-          <div class="metric-row"><span class="k">Estimated position</span><span class="v">${mixerPos.toFixed(1)}%</span></div>
-          <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
-          <div class="metric-row" style="margin-top:8px"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
-        </div>
-      </section>
-
-      <section class="card readonly">
-        <div class="card-head"><div><h2>Heater</h2><p>Command, physical state and reason</p></div>${mismatchPill(heater.cmd, heater.phys)}</div>
-        <div class="kv">
-          <dt>Reason</dt><dd>${esc(heater.reason || '—')}</dd>
-          <dt>Demand age</dt><dd>${num(heater.demandAge, 0) ? fmtAge(heater.demandAge) : '—'}</dd>
-          <dt>Divergence</dt><dd>${esc(live.system?.divergence || 'none')}</dd>
-          <dt>Flush state</dt><dd>${esc(live.system?.flush || 'idle')}</dd>
-          <dt>Error code</dt><dd>${esc(live.system?.errorCode ?? 0)}</dd>
-        </div>
-        <div style="margin-top:14px">${safetyFlags(live.safety?.flags || [])}</div>
-      </section>
-    </div>
-
-    <section class="card readonly">
-      <div class="card-head"><div><h2>Sensor health</h2><p>Raw values and age from the carrier</p></div></div>
-      ${sensorTable(sensors)}
-      <p class="small faint" style="margin-top:10px">Sensor offsets are not yet part of Config; values are raw.</p>
     </section>
   </div>`;
 }
@@ -892,6 +861,17 @@ function renderSensors() {
       ${sensorTable(sensors)}
       <p class="small faint" style="margin-top:10px">Offsets are not yet configurable from the portal. The displayed values are raw carrier readings.</p>
     </section>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Diagnostics: sensor health and relay counters                              */
+/* ------------------------------------------------------------------------- */
+
+function renderDiagnostics() {
+  return `<div class="stack">
+    ${renderSensors()}
+    ${renderCounters()}
   </div>`;
 }
 
@@ -1036,9 +1016,9 @@ function renderSlowChart(samples) {
       ${xLabels}
     </svg>
     <div class="legend">
-      <span class="boiler"><i></i>Boiler supply</span>
+      <span class="boiler"><i></i>Mixer hot in</span>
       <span class="mix"><i></i>Mixer forward</span>
-      <span class="ret"><i></i>Return</span>
+      <span class="ret"><i></i>Mixer cold in / return</span>
     </div>
   </div>`;
 }
@@ -1051,7 +1031,7 @@ function renderSlowLog() {
     <section class="card readonly accent-top">
       <div class="card-head">
         <div><h2>Slow log</h2><p>10-second temperature and mixer-position samples (in RAM)</p></div>
-        <span class="chip">${state.slow.length} samples</span>
+        <span class="chip ${state.slowLoading ? 'chip-warn' : ''}">${state.slowLoading ? 'loading…' : `${state.slow.length} samples`}</span>
       </div>
 
       <div class="row between" style="margin-bottom:12px">
@@ -1070,9 +1050,9 @@ function renderSlowLog() {
       </div>
 
       <div class="grid cols-4" style="margin-bottom:14px">
-        ${metricCard('Boiler supply', fmtTemp(latest?.boiler), 'latest sample')}
+        ${metricCard('Mixer hot in', fmtTemp(latest?.boiler), 'latest sample')}
         ${metricCard('Mixer forward', fmtTemp(latest?.mix), 'latest sample')}
-        ${metricCard('Return', fmtTemp(latest?.ret), 'latest sample')}
+        ${metricCard('Mixer cold in / return', fmtTemp(latest?.ret), 'latest sample')}
         ${metricCard('Mixer position', latest ? `${(num(latest.pos, 0) * 100).toFixed(1)}%` : '—', 'estimated')}
       </div>
 
@@ -1095,7 +1075,7 @@ function renderCounters() {
   return `<div class="stack">
     <section class="card readonly accent-top">
       <div class="card-head">
-        <div><h2>Relay counters</h2><p>Cycle counts and estimated runtime</p></div>
+        <div><h2>Relays</h2><p>Cycle counts and estimated runtime for each relay</p></div>
         <div class="row">
           <span class="chip ${persistence.enabled ? 'chip-ok' : 'chip-warn'}">${persistenceLabel}</span>
           <button class="btn btn-sm" type="button" data-action="refresh-counters">Refresh</button>
@@ -1283,12 +1263,15 @@ function fieldRange(name, label, value, min, max, step, unit, help, dataType = '
   </div>`;
 }
 
-function fieldNumber(name, label, value, min, max, step, help, dataType = 'int') {
+function fieldNumber(name, label, value, min, max, step, help, dataType = 'int', unit = '') {
   const v = num(value, min);
   return `<div class="field">
     <label for="f_${esc(name)}">${esc(label)}</label>
-    <input id="f_${esc(name)}" data-field="${esc(name)}" data-type="${esc(dataType)}" type="number"
-           min="${min}" max="${max}" step="${step}" value="${v}">
+    <div class="number-row">
+      <input id="f_${esc(name)}" data-field="${esc(name)}" data-type="${esc(dataType)}" type="number"
+             min="${min}" max="${max}" step="${step}" value="${v}">
+      <span class="unit">${esc(unit || '')}</span>
+    </div>
     <small>${esc(help || '')}</small>
   </div>`;
 }
@@ -1311,10 +1294,10 @@ function fieldPassword(name, label, hasValue, help) {
   </div>`;
 }
 
-function fieldSelect(name, label, value, options, help) {
+function fieldSelect(name, label, value, options, help, dataType = 'int') {
   return `<div class="field">
     <label for="f_${esc(name)}">${esc(label)}</label>
-    <select id="f_${esc(name)}" data-field="${esc(name)}" data-type="int">
+    <select id="f_${esc(name)}" data-field="${esc(name)}" data-type="${esc(dataType)}">
       ${options.map((option) => `<option value="${esc(option.value)}" ${String(option.value) === String(value) ? 'selected' : ''}>${esc(option.label)}</option>`).join('')}
     </select>
     <small>${esc(help || '')}</small>
@@ -1329,6 +1312,32 @@ function fieldCheckbox(name, label, checked, help, index = null) {
       <span>${esc(help || '')}</span>
     </label>
   </div>`;
+}
+
+function sensorIdOptions(current) {
+  const ids = [...new Set([
+    current,
+    ...(state.sensorDiscovery || []).map((sensor) => sensor.id)
+  ].filter(Boolean))];
+  return [{ value: '', label: '— unassigned —' }, ...ids.map((id) => ({ value: id, label: id }))];
+}
+
+function sensorDiscoveryTable() {
+  const sensors = state.sensorDiscovery || [];
+  if (state.sensorDiscoveryLoading) {
+    return `<div class="empty">Scanning the 1-Wire bus…</div>`;
+  }
+  if (!sensors.length) {
+    return `<div class="empty">No discovery result yet. Press “Discover sensors” to scan the bus.</div>`;
+  }
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Sensor ID</th><th>Temperature</th><th>State</th></tr></thead>
+    <tbody>${sensors.map((sensor) => `<tr>
+      <td class="mono">${esc(sensor.id)}</td>
+      <td class="mono">${fmtTemp(sensor.temperature)}</td>
+      <td><span class="chip ${sensor.valid ? 'chip-ok' : 'chip-warn'}">${sensor.valid ? 'valid' : 'no reading'}</span></td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
 }
 
 function formActions(label, extra = '') {
@@ -1368,19 +1377,19 @@ function renderSettingsSafety() {
           <h3>Mixer and demand</h3>
           <div class="form-grid">
             ${fieldRange('mix_safe_pos', 'Safe mixer position', cfg.mix_safe_pos, 0, 1, 0.01, '0–1', 'Position used when the mixer must be parked safely.')}
-            ${fieldNumber('boiler_min_off_ms', 'Boiler minimum off time', cfg.boiler_min_off_ms, 0, 3600000, 1000, 'Milliseconds.', 'int')}
-            ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Seconds without a fresh HA demand.', 'int')}
-            ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Seconds pumps keep running after heating stops.', 'int')}
-            ${fieldNumber('long_pause_s', 'Long-pause threshold', cfg.long_pause_s, 0, 86400, 1, 'Seconds before a long-pause divergence is reported.', 'int')}
+            ${fieldNumber('boiler_min_off_min', 'Boiler minimum off time', cfg.boiler_min_off_ms / 60000, 0, 60, 0.5, 'Minimum boiler off time before it may be re-energized.', 'number', 'min')}
+            ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Time without a fresh HA demand before the demand is dropped.', 'int', 's')}
+            ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Pumps keep running for this long after heating stops.', 'int', 's')}
+            ${fieldNumber('long_pause_min', 'Long-pause threshold', cfg.long_pause_s / 60, 0, 1440, 1, 'Time before a long-pause divergence is reported.', 'number', 'min')}
           </div>
         </div>
 
         <div class="form-section">
           <h3>Maintenance and Test Mode</h3>
           <div class="form-grid">
-            ${fieldNumber('anti_seize_interval_s', 'Anti-seize interval', cfg.anti_seize_interval_s, 3600, 7776000, 3600, 'Seconds between anti-seize runs.', 'int')}
-            ${fieldNumber('test_mode_max_s', 'Test Mode maximum', cfg.test_mode_max_s, 60, 7200, 60, 'Seconds before Test Mode expires automatically.', 'int')}
-            ${fieldNumber('sensor_error_threshold', 'Sensor error threshold', cfg.sensor_error_threshold, 1, 10, 1, 'Consecutive failed reads before a sensor is marked in error.', 'int')}
+            ${fieldNumber('anti_seize_interval_days', 'Anti-seize interval', cfg.anti_seize_interval_s / 86400, 1, 90, 1, 'Time between anti-seize runs.', 'number', 'days')}
+            ${fieldNumber('test_mode_max_min', 'Test Mode maximum', cfg.test_mode_max_s / 60, 1, 120, 1, 'Time before Test Mode expires automatically.', 'number', 'min')}
+            ${fieldNumber('sensor_error_threshold', 'Sensor error threshold', cfg.sensor_error_threshold, 1, 10, 1, 'Consecutive failed reads before a sensor is marked in error.', 'int', 'reads')}
           </div>
         </div>
 
@@ -1402,32 +1411,20 @@ function renderSettingsHardware() {
   const pumpPower = Array.isArray(cfg.has_pump_power) ? cfg.has_pump_power : [false, false, false];
 
   return `<div class="stack">
-    <div class="banner warn">Writable configuration. Pin and tick changes require a reboot to take effect.</div>
+    <div class="banner warn">Writable configuration. GPIO and wiring changes require a reboot to take effect. Timing and control constants live under <a href="#settings/control">Control &amp; Timing</a>.</div>
     <form class="settings-form writable" data-section="hardware">
       <section class="card writable accent-top">
-        <div class="card-head"><div><h2>Hardware &amp; pins</h2><p>Actuator constants, GPIO map and sensor identities</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
+        <div class="card-head"><div><h2>Hardware &amp; pins</h2><p>Carrier wiring, GPIO map and sensor identities</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
 
         <div class="form-section">
-          <h3>Mixer and control constants</h3>
+          <h3>Carrier wiring</h3>
           <div class="form-grid">
-            ${fieldRange('setpoint_default', 'Default setpoint', cfg.setpoint_default, 5, 80, 0.5, '°C', 'Fallback setpoint before HA supplies one.')}
-            ${fieldRange('deadband_pos', 'Position deadband', cfg.deadband_pos, 0, 0.2, 0.005, '0–1', 'Mixer position deadband.')}
-            ${fieldRange('deadband_temp', 'Temperature deadband', cfg.deadband_temp, 0.1, 5, 0.1, 'K', 'Temperature deadband around the setpoint.')}
-            ${fieldRange('recalc_threshold', 'Recalculation threshold', cfg.recalc_threshold, 0.01, 1, 0.01, 'K', 'Minimum temperature change before recalculating.')}
-            ${fieldNumber('min_pulse_ms', 'Minimum pulse', cfg.min_pulse_ms, 10, 1000, 1, 'Milliseconds.', 'int')}
-            ${fieldNumber('max_pulse_ms', 'Maximum pulse', cfg.max_pulse_ms, 10, 10000, 1, 'Milliseconds.', 'int')}
-            ${fieldNumber('pulse_cooldown_ms', 'Pulse cooldown', cfg.pulse_cooldown_ms, 0, 60000, 1, 'Milliseconds between pulses.', 'int')}
-            ${fieldNumber('travel_time_ms', 'Full travel time', cfg.travel_time_ms, 1000, 600000, 1000, 'Milliseconds from closed to open.', 'int')}
-            ${fieldNumber('tick_ms', 'Control tick', cfg.tick_ms, 100, 60000, 100, 'Milliseconds. Reboot required.', 'int')}
-            ${fieldNumber('temp_poll_interval_ms', 'Temperature poll', cfg.temp_poll_interval_ms, 100, 60000, 100, 'Milliseconds between sensor polls.', 'int')}
-            ${fieldNumber('encoder_check_interval_s', 'Encoder check interval', cfg.encoder_check_interval_s, 60, 86400, 60, 'Seconds between encoder plausibility checks.', 'int')}
-            ${fieldNumber('encoder_check_pulses', 'Encoder check pulses', cfg.encoder_check_pulses, 1, 10000, 1, 'Pulses used for the plausibility check.', 'int')}
-            ${fieldNumber('encoder_staleness_s', 'Encoder staleness', cfg.encoder_staleness_s, 10, 86400, 10, 'Seconds before the encoder is considered stale.', 'int')}
-            ${fieldSelect('pos_source', 'Position source', cfg.pos_source, [
-              { value: 0, label: 'HA generic (0)' },
-              { value: 1, label: 'I2C encoder (1)' }
-            ], 'Selects the position feedback source.')}
+            ${fieldSelect('mixer_wiring', 'Mixer wiring', cfg.mixer_wiring, [
+              { value: 0, label: 'Direction + motion (legacy)' },
+              { value: 1, label: 'Open + close (new carrier)' }
+            ], 'The first mixer channel is open/direction; the second is close/motion.')}
           </div>
+          <p class="small faint" style="margin-top:8px">Legacy HHN 1.0 uses a direction bit plus a motion enable. The new carrier uses separate, interlocked open and close relays. Both map to the same two logical channels.</p>
         </div>
 
         <div class="form-section">
@@ -1437,11 +1434,10 @@ function renderSettingsHardware() {
             ${fieldNumber('gpio_pump_rad1', 'Radiator 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_pump_rad2', 'Radiator 2 pump GPIO', cfg.gpio_pump_rad2, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_heater', 'Heater GPIO', cfg.gpio_heater, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_open', 'Mixer open GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_close', 'Mixer close GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_mix_open', 'Mixer open / direction GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_mix_close', 'Mixer close / motion GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_onewire', 'OneWire GPIO', cfg.gpio_onewire, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_led_data', 'LED data GPIO', cfg.gpio_led_data, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('num_leds', 'Number of LEDs', cfg.num_leds, 0, 8, 1, '0 disables the LED ring.', 'int')}
             ${fieldNumber('i2c_sda', 'I2C SDA GPIO', cfg.i2c_sda, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('i2c_scl', 'I2C SCL GPIO', cfg.i2c_scl, 0, 255, 1, pinHelp, 'int')}
           </div>
@@ -1449,23 +1445,79 @@ function renderSettingsHardware() {
 
         <div class="form-section">
           <h3>Sensor identities</h3>
-          <div class="form-grid">
-            ${fieldText('sensor_id_boiler', 'Boiler sensor ID', cfg.sensor_id_boiler, 'Optional unique ID used in logs and UI.', 'text', 'boiler')}
-            ${fieldText('sensor_id_ret', 'Return sensor ID', cfg.sensor_id_ret, 'Optional unique ID used in logs and UI.', 'text', 'return')}
-            ${fieldText('sensor_id_mix', 'Mixer sensor ID', cfg.sensor_id_mix, 'Optional unique ID used in logs and UI.', 'text', 'mix')}
+          <div class="row between" style="margin-bottom:10px">
+            <p class="small faint">Scan the bus, then assign each role from the discovered list.</p>
+            <button class="btn btn-sm" type="button" data-action="discover-sensors" ${state.sensorDiscoveryLoading ? 'disabled' : ''}>${state.sensorDiscoveryLoading ? 'Scanning…' : 'Discover sensors'}</button>
+          </div>
+          ${sensorDiscoveryTable()}
+          <div class="form-grid" style="margin-top:12px">
+            ${fieldSelect('sensor_id_boiler', 'Mixer hot in sensor', cfg.sensor_id_boiler, sensorIdOptions(cfg.sensor_id_boiler), 'Sensor mounted on the boiler side of the mixer.', 'string')}
+            ${fieldSelect('sensor_id_ret', 'Mixer cold in / return sensor', cfg.sensor_id_ret, sensorIdOptions(cfg.sensor_id_ret), 'Sensor on the cold inlet / return side.', 'string')}
+            ${fieldSelect('sensor_id_mix', 'Mixer forward sensor', cfg.sensor_id_mix, sensorIdOptions(cfg.sensor_id_mix), 'Sensor on the mixed flow outlet.', 'string')}
           </div>
         </div>
 
         <div class="form-section">
-          <h3>Pump power feedback</h3>
-          <div class="form-grid">
-            ${fieldCheckbox('has_pump_power', 'Floor pump power sensor', pumpPower[0], 'Enable if a current/power sensor is fitted.', 0)}
-            ${fieldCheckbox('has_pump_power', 'Radiator 1 power sensor', pumpPower[1], 'Enable if a current/power sensor is fitted.', 1)}
-            ${fieldCheckbox('has_pump_power', 'Radiator 2 power sensor', pumpPower[2], 'Enable if a current/power sensor is fitted.', 2)}
+          <h3>Fixed carrier features</h3>
+          <div class="grid cols-2">
+            <div class="metric-row"><span class="k">LED ring</span><span class="v">${esc(cfg.num_leds ?? 0)} LEDs (fixed)</span></div>
+            <div class="metric-row"><span class="k">Pump power</span><span class="v">${pumpPower.some(Boolean) ? 'On-board current sense' : 'Not present'}</span></div>
           </div>
+          <p class="small faint" style="margin-top:8px">The LED count and on-board pump-power sensors are defined by the carrier profile and are not user-selectable.</p>
         </div>
 
         ${formActions('Save hardware settings')}
+      </section>
+    </form>
+  </div>`;
+}
+
+function renderSettingsControl() {
+  const cfg = state.config.hardware;
+  if (!cfg) return loadingCard('Loading control settings…');
+
+  return `<div class="stack">
+    <div class="banner warn">Writable configuration. Tick and timing changes may require a reboot; other values take effect on the next control cycle.</div>
+    <form class="settings-form writable" data-section="hardware">
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Control &amp; timing</h2><p>Mixer constants, encoder and control-loop cadence</p></div><span class="chip chip-warn">NVS</span></div>
+
+        <div class="form-section">
+          <h3>Mixer and control constants</h3>
+          <div class="form-grid">
+            ${fieldRange('setpoint_default', 'Default setpoint', cfg.setpoint_default, 5, 80, 0.5, '°C', 'Fallback setpoint before HA supplies one.')}
+            ${fieldRange('deadband_pos', 'Position deadband', cfg.deadband_pos, 0, 0.2, 0.005, '0–1', 'Mixer position deadband.')}
+            ${fieldRange('deadband_temp', 'Temperature deadband', cfg.deadband_temp, 0.1, 5, 0.1, 'K', 'Temperature deadband around the setpoint.')}
+            ${fieldRange('recalc_threshold', 'Recalculation threshold', cfg.recalc_threshold, 0.01, 1, 0.01, 'K', 'Minimum temperature change before recalculating.')}
+            ${fieldNumber('min_pulse_ms', 'Minimum pulse', cfg.min_pulse_ms, 10, 1000, 1, 'Shortest mixer pulse.', 'int', 'ms')}
+            ${fieldNumber('max_pulse_ms', 'Maximum pulse', cfg.max_pulse_ms, 10, 10000, 1, 'Longest single mixer pulse.', 'int', 'ms')}
+            ${fieldNumber('pulse_cooldown_ms', 'Pulse cooldown', cfg.pulse_cooldown_ms, 0, 60000, 1, 'Minimum time between pulses.', 'int', 'ms')}
+            ${fieldNumber('travel_time_s', 'Full travel time', cfg.travel_time_ms / 1000, 1, 600, 1, 'Time from fully closed to fully open.', 'number', 's')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Cadence</h3>
+          <div class="form-grid">
+            ${fieldNumber('tick_ms', 'Control tick', cfg.tick_ms, 100, 60000, 100, 'Control loop period. Reboot required.', 'int', 'ms')}
+            ${fieldNumber('temp_poll_interval_ms', 'Temperature poll', cfg.temp_poll_interval_ms, 100, 60000, 100, 'Interval between sensor polls. Reboot required.', 'int', 'ms')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Encoder</h3>
+          <div class="form-grid">
+            ${fieldSelect('pos_source', 'Encoder position source', cfg.pos_source, [
+              { value: 0, label: 'HA generic (0)' },
+              { value: 1, label: 'I2C encoder (1)' }
+            ], 'Selects the position feedback source.')}
+            ${fieldNumber('encoder_check_interval_s', 'Encoder check interval', cfg.encoder_check_interval_s, 60, 86400, 60, 'Interval between encoder plausibility checks.', 'int', 's')}
+            ${fieldNumber('encoder_check_pulses', 'Encoder check pulses', cfg.encoder_check_pulses, 1, 10000, 1, 'Pulses used for the plausibility check.', 'int', 'pulses')}
+            ${fieldNumber('encoder_staleness_s', 'Encoder staleness', cfg.encoder_staleness_s, 10, 86400, 10, 'Time before the encoder is considered stale.', 'int', 's')}
+          </div>
+        </div>
+
+        ${formActions('Save control settings')}
       </section>
     </form>
   </div>`;
@@ -1480,10 +1532,12 @@ function renderSettingsNetwork() {
   if (!cfg) return loadingCard('Loading network settings…');
   const wifi = state.live?.wifi || state.status?.wifi || {};
   const mqtt = state.live?.mqtt || state.status?.mqtt || {};
+  const ntp = state.status?.ntp || {};
   const mqttState = mqtt.connected ? `connected ${esc(mqtt.broker || '')}` : esc(mqtt.state || (mqtt.enabled ? 'offline' : 'disabled'));
+  const ntpState = ntp.synced ? 'synchronized' : (ntp.enabled ? 'waiting for sync' : 'disabled');
 
   return `<div class="stack">
-    <div class="banner warn">Writable configuration. Wi-Fi changes require a reboot; MQTT reconnects automatically after saving.</div>
+    <div class="banner warn">Writable configuration. Wi-Fi, NTP and timezone changes require a reboot; MQTT reconnects automatically after saving.</div>
     <form class="settings-form writable" data-section="network">
       <section class="card writable accent-top">
         <div class="card-head">
@@ -1512,6 +1566,18 @@ function renderSettingsNetwork() {
             ${fieldText('mqtt_user', 'Username', cfg.mqtt_user, 'Optional broker username.', 'text', '')}
             ${fieldPassword('mqtt_pass', 'Password', cfg.has_mqtt_password, 'Leave blank to keep the stored password.')}
             ${fieldText('mqtt_base_topic', 'Base topic', cfg.mqtt_base_topic, 'Topic prefix used by HA discovery and state publishing.', 'text', 'heatpumpsn/controller')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="row between">
+            <h3>Time synchronization</h3>
+            <span class="chip ${ntp.synced ? 'chip-ok' : (ntp.enabled ? 'chip-warn' : '')}">${esc(ntpState)}</span>
+          </div>
+          <div class="form-grid">
+            ${fieldCheckbox('ntp_enabled', 'Enable NTP', cfg.ntp_enabled, 'Synchronize the controller wall clock over SNTP.')}
+            ${fieldText('ntp_server', 'NTP server', cfg.ntp_server, 'Hostname or IP address of the NTP server.', 'text', 'pool.ntp.org')}
+            ${fieldText('timezone', 'POSIX timezone', cfg.timezone, 'POSIX TZ string, for example CET-1CEST,M3.5.0,M10.5.0/3.', 'text', 'CET-1CEST,M3.5.0,M10.5.0/3')}
           </div>
         </div>
 
@@ -1581,16 +1647,18 @@ function renderSettingsSystem() {
   const cfg = state.config.system;
   if (!cfg) return loadingCard('Loading system settings…');
   const status = state.status || {};
+  const ntp = status.ntp || {};
   const theme = localStorage.getItem('hpn-theme') || 'dark';
 
   return `<div class="stack">
     <form class="settings-form writable" data-section="system">
       <section class="card writable accent-top">
-        <div class="card-head"><div><h2>System</h2><p>Local mode and presentation</p></div><span class="chip">LOCAL</span></div>
+        <div class="card-head"><div><h2>System</h2><p>Hostname, local mode and presentation</p></div><span class="chip">LOCAL</span></div>
 
         <div class="form-section">
-          <h3>Operating mode</h3>
+          <h3>Identity and operating mode</h3>
           <div class="form-grid">
+            ${fieldText('hostname', 'Hostname', cfg.hostname, 'DHCP/mDNS hostname. Letters, digits, hyphen and dot; reboot required.', 'text', 'heatpumpsn')}
             ${fieldCheckbox('summer_mode', 'Summer mode', cfg.summer_mode, 'Disables heating demand while still allowing circulation and diagnostics.')}
             <div class="field">
               <label for="theme-select">Theme</label>
@@ -1616,8 +1684,9 @@ function renderSettingsSystem() {
         <dt>Uptime</dt><dd>${fmtUptime(status.uptime || 0)}</dd>
         <dt>Free heap</dt><dd>${fmtBytes(status.freeHeap)}</dd>
         <dt>Wi-Fi</dt><dd>${esc(status.wifi?.ip || '—')} · ${esc(status.wifi?.state || '—')}</dd>
+        <dt>Hostname</dt><dd>${esc(status.hostname || cfg.hostname || '—')}</dd>
+        <dt>Time</dt><dd>${ntp.synced ? `synchronized · ${esc(fmtEpoch(ntp.epoch))}` : (ntp.enabled ? 'waiting for NTP sync' : 'NTP disabled')}</dd>
       </div>
-      <div class="banner info" style="margin-top:12px">Hostname, NTP and timezone are not yet part of Config, so they are not exposed as editable fields.</div>
     </section>
 
     <section class="card guarded">
@@ -1737,12 +1806,39 @@ function collectForm(form) {
   return data;
 }
 
+function normalizeSettings(section, data) {
+  if (section === 'safety') {
+    if (Number.isFinite(Number(data.anti_seize_interval_days))) {
+      data.anti_seize_interval_s = Math.round(Number(data.anti_seize_interval_days) * 86400);
+      delete data.anti_seize_interval_days;
+    }
+    if (Number.isFinite(Number(data.test_mode_max_min))) {
+      data.test_mode_max_s = Math.round(Number(data.test_mode_max_min) * 60);
+      delete data.test_mode_max_min;
+    }
+    if (Number.isFinite(Number(data.boiler_min_off_min))) {
+      data.boiler_min_off_ms = Math.round(Number(data.boiler_min_off_min) * 60000);
+      delete data.boiler_min_off_min;
+    }
+    if (Number.isFinite(Number(data.long_pause_min))) {
+      data.long_pause_s = Math.round(Number(data.long_pause_min) * 60);
+      delete data.long_pause_min;
+    }
+  } else if (section === 'hardware') {
+    if (Number.isFinite(Number(data.travel_time_s))) {
+      data.travel_time_ms = Math.round(Number(data.travel_time_s) * 1000);
+      delete data.travel_time_s;
+    }
+  }
+  return data;
+}
+
 async function saveSettingsForm(form) {
   const section = form.dataset.section;
   const submit = form.querySelector('button[type="submit"]');
   if (submit) submit.disabled = true;
   try {
-    const result = await apiPut(`/api/config/${section}`, collectForm(form));
+    const result = await apiPut(`/api/config/${section}`, normalizeSettings(section, collectForm(form)));
     setDirty(false);
     form.classList.remove('dirty');
     toast(
@@ -2068,6 +2164,9 @@ async function handleViewClick(event) {
       renderCurrent();
       toast('Counters refreshed.', 'ok', 1800);
       break;
+    case 'discover-sensors':
+      await discoverSensors();
+      break;
     case 'export-events':
       exportEvents();
       break;
@@ -2124,11 +2223,6 @@ const routes = {
     subtitle: 'Live overview',
     render: renderDashboard
   },
-  plant: {
-    title: 'Plant',
-    subtitle: 'Circuits, heater and mixer temperatures',
-    render: renderPlant
-  },
   'log/events': {
     title: 'Event Log',
     subtitle: 'Controller events and portal access records',
@@ -2139,18 +2233,21 @@ const routes = {
     title: 'Slow Log',
     subtitle: '10-second temperature and position samples',
     render: renderSlowLog,
-    enter: async () => { await refreshSlow(); }
+    enter: () => {
+      refreshSlow().then(() => {
+        if (state.route === 'log/slow') renderCurrent();
+      });
+    }
   },
-  'log/sensors': {
-    title: 'Sensor Health',
-    subtitle: 'Validity, age and error counts',
-    render: renderSensors
-  },
-  'log/counters': {
-    title: 'Relay Counters',
-    subtitle: 'Cycles and estimated runtime',
-    render: renderCounters,
-    enter: async () => { await refreshCounters(); }
+  diagnostics: {
+    title: 'Diagnostics',
+    subtitle: 'Sensor health and relay counters',
+    render: renderDiagnostics,
+    enter: () => {
+      refreshCounters().then(() => {
+        if (state.route === 'diagnostics') renderCurrent();
+      });
+    }
   },
   test: {
     title: 'Test Mode',
@@ -2165,15 +2262,21 @@ const routes = {
   },
   'settings/hardware': {
     title: 'Hardware & Pins',
-    subtitle: 'Writable actuator and GPIO configuration',
+    subtitle: 'Carrier wiring, GPIO map and sensor identities',
     render: renderSettingsHardware,
+    enter: async () => { await refreshConfig('hardware'); }
+  },
+  'settings/control': {
+    title: 'Control & Timing',
+    subtitle: 'Mixer constants, encoder and control cadence',
+    render: renderSettingsControl,
     enter: async () => { await refreshConfig('hardware'); }
   },
   'settings/network': {
     title: 'Network & MQTT',
-    subtitle: 'Writable Wi-Fi and broker configuration',
+    subtitle: 'Writable Wi-Fi, broker and time configuration',
     render: renderSettingsNetwork,
-    enter: async () => { await refreshConfig('network'); }
+    enter: async () => { await Promise.all([refreshConfig('network'), refreshStatus()]); }
   },
   'settings/firmware': {
     title: 'Firmware Update',
@@ -2183,9 +2286,9 @@ const routes = {
   },
   'settings/system': {
     title: 'System',
-    subtitle: 'Local mode, presentation and maintenance',
+    subtitle: 'Hostname, local mode and maintenance',
     render: renderSettingsSystem,
-    enter: async () => { await refreshConfig('system'); }
+    enter: async () => { await Promise.all([refreshConfig('system'), refreshStatus()]); }
   },
   runtime: {
     title: 'Runtime Parameters',
@@ -2219,9 +2322,9 @@ async function tick() {
   } else if (state.route === 'log/slow') {
     await refreshSlow();
     if (state.route === 'log/slow') renderCurrent();
-  } else if (state.route === 'log/counters') {
+  } else if (state.route === 'diagnostics' && now - state.lastCountersFetch > 30000) {
     await refreshCounters();
-    if (state.route === 'log/counters') renderCurrent();
+    if (state.route === 'diagnostics') renderCurrent();
   } else if (state.route === 'runtime' && now - state.lastRuntimeFetch > 30000) {
     await refreshRuntime();
     if (state.route === 'runtime') renderCurrent();

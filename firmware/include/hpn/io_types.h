@@ -38,6 +38,14 @@ constexpr uint8_t kTempRoleCount = static_cast<uint8_t>(TempRole::Count);
 constexpr uint8_t kCurrentChannelCount = static_cast<uint8_t>(CurrentChannel::Count);
 constexpr uint8_t kRelayCount = static_cast<uint8_t>(Relay::Count);
 
+// One entry returned by a 1-Wire discovery scan. The ID is the 16 hex digits
+// of the 64-bit ROM address, without the 0x prefix.
+struct TemperatureSensorInfo {
+  char id[17];
+  float celsius;
+  bool valid;
+};
+
 // Upper bound for emulated addressable LEDs and recorded GPIOs in the model.
 constexpr uint8_t kMaxLeds = 8;
 constexpr uint8_t kMaxGpio = 48;

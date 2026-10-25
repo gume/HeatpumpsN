@@ -56,5 +56,10 @@ void delay_us(uint32_t us);
 bool read_temperature(TempRole role, float& celsius);
 float read_power_w(CurrentChannel channel);
 
+// Enumerate temperature sensors on the active carrier bus. On hardware this
+// performs a blocking 1-Wire conversion (~750 ms); only call it from an
+// explicit user action.
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count);
+
 }  // namespace io
 }  // namespace hpn

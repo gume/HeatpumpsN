@@ -7,11 +7,16 @@ platform builder does not run the Arduino framework script, so
     Could not find the file  with partitions table.
 
 The pre-script below writes the project's partition table into the build
-directory on the remote host and points the builder at it. The post-script then
-replaces ``UPLOADCMD`` with an explicit application offset, because
-``ESP32_APP_OFFSET`` is also empty under ``nobuild``. The filesystem target
-already has its offset in ``UPLOADERFLAGS``, so it only needs ``SOURCE``
-appended.
+directory on the remote host, generates the matching partition-table binary and
+a blank OTA-data image, and points the builder at it. The post-script then
+replaces ``UPLOADCMD`` with an explicit image list, because
+``ESP32_APP_OFFSET`` is also empty under ``nobuild``.
+
+Flashing the new table together with the application is required after changing
+the partition layout. The blank OTA-data image makes the bootloader select
+app0, so an old app1 at its previous offset cannot be selected by accident.
+The filesystem target already has its offset in ``UPLOADERFLAGS``, so it only
+needs ``SOURCE`` appended.
 
 This file lives in ``src/`` because PlatformIO Remote synchronizes the source
 directory but not arbitrary project-root helper files.
@@ -19,18 +24,60 @@ directory but not arbitrary project-root helper files.
 
 Import("env")
 
+import hashlib
 import os
+import struct
 from SCons.Script import COMMAND_LINE_TARGETS
 
-PARTITION_TABLE = """\
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x5000,
-otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x140000,
-app1,     app,  ota_1,   0x150000,0x140000,
-spiffs,   data, spiffs,  0x290000,0x160000,
-coredump, data, coredump,0x3F0000,0x10000,
-"""
+# Keep this in sync with firmware/partitions.csv.
+PARTITIONS = [
+    # name,       type, subtype, offset,    size
+    ("nvs",       1,    0x02,    0x9000,     0x5000),
+    ("otadata",   1,    0x00,    0xE000,     0x2000),
+    ("app0",      0,    0x10,    0x10000,    0x190000),
+    ("app1",      0,    0x11,    0x1A0000,   0x190000),
+    ("spiffs",    1,    0x82,    0x330000,   0xC0000),
+    ("coredump",  1,    0x03,    0x3F0000,   0x10000),
+]
+
+TYPE_NAMES = {0: "app", 1: "data"}
+SUBTYPE_NAMES = {
+    (1, 0x00): "ota",
+    (1, 0x02): "nvs",
+    (1, 0x03): "coredump",
+    (1, 0x82): "spiffs",
+    (0, 0x10): "ota_0",
+    (0, 0x11): "ota_1",
+}
+
+PARTITION_TABLE = "# Name,   Type, SubType, Offset,   Size,     Flags\n" + "".join(
+    "{}, {}, {}, 0x{:X}, 0x{:X},\n".format(
+        name,
+        TYPE_NAMES[type_code],
+        SUBTYPE_NAMES[(type_code, subtype_code)],
+        offset,
+        size,
+    )
+    for name, type_code, subtype_code, offset, size in PARTITIONS
+)
+
+
+def write_partition_bin(path):
+    """Write an ESP-IDF partition table with its optional MD5 checksum entry."""
+    data = bytearray()
+    for name, type_code, subtype_code, offset, size in PARTITIONS:
+        label = name.encode("ascii")[:16].ljust(16, b"\0")
+        data += struct.pack(
+            "<HBBII16sI", 0x50AA, type_code, subtype_code, offset, size, label, 0
+        )
+    digest = hashlib.md5(bytes(data)).digest()
+    data += struct.pack("<H", 0xEBEB) + (b"\xFF" * 14) + digest
+    # The partition table partition is 0xC00 bytes; pad like gen_esp32part.py.
+    if len(data) < 0xC00:
+        data += b"\xFF" * (0xC00 - len(data))
+    with open(path, "wb") as fp:
+        fp.write(data)
+
 
 # --- pre: make the partition table discoverable under nobuild ---------------
 if not env.get("HPN_REMOTE_UPLOAD_POST"):
@@ -39,6 +86,9 @@ if not env.get("HPN_REMOTE_UPLOAD_POST"):
     partitions_csv = os.path.join(build_dir, "hpn_partitions.csv")
     with open(partitions_csv, "w", encoding="utf-8") as fp:
         fp.write(PARTITION_TABLE)
+    write_partition_bin(os.path.join(build_dir, "partitions.bin"))
+    with open(os.path.join(build_dir, "otadata.bin"), "wb") as fp:
+        fp.write(b"\xFF" * 0x2000)
     env.Replace(PARTITIONS_TABLE_CSV=partitions_csv)
     env["HPN_REMOTE_UPLOAD_POST"] = True
 
@@ -49,6 +99,21 @@ else:
             UPLOADCMD='"$PYTHONEXE" "$UPLOADER" $UPLOADERFLAGS "$SOURCE"'
         )
     else:
+        build_dir = env.subst("$BUILD_DIR")
+        partitions_bin = os.path.join(build_dir, "partitions.bin").replace("\\", "/")
+        otadata_bin = os.path.join(build_dir, "otadata.bin").replace("\\", "/")
+        flags = env.subst("$UPLOADERFLAGS").lower()
+        images = []
+        # A full build already puts the bootloader, partition table and
+        # boot_app0 into UPLOADERFLAGS. A remote nobuild does not, so add the
+        # generated partition table and a blank OTA-data image only when they
+        # are missing. This keeps both paths free of overlapping flash ranges.
+        if "0x8000" not in flags and "partitions.bin" not in flags:
+            images.append('0x8000 "{}"'.format(partitions_bin))
+        if "0xe000" not in flags and "boot_app0.bin" not in flags:
+            images.append('0xE000 "{}"'.format(otadata_bin))
+        if "0x10000" not in flags:
+            images.append('0x10000 "$SOURCE"')
         env.Replace(
-            UPLOADCMD='"$PYTHONEXE" "$UPLOADER" $UPLOADERFLAGS 0x10000 "$SOURCE"'
+            UPLOADCMD='"$PYTHONEXE" "$UPLOADER" $UPLOADERFLAGS ' + " ".join(images)
         )

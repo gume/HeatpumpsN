@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #if defined(HPN_IO_EMULATION)
@@ -100,12 +101,17 @@ bool controller_relay_state(const Model& model, Relay relay) {
 }
 
 bool controller_mixer_motion(const Model& model) {
+  const bool open_close = model.config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
   if (model.board.output_backend == OutputBackend::ShiftRegister) {
-    return bit_is_set(model.output_byte, model.board.sr_bit_mix_motion);
+    const bool first = bit_is_set(model.output_byte, model.board.sr_bit_mix_direction);
+    const bool second = bit_is_set(model.output_byte, model.board.sr_bit_mix_motion);
+    return open_close ? (first || second) : second;
   }
-  // Direct carriers use two separate, interlocked relays.
-  return pin_is_high(model, model.config.gpio_mix_open) ||
-         pin_is_high(model, model.config.gpio_mix_close);
+  const bool first = pin_is_high(model, model.config.gpio_mix_open);
+  const bool second = pin_is_high(model, model.config.gpio_mix_close);
+  // New carrier: two interlocked open/close relays. Legacy carrier: the first
+  // pin is direction and the second is the motion enable.
+  return open_close ? (first || second) : second;
 }
 
 bool controller_mixer_open(const Model& model) {
@@ -493,6 +499,45 @@ float read_power_w(CurrentChannel channel) {
   watts = effective_power(g_model, channel);
   taskEXIT_CRITICAL(&g_mux);
   return watts;
+}
+
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {
+  if (out == nullptr || max_count == 0) {
+    return 0;
+  }
+
+  const TempRole roles[] = {TempRole::Boiler, TempRole::ReturnFloor, TempRole::MixOut};
+  const char* fallback_ids[] = {"sim-boiler", "sim-return", "sim-mix"};
+  const uint32_t now_ms = millis();
+  uint8_t count = 0;
+
+  taskENTER_CRITICAL(&g_mux);
+  for (uint8_t i = 0; i < kTempRoleCount && count < max_count; ++i) {
+    const char* configured = nullptr;
+    switch (roles[i]) {
+      case TempRole::Boiler:
+        configured = g_model.config.sensor_id_boiler;
+        break;
+      case TempRole::ReturnFloor:
+        configured = g_model.config.sensor_id_ret;
+        break;
+      case TempRole::MixOut:
+        configured = g_model.config.sensor_id_mix;
+        break;
+      default:
+        break;
+    }
+    const char* id = (configured != nullptr && configured[0] != '\0') ? configured : fallback_ids[i];
+    snprintf(out[count].id, sizeof(out[count].id), "%s", id);
+    out[count].celsius = effective_temperature(g_model, roles[i], now_ms);
+    out[count].valid = (roles[i] == TempRole::Boiler && g_model.realistic_boiler)
+                           ? true
+                           : g_model.temperature_valid[static_cast<size_t>(roles[i])];
+    ++count;
+  }
+  taskEXIT_CRITICAL(&g_mux);
+
+  return count;
 }
 
 }  // namespace sim

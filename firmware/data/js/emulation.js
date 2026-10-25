@@ -180,11 +180,14 @@ function renderPowerControls(power, powerSet, snapshot) {
   }).join('');
 }
 
-function relayButton(relay, on, override) {
-  return `<button class="btn btn-sm emu-relay-btn ${on ? 'is-on' : ''}" type="button" data-sim-relay="${relay}" data-on="${on ? 'true' : 'false'}" aria-pressed="${on ? 'true' : 'false'}">
-    <span>${esc(RELAY_LABELS[relay])}</span>
-    <span class="emu-relay-btn-state">${on ? 'ON' : 'OFF'}</span>
-    ${override ? '<span class="emu-manual" title="manual override">M</span>' : ''}
+function relayCard(relay, on, override, watts = null) {
+  return `<button class="emu-relay-card ${on ? 'is-on' : ''}" type="button" data-sim-relay="${relay}" data-on="${on ? 'true' : 'false'}" aria-pressed="${on ? 'true' : 'false'}">
+    <span class="emu-relay-card-head">
+      <span>${esc(RELAY_LABELS[relay] || relay)}</span>
+      ${override ? '<span class="emu-manual" title="manual override">M</span>' : ''}
+    </span>
+    <span class="emu-relay-card-state">${on ? 'ON' : 'OFF'}</span>
+    <span class="emu-relay-card-meta">${watts === null ? 'carrier relay' : `${fmtNum(watts, 1)} W`}</span>
   </button>`;
 }
 
@@ -197,73 +200,69 @@ function renderStage(snapshot) {
 
   return `<section class="emu-stage">
     <div class="emu-block">
-      <h3>Relay outputs — direct emulation</h3>
-      <div class="emu-relay-buttons">
-        ${relayButton('heater', !!relays.heater, !!relayOverride.heater)}
-        ${relayButton('floor', !!relays.floor, !!relayOverride.floor)}
-        ${relayButton('rad1', !!relays.rad1, !!relayOverride.rad1)}
-        ${relayButton('rad2', !!relays.rad2, !!relayOverride.rad2)}
+      <h3>Relay outputs</h3>
+      <div class="emu-relay-grid">
+        ${relayCard('heater', !!relays.heater, !!relayOverride.heater)}
+        ${relayCard('floor', !!relays.floor, !!relayOverride.floor, num(power.floor, 0))}
+        ${relayCard('rad1', !!relays.rad1, !!relayOverride.rad1, num(power.rad1, 0))}
+        ${relayCard('rad2', !!relays.rad2, !!relayOverride.rad2, num(power.rad2, 0))}
       </div>
-      <p class="emu-note">Click a relay to toggle it. Manual toggles override the controller; this path does not run L1 and has no heater/pump interlock.</p>
+      <p class="emu-note">Click a relay card to toggle it. Manual toggles override the controller; this path does not run L1 and has no heater/pump interlock.</p>
     </div>
 
-    <div class="emu-block emu-heater ${relays.heater ? 'on' : ''}">
-      <h3>Heater relay</h3>
-      <div class="coil">♨</div>
-      ${relayPill(!!relays.heater)}
-      <div class="metric-sub" style="margin-top:6px">Emulated carrier output</div>
-    </div>
+    <div class="emu-stage-grid">
+      <div class="emu-block emu-mixer">
+        <h3>Mixer motor ${mixer.override ? '<span class="emu-manual">manual</span>' : ''}</h3>
+        <div class="row between">
+          ${relayPill(!!mixer.motion)}
+          <span class="chip">${mixer.motion ? (mixer.open ? 'open command' : 'close command') : 'idle'}</span>
+        </div>
+        <div class="mixer-bar" style="margin-top:10px">
+          <span class="${mixer.motion ? 'moving' : ''}" style="left:${mixer.open ? '50%' : '0%'};width:50%"></span>
+        </div>
+        <div class="mixer-labels"><span>closed</span><span>open</span></div>
+        <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" type="button" data-sim-mixer="open">Open</button>
+          <button class="btn btn-sm" type="button" data-sim-mixer="stop">Stop</button>
+          <button class="btn btn-sm" type="button" data-sim-mixer="close">Close</button>
+        </div>
+        <p class="emu-note">${mixer.motion ? `Motor energized (${mixer.open ? 'opening' : 'closing'}), ${fmtNum(power.mixer, 1)} W.` : `Motor idle, ${fmtNum(power.mixer, 1)} W.`}</p>
+      </div>
 
-    <div class="emu-pumps">
-      <div class="emu-block emu-pump ${relays.floor ? 'on' : ''}">
-        <h3>Floor pump</h3>
-        <div class="fan">✱</div>
-        ${relayPill(!!relays.floor)}
-        <div class="metric-sub">${fmtNum(power.floor, 1)} W</div>
+      <div class="emu-block">
+        <h3>Carrier readout</h3>
+        <div class="emu-readout">
+          <div class="kv"><dt>Controller mux</dt><dd>${num(snapshot.muxChannel, 0)}</dd></div>
+          <div class="kv"><dt>Controller output byte</dt><dd>0x${outputByte.toString(16).padStart(2, '0')} (${outputByte})</dd></div>
+          <div class="kv"><dt>Output enable</dt><dd>${snapshot.outputEnabled ? 'asserted' : 'deasserted'}</dd></div>
+          <div class="kv"><dt>Model revision</dt><dd>${num(snapshot.revision, 0)}</dd></div>
+        </div>
+        <p class="emu-note" style="margin-top:8px">The output byte is L0's last latch. Manual relay cards can override the emulated board without changing L0.</p>
       </div>
-      <div class="emu-block emu-pump ${relays.rad1 ? 'on' : ''}">
-        <h3>Radiator 1</h3>
-        <div class="fan">✱</div>
-        ${relayPill(!!relays.rad1)}
-        <div class="metric-sub">${fmtNum(power.rad1, 1)} W</div>
-      </div>
-      <div class="emu-block emu-pump ${relays.rad2 ? 'on' : ''}">
-        <h3>Radiator 2</h3>
-        <div class="fan">✱</div>
-        ${relayPill(!!relays.rad2)}
-        <div class="metric-sub">${fmtNum(power.rad2, 1)} W</div>
-      </div>
-    </div>
-
-    <div class="emu-block emu-mixer">
-      <h3>Mixer motor ${mixer.override ? '<span class="emu-manual">manual</span>' : ''}</h3>
-      <div class="row between">
-        ${relayPill(!!mixer.motion)}
-        <span class="chip">${mixer.motion ? (mixer.open ? 'open command' : 'close command') : 'idle'}</span>
-      </div>
-      <div class="mixer-bar" style="margin-top:10px">
-        <span class="${mixer.motion ? 'moving' : ''}" style="left:${mixer.open ? '50%' : '0%'};width:50%"></span>
-      </div>
-      <div class="mixer-labels"><span>closed</span><span>open</span></div>
-      <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
-        <button class="btn btn-sm" type="button" data-sim-mixer="open">Open</button>
-        <button class="btn btn-sm" type="button" data-sim-mixer="stop">Stop</button>
-        <button class="btn btn-sm" type="button" data-sim-mixer="close">Close</button>
-      </div>
-      <p class="emu-note">${mixer.motion ? `Motor energized (${mixer.open ? 'opening' : 'closing'}), ${fmtNum(power.mixer, 1)} W.` : `Motor idle, ${fmtNum(power.mixer, 1)} W.`}</p>
-    </div>
-
-    <div class="emu-block" style="margin-top:16px">
-      <h3>Carrier readout</h3>
-      <div class="emu-readout">
-        <div class="kv"><dt>Controller mux</dt><dd>${num(snapshot.muxChannel, 0)}</dd></div>
-        <div class="kv"><dt>Controller output byte</dt><dd>0x${outputByte.toString(16).padStart(2, '0')} (${outputByte})</dd></div>
-        <div class="kv"><dt>Output enable</dt><dd>${snapshot.outputEnabled ? 'asserted' : 'deasserted'}</dd></div>
-        <div class="kv"><dt>Model revision</dt><dd>${num(snapshot.revision, 0)}</dd></div>
-      </div>
-      <p class="emu-note" style="margin-top:8px">The output byte is L0's last latch. Manual relay buttons can override the emulated board without changing L0.</p>
     </div>
   </section>`;
+}
+
+function syncLiveReadouts(snapshot) {
+  const temps = snapshotMap(snapshot);
+  for (const role of Object.keys(TEMP_LABELS)) {
+    const item = temps[role];
+    if (!item) continue;
+    const value = num(item.value, 0);
+    const range = root.querySelector(`[data-temp-range="${role}"]`);
+    const number = root.querySelector(`[data-temp-value="${role}"]`);
+    if (range && document.activeElement !== range) range.value = value;
+    if (number && document.activeElement !== number) number.value = value;
+  }
+
+  const powerSet = snapshot.powerSet || {};
+  for (const channel of Object.keys(POWER_LABELS)) {
+    const value = num(powerSet[channel], POWER_DEFAULTS[channel]);
+    const range = root.querySelector(`[data-power-range="${channel}"]`);
+    const number = root.querySelector(`[data-power-value="${channel}"]`);
+    if (range && document.activeElement !== range) range.value = value;
+    if (number && document.activeElement !== number) number.value = value;
+  }
 }
 
 function render() {
@@ -306,7 +305,7 @@ function render() {
         <div class="card-head"><div><h2>Emulation behavior</h2><p>Follow the controller or drive the board directly</p></div><span class="chip">${esc(followChip)}</span></div>
         <div class="stack">
           <label class="checkbox-row"><input type="checkbox" data-sim-follow ${snapshot.followController ? 'checked' : ''}> Follow controller relays</label>
-          <p class="small faint">When on, L0 drives the emulated relays and mixer. Click a relay button to override one channel; clear overrides to resume following.</p>
+          <p class="small faint">When on, L0 drives the emulated relays and mixer. Click a relay card to override one channel; clear overrides to resume following.</p>
 
           <label class="checkbox-row"><input type="checkbox" data-sim-realistic-power ${snapshot.realisticPower ? 'checked' : ''}> Realistic current sensors</label>
           <p class="small faint">Pump power follows its relay (default 10 W); mixer power follows motion (default 2 W). Set a different on/moving wattage below.</p>
@@ -347,6 +346,7 @@ async function refreshSim() {
   try {
     state.snapshot = await api('/api/sim');
     state.error = null;
+    syncLiveReadouts(state.snapshot);
   } catch (err) {
     state.error = err.message;
   }

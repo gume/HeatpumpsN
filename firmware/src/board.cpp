@@ -90,6 +90,7 @@ void board_apply_defaults(Config& config) {
   config.travel_time_ms = 145000;
   config.setpoint_default = 35.0f;
   config.floor_setpoint_shadow = 35.0f;
+  config.mixer_wiring = MIX_WIRING_DIRECTION_MOTION;
 
   // ROM IDs from analysis/OLD-CODE/heatpumps.yaml. Config stores the 16 hex
   // digits without the 0x prefix so they fit in char[17].

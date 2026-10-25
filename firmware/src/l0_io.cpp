@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <time.h>
 
 #include "hpn/io_backend.h"
 
@@ -219,6 +220,13 @@ void apply_safe_state() {
 void tick(const Config& config, const BoardConfig& board, SystemState& state) {
   const uint32_t now = millis();
 
+  // Publish the synchronized wall clock once SNTP has a valid epoch. Keeping
+  // this in L0 avoids pulling <time.h> into every layer that reads the state.
+  const time_t epoch = time(nullptr);
+  if (epoch > 1600000000) {
+    state.wall_time_epoch_s = static_cast<uint64_t>(epoch);
+  }
+
   // Poll the temperature seam. On hardware the 1-Wire backend still reports
   // "no data"; under emulation these are the mocked values from hpn::sim.
   if (now - g_last_temp_poll_ms >= config.temp_poll_interval_ms) {
@@ -279,36 +287,54 @@ void set_relay(Relay relay, bool on) {
 }
 
 void set_mixer_motor(bool enabled, bool open_direction) {
-  if (g_board.output_backend == OutputBackend::ShiftRegister) {
-    const uint8_t direction_bit = g_board.sr_bit_mix_direction;
-    const uint8_t motion_bit = g_board.sr_bit_mix_motion;
+  const bool open_close = g_config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
 
-    if (open_direction) {
-      g_sr_cache |= static_cast<uint8_t>(1u << direction_bit);
+  if (g_board.output_backend == OutputBackend::ShiftRegister) {
+    // The two carrier channels are logical open/direction and close/motion.
+    // Legacy HHN 1.0 uses direction + motion enable; the new carrier uses two
+    // interlocked open/close relays. Reuse the same two bits for both modes.
+    const uint8_t open_or_direction_bit = g_board.sr_bit_mix_direction;
+    const uint8_t close_or_motion_bit = g_board.sr_bit_mix_motion;
+    const bool first_on = open_close ? (enabled && open_direction) : open_direction;
+    const bool second_on = open_close ? (enabled && !open_direction) : enabled;
+
+    if (first_on) {
+      g_sr_cache |= static_cast<uint8_t>(1u << open_or_direction_bit);
     } else {
-      g_sr_cache &= static_cast<uint8_t>(~(1u << direction_bit));
+      g_sr_cache &= static_cast<uint8_t>(~(1u << open_or_direction_bit));
     }
 
-    if (enabled) {
-      g_sr_cache |= static_cast<uint8_t>(1u << motion_bit);
+    if (second_on) {
+      g_sr_cache |= static_cast<uint8_t>(1u << close_or_motion_bit);
     } else {
-      g_sr_cache &= static_cast<uint8_t>(~(1u << motion_bit));
+      g_sr_cache &= static_cast<uint8_t>(~(1u << close_or_motion_bit));
     }
 
     write_shift_register();
     return;
   }
 
-  // Direct-GPIO carriers use separate, hardware-interlocked open/close relays.
   const bool can_open = is_assigned(g_config.gpio_mix_open);
   const bool can_close = is_assigned(g_config.gpio_mix_close);
+  if (open_close) {
+    // Separate, hardware-interlocked open/close relays.
+    if (can_open) {
+      io::write_pin(g_config.gpio_mix_open,
+                    (enabled && open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    }
+    if (can_close) {
+      io::write_pin(g_config.gpio_mix_close,
+                    (enabled && !open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    }
+    return;
+  }
+
+  // Legacy direction + motion: first channel is direction, second is enable.
   if (can_open) {
-    io::write_pin(g_config.gpio_mix_open,
-                  (enabled && open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    io::write_pin(g_config.gpio_mix_open, open_direction ? kActuatorOnLevel : kActuatorOffLevel);
   }
   if (can_close) {
-    io::write_pin(g_config.gpio_mix_close,
-                  (enabled && !open_direction) ? kActuatorOnLevel : kActuatorOffLevel);
+    io::write_pin(g_config.gpio_mix_close, enabled ? kActuatorOnLevel : kActuatorOffLevel);
   }
 }
 
@@ -328,6 +354,10 @@ bool read_temperature(TempRole role, float& celsius) {
 
 float read_power_w(CurrentChannel channel) {
   return io::read_power_w(channel);
+}
+
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {
+  return io::discover_temperature_sensors(out, max_count);
 }
 
 bool select_current_channel(CurrentChannel channel) {

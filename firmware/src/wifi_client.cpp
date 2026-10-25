@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <time.h>
 
 namespace hpn {
 namespace wifi {
@@ -9,7 +10,6 @@ namespace {
 
 constexpr uint32_t kRetryIntervalMs = 10000;
 constexpr uint32_t kRssiLogIntervalMs = 60000;
-constexpr const char* kHostname = "heatpumpsn";
 
 Status g_status{};
 uint32_t g_last_attempt_ms = 0;
@@ -17,6 +17,7 @@ uint32_t g_last_rssi_log_ms = 0;
 wl_status_t g_last_wl_status = WL_IDLE_STATUS;
 bool g_started = false;
 bool g_scanned = false;
+bool g_ntp_started = false;
 
 const char* wl_name(wl_status_t status) {
   switch (status) {
@@ -47,7 +48,7 @@ void begin_connection(const Config& config) {
 
 // If the configured AP is not visible, list nearby 2.4 GHz networks once. This
 // turns a silent "no AP" into an actionable bench/provisioning message.
-void log_scan_once() {
+void log_scan_once(const Config& config) {
   if (g_scanned) {
     return;
   }
@@ -61,7 +62,7 @@ void log_scan_once() {
   WiFi.disconnect(true, false);
   delay(250);
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname(kHostname);
+  WiFi.setHostname(config.hostname[0] != '\0' ? config.hostname : "heatpumpsn");
   delay(250);
 
   const int16_t count = WiFi.scanNetworks(false, true);
@@ -83,6 +84,16 @@ void log_scan_once() {
   g_last_attempt_ms = millis();
 }
 
+void start_ntp(const Config& config) {
+  if (g_ntp_started || !config.ntp_enabled || config.ntp_server[0] == '\0') {
+    return;
+  }
+  const char* timezone = config.timezone[0] != '\0' ? config.timezone : "UTC0";
+  configTzTime(timezone, config.ntp_server);
+  g_ntp_started = true;
+  Serial.printf("[ntp] SNTP started server=\"%s\" tz=\"%s\"\n", config.ntp_server, timezone);
+}
+
 }  // namespace
 
 void begin(const Config& config) {
@@ -92,6 +103,7 @@ void begin(const Config& config) {
   g_last_rssi_log_ms = 0;
   g_started = false;
   g_scanned = false;
+  g_ntp_started = false;
 
   if (config.wifi_ssid[0] == '\0') {
     Serial.println("[wifi] no SSID configured; station disabled");
@@ -103,7 +115,7 @@ void begin(const Config& config) {
   // persistence is the future Wi-Fi manager's job.
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname(kHostname);
+  WiFi.setHostname(config.hostname[0] != '\0' ? config.hostname : "heatpumpsn");
   // Retry from tick() instead: the core's auto-reconnect races with the
   // explicit begin() calls and logs "STA is connecting" errors.
   WiFi.setAutoReconnect(false);
@@ -131,6 +143,7 @@ void tick(const Config& config) {
       Serial.printf("[wifi] connected ssid=\"%s\" rssi=%d dBm ip=%s\n",
                     WiFi.SSID().c_str(), static_cast<int>(g_status.rssi),
                     WiFi.localIP().toString().c_str());
+      start_ntp(config);
       g_last_rssi_log_ms = now;
     } else if (now - g_last_rssi_log_ms >= kRssiLogIntervalMs) {
       g_status.rssi = static_cast<int8_t>(WiFi.RSSI());
@@ -149,7 +162,7 @@ void tick(const Config& config) {
     }
 
     if (wl == WL_NO_SSID_AVAIL && !g_scanned) {
-      log_scan_once();
+      log_scan_once(config);
       // The scan cancelled the in-flight attempt; start a fresh one and skip
       // the retry check for this tick (now was sampled before the scan).
       begin_connection(config);

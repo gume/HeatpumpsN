@@ -34,6 +34,10 @@ void set_leds(const uint8_t* rgb, uint16_t count);
 bool read_temperature(TempRole role, float& celsius);
 float read_power_w(CurrentChannel channel);
 
+// Discover the sensors physically present on the temperature bus. The hardware
+// backend blocks for one conversion cycle; use it only for explicit discovery.
+uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count);
+
 // Current-measurement MUX. Returns false when the active carrier has no MUX or
 // the requested channel is absent.
 bool select_current_channel(CurrentChannel channel);

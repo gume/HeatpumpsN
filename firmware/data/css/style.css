@@ -346,6 +346,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .circuit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .circuit-head strong { font-size: 13px; }
 .circuit-body { margin-top: 10px; display: grid; gap: 7px; }
+.mixer-metrics { margin-top: 14px; display: grid; gap: 8px; }
+.mixer-temp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.number-row { display: flex; align-items: center; gap: 8px; }
+.number-row input { flex: 1; min-width: 0; }
+.number-row .unit { color: var(--faint); font-size: 11px; min-width: 34px; }
 .bar { height: 7px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
 .bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
 .bar.ok > span { background: linear-gradient(90deg, #1e9f65, var(--ok)); }
@@ -450,6 +455,7 @@ td.mono, th.mono { font-family: var(--mono); }
 .form-grid.one { grid-template-columns: 1fr; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .field > label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.field > label.checkbox-row { color: var(--faint); font-size: 11px; font-weight: 400; letter-spacing: normal; text-transform: none; }
 .field input[type="text"],
 .field input[type="password"],
 .field input[type="number"],
@@ -691,6 +697,33 @@ td.mono, th.mono { font-family: var(--mono); }
 .emu-relay-btn-state { color: var(--muted); font-family: var(--mono); font-size: 10px; font-weight: 700; }
 .emu-relay-btn.is-on { border-color: rgba(53, 208, 127, .75); background: var(--ok-soft); color: var(--ok); box-shadow: 0 0 12px rgba(53, 208, 127, .12); }
 .emu-relay-btn.is-on .emu-relay-btn-state { color: var(--ok); }
+.emu-relay-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.emu-relay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid rgba(143, 160, 180, .38);
+  border-radius: 12px;
+  background: var(--panel-3);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .05), inset 0 0 0 1px rgba(0, 0, 0, .12);
+}
+.emu-relay-card:hover { background: var(--accent-soft); border-color: var(--accent); }
+.emu-relay-card:active { transform: translateY(1px); }
+.emu-relay-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.emu-relay-card.is-on { border-color: rgba(53, 208, 127, .75); background: var(--ok-soft); box-shadow: 0 0 14px rgba(53, 208, 127, .12); }
+.emu-relay-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; font-size: 12px; font-weight: 650; }
+.emu-relay-card-state { color: var(--muted); font-family: var(--mono); font-size: 20px; font-weight: 800; line-height: 1; }
+.emu-relay-card.is-on .emu-relay-card-state { color: var(--ok); }
+.emu-relay-card-meta { color: var(--faint); font-size: 11px; }
+.emu-stage-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+.emu-stage-grid .emu-mixer { margin-top: 0; }
 .emu-manual {
   display: inline-grid;
   place-items: center;
@@ -720,6 +753,7 @@ td.mono, th.mono { font-family: var(--mono); }
   .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .emu-layout { grid-template-columns: 1fr; }
+  .mixer-temp-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
@@ -741,6 +775,9 @@ td.mono, th.mono { font-family: var(--mono); }
   .form-grid { grid-template-columns: 1fr; }
   .badges { width: 100%; justify-content: flex-start; margin-left: 0; }
   .topbar { flex-wrap: wrap; }
+  .emu-relay-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .emu-stage-grid { grid-template-columns: 1fr; }
+  .mixer-temp-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .view { padding: 14px 12px; }
