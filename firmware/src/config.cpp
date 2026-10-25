@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include "hpn/board.h"
 #include "hpn/state.h"
 
 namespace {
@@ -96,6 +97,9 @@ Config config_defaults() {
   c.flush_delta_t_ok = 2.0f;
   c.min_useful_delta_t = 3.0f;
   c.floor_pause_duration_s = 300;
+
+  // Board-specific wiring, sensor IDs and temporary hardware defaults.
+  hpn::board_apply_defaults(c);
 
   return c;
 }
