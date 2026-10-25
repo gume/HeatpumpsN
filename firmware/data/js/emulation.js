@@ -16,8 +16,8 @@ const state = {
 };
 
 const TEMP_LABELS = {
-  boiler: 'Boiler supply',
-  return: 'Floor return',
+  boiler: 'Mixer hot in',
+  return: 'Mixer cold in / return',
   mix: 'Mixer forward'
 };
 
@@ -139,12 +139,14 @@ function renderTemperatureControls(temps, snapshot) {
     const value = num(item.value, 0);
     const locked = role === 'boiler' && realisticBoiler;
     const disabled = locked ? 'disabled' : '';
+    const min = role === 'boiler' ? 15 : -20;
+    const max = role === 'boiler' ? 85 : 120;
 
     return `<div class="emu-control">
       <div class="row between"><strong>${esc(TEMP_LABELS[role])}</strong><span class="small faint mono">${esc(role)}</span></div>
       <div class="range-row">
-        <input type="range" min="-20" max="120" step="0.5" value="${value}" data-temp-range="${esc(role)}" aria-label="${esc(TEMP_LABELS[role])} slider" ${disabled}>
-        <input type="number" min="-20" max="120" step="0.5" value="${value}" data-temp-value="${esc(role)}" aria-label="${esc(TEMP_LABELS[role])} value" ${disabled}>
+        <input type="range" min="${min}" max="${max}" step="0.5" value="${value}" data-temp-range="${esc(role)}" aria-label="${esc(TEMP_LABELS[role])} slider" ${disabled}>
+        <input type="number" min="${min}" max="${max}" step="0.5" value="${value}" data-temp-value="${esc(role)}" aria-label="${esc(TEMP_LABELS[role])} value" ${disabled}>
         <span class="unit">°C</span>
       </div>
       <div class="row between">
@@ -184,7 +186,7 @@ function relayCard(relay, on, override, watts = null) {
   return `<button class="emu-relay-card ${on ? 'is-on' : ''}" type="button" data-sim-relay="${relay}" data-on="${on ? 'true' : 'false'}" aria-pressed="${on ? 'true' : 'false'}">
     <span class="emu-relay-card-head">
       <span>${esc(RELAY_LABELS[relay] || relay)}</span>
-      ${override ? '<span class="emu-manual" title="manual override">M</span>' : ''}
+      ${override ? `<span class="emu-manual" data-clear-relay="${esc(relay)}" title="Clear manual override">M</span>` : ''}
     </span>
     <span class="emu-relay-card-state">${on ? 'ON' : 'OFF'}</span>
     <span class="emu-relay-card-meta">${watts === null ? 'carrier relay' : `${fmtNum(watts, 1)} W`}</span>
@@ -212,7 +214,7 @@ function renderStage(snapshot) {
 
     <div class="emu-stage-grid">
       <div class="emu-block emu-mixer">
-        <h3>Mixer motor ${mixer.override ? '<span class="emu-manual">manual</span>' : ''}</h3>
+        <h3>Mixer motor ${mixer.override ? '<span class="emu-manual" data-clear-mixer="true" title="Clear manual override">manual</span>' : ''}</h3>
         <div class="row between">
           ${relayPill(!!mixer.motion)}
           <span class="chip">${mixer.motion ? (mixer.open ? 'open command' : 'close command') : 'idle'}</span>
@@ -426,7 +428,36 @@ root.addEventListener('change', async (event) => {
   }
 });
 
+async function clearSimOverride(element) {
+  const relay = element.dataset.clearRelay;
+  const mixer = element.dataset.clearMixer !== undefined;
+  const payload = mixer ? { mixer: true } : { relay };
+  try {
+    await api('/api/sim/override/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    state.interactingUntil = 0;
+    toast(
+      mixer ? 'Mixer manual override cleared.' : `${RELAY_LABELS[relay] || relay} manual override cleared.`,
+      'ok'
+    );
+  } catch (err) {
+    toast(err.message, 'err', 6000);
+  }
+  await refreshSim();
+}
+
 root.addEventListener('click', async (event) => {
+  const clear = event.target.closest('[data-clear-relay], [data-clear-mixer]');
+  if (clear) {
+    event.preventDefault();
+    event.stopPropagation();
+    await clearSimOverride(clear);
+    return;
+  }
+
   const button = event.target.closest('[data-sim-temp], [data-sim-power], [data-sim-relay], [data-sim-mixer], [data-sim-clear-overrides], [data-sim-reset], [data-sim-retry]');
   if (!button) return;
 

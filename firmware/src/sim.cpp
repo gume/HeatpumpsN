@@ -427,6 +427,24 @@ void clear_manual_overrides() {
   taskEXIT_CRITICAL(&g_mux);
 }
 
+void clear_relay_override(Relay relay) {
+  if (static_cast<uint8_t>(relay) >= kRelayCount) {
+    return;
+  }
+  const size_t index = static_cast<size_t>(relay);
+  taskENTER_CRITICAL(&g_mux);
+  g_model.relay_override[index] = false;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void clear_mixer_override() {
+  taskENTER_CRITICAL(&g_mux);
+  g_model.mixer_override = false;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
 void reset() {
   taskENTER_CRITICAL(&g_mux);
   reset_locked(g_model);

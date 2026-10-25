@@ -1636,6 +1636,16 @@ function renderSettingsFirmware() {
         </div>
       </div>
     </section>
+
+    <section class="card writable accent-top">
+      <div class="card-head"><div><h2>Configuration backup</h2><p>Save or restore every portal setting as JSON</p></div><span class="chip chip-warn">SECRETS</span></div>
+      <p class="small faint">The backup includes Wi-Fi and MQTT credentials in plain text. Store the file somewhere safe.</p>
+      <div class="form-actions" style="margin-top:14px">
+        <button class="btn btn-primary" type="button" data-action="config-export">Save configuration</button>
+        <button class="btn" type="button" data-action="config-import">Restore configuration</button>
+        <input id="config-file" type="file" accept=".json,application/json" hidden>
+      </div>
+    </section>
   </div>`;
 }
 
@@ -1653,13 +1663,12 @@ function renderSettingsSystem() {
   return `<div class="stack">
     <form class="settings-form writable" data-section="system">
       <section class="card writable accent-top">
-        <div class="card-head"><div><h2>System</h2><p>Hostname, local mode and presentation</p></div><span class="chip">LOCAL</span></div>
+        <div class="card-head"><div><h2>System</h2><p>Hostname and presentation</p></div><span class="chip">LOCAL</span></div>
 
         <div class="form-section">
-          <h3>Identity and operating mode</h3>
+          <h3>Identity</h3>
           <div class="form-grid">
             ${fieldText('hostname', 'Hostname', cfg.hostname, 'DHCP/mDNS hostname. Letters, digits, hyphen and dot; reboot required.', 'text', 'heatpumpsn')}
-            ${fieldCheckbox('summer_mode', 'Summer mode', cfg.summer_mode, 'Disables heating demand while still allowing circulation and diagnostics.')}
             <div class="field">
               <label for="theme-select">Theme</label>
               <select id="theme-select">
@@ -1671,7 +1680,15 @@ function renderSettingsSystem() {
             </div>
           </div>
         </div>
+      </section>
 
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Summer mode</h2><p>Heating demand behaviour</p></div><span class="chip">LOCAL</span></div>
+        <div class="form-section">
+          <div class="form-grid">
+            ${fieldCheckbox('summer_mode', 'Enable summer mode', cfg.summer_mode, 'Disables heating demand while still allowing circulation and diagnostics.')}
+          </div>
+        </div>
         ${formActions('Save system settings')}
       </section>
     </form>
@@ -2122,6 +2139,57 @@ function exportSlow() {
   downloadText('hpn-slow-log.csv', rows.map((row) => row.map(csvEscape).join(',')).join('\n'), 'text/csv;charset=utf-8');
 }
 
+async function exportConfig() {
+  try {
+    const response = await fetch('/api/config/export', { cache: 'no-store' });
+    const text = await response.text();
+    if (!response.ok) {
+      let message = response.statusText || `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.error) message = parsed.error;
+      } catch (err) { /* keep HTTP status */ }
+      throw new Error(message);
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    downloadText(`heatpumpsn-config-${stamp}.json`, text, 'application/json;charset=utf-8');
+    toast('Configuration file downloaded.', 'ok');
+  } catch (err) {
+    toast(`Could not export configuration: ${err.message}`, 'err', 6000);
+  }
+}
+
+async function importConfigFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      throw new Error('file is not valid JSON');
+    }
+    const result = await apiPost('/api/config/import', data);
+    toast(
+      result.reboot_required
+        ? 'Configuration restored. Reboot required for the new values to take effect.'
+        : 'Configuration restored.',
+      result.reboot_required ? 'warn' : 'ok',
+      result.reboot_required ? 6500 : 4000
+    );
+    await Promise.all([
+      refreshConfig('network'),
+      refreshConfig('safety'),
+      refreshConfig('hardware'),
+      refreshConfig('system'),
+      refreshStatus()
+    ]);
+    renderCurrent();
+  } catch (err) {
+    toast(`Could not restore configuration: ${err.message}`, 'err', 7000);
+  }
+}
+
 async function handleViewClick(event) {
   const button = event.target.closest('[data-action]');
   if (!button) return;
@@ -2194,12 +2262,18 @@ async function handleViewClick(event) {
     case 'ota-upload':
       await uploadFirmware();
       break;
+    case 'config-export':
+      await exportConfig();
+      break;
+    case 'config-import':
+      $('#config-file')?.click();
+      break;
     default:
       break;
   }
 }
 
-function handleViewChange(event) {
+async function handleViewChange(event) {
   const target = event.target;
   if (target.id === 'event-filter') {
     state.eventFilter = target.value;
@@ -2210,6 +2284,10 @@ function handleViewChange(event) {
   } else if (target.id === 'theme-select') {
     applyTheme(target.value);
     toast(`Theme set to ${target.value}.`, 'info', 1800);
+  } else if (target.id === 'config-file') {
+    const file = target.files && target.files[0];
+    target.value = '';
+    if (file) await importConfigFile(file);
   }
 }
 
@@ -2280,13 +2358,13 @@ const routes = {
   },
   'settings/firmware': {
     title: 'Firmware Update',
-    subtitle: 'OTA application upload',
+    subtitle: 'OTA application upload and configuration backup',
     render: renderSettingsFirmware,
     enter: async () => { await refreshStatus(); }
   },
   'settings/system': {
     title: 'System',
-    subtitle: 'Hostname, local mode and maintenance',
+    subtitle: 'Hostname, operating mode and maintenance',
     render: renderSettingsSystem,
     enter: async () => { await Promise.all([refreshConfig('system'), refreshStatus()]); }
   },

@@ -737,7 +737,9 @@ td.mono, th.mono { font-family: var(--mono); }
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
+  cursor: pointer;
 }
+.emu-manual:hover { border-color: var(--warn); filter: brightness(1.15); }
 .emu-leds { display: flex; gap: 6px; flex-wrap: wrap; }
 .emu-led { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: #000; }
 .emu-readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

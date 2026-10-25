@@ -70,6 +70,8 @@ void set_follow_controller(bool on);
 void set_realistic_power(bool on);
 void set_realistic_boiler(bool on);
 void clear_manual_overrides();
+void clear_relay_override(Relay relay);
+void clear_mixer_override();
 
 // --- Backend hooks, called by hpn::io only --------------------------------
 void record_pin(uint8_t pin, bool high);

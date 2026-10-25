@@ -515,19 +515,27 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
 // Configuration JSON
 // ---------------------------------------------------------------------------
 
-void fill_network(JsonObject o, const Config& c) {
+void fill_network(JsonObject o, const Config& c, bool include_secrets = false) {
   o["wifi_ssid"] = c.wifi_ssid;
-  o["has_wifi_password"] = c.wifi_password[0] != '\0';
   o["ap_ssid"] = c.ap_ssid;
-  o["has_ap_password"] = c.ap_password[0] != '\0';
   o["mqtt_host"] = c.mqtt_host;
   o["mqtt_port"] = c.mqtt_port;
   o["mqtt_user"] = c.mqtt_user;
-  o["has_mqtt_password"] = c.mqtt_pass[0] != '\0';
   o["mqtt_base_topic"] = c.mqtt_base_topic;
   o["ntp_enabled"] = c.ntp_enabled;
   o["ntp_server"] = c.ntp_server;
   o["timezone"] = c.timezone;
+  if (include_secrets) {
+    // Configuration backups must be restorable, so the file carries the
+    // credentials verbatim. The normal GET path only advertises their presence.
+    o["wifi_password"] = c.wifi_password;
+    o["ap_password"] = c.ap_password;
+    o["mqtt_pass"] = c.mqtt_pass;
+  } else {
+    o["has_wifi_password"] = c.wifi_password[0] != '\0';
+    o["has_ap_password"] = c.ap_password[0] != '\0';
+    o["has_mqtt_password"] = c.mqtt_pass[0] != '\0';
+  }
 }
 
 void fill_safety(JsonObject o, const Config& c) {
@@ -1293,6 +1301,133 @@ void handle_config_put(AsyncWebServerRequest* request, JsonVariant& json, const 
   send_json(request, 200, doc);
 }
 
+void handle_config_export(AsyncWebServerRequest* request) {
+  if (g_config == nullptr) {
+    send_error(request, 503, "configuration not ready");
+    return;
+  }
+
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["format"] = "heatpumpsn.config";
+  root["version"] = 1;
+  JsonObject network = root["network"].to<JsonObject>();
+  fill_network(network, *g_config, true);
+  JsonObject safety = root["safety"].to<JsonObject>();
+  fill_safety(safety, *g_config);
+  JsonObject hardware = root["hardware"].to<JsonObject>();
+  fill_hardware(hardware, *g_config);
+  JsonObject system = root["system"].to<JsonObject>();
+  fill_system(system, *g_config);
+
+  AsyncResponseStream* response = request->beginResponseStream("application/json");
+  response->setCode(200);
+  response->addHeader("Cache-Control", "no-store");
+  response->addHeader("Content-Disposition",
+                      "attachment; filename=\"heatpumpsn-config.json\"");
+  serializeJsonPretty(doc, *response);
+  log_access_request(request, 200);
+  request->send(response);
+}
+
+void handle_config_import(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (g_config == nullptr) {
+    send_error(request, 503, "configuration not ready");
+    return;
+  }
+  if (!json.is<JsonObject>()) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+
+  JsonObject in = json.as<JsonObject>();
+  if (!in["format"].isNull()) {
+    if (!in["format"].is<const char*>() ||
+        strcmp(in["format"].as<const char*>(), "heatpumpsn.config") != 0) {
+      send_error(request, 400, "unsupported configuration format");
+      return;
+    }
+  }
+  if (!in["version"].isNull()) {
+    if (!in["version"].is<int>() || in["version"].as<int>() > 1) {
+      send_error(request, 400, "unsupported configuration version");
+      return;
+    }
+  }
+
+  Config& active = ::config_mutable();
+  Config next = active;
+  String err;
+  bool any = false;
+
+  if (in["network"].is<JsonObject>()) {
+    JsonObject net = in["network"].as<JsonObject>();
+    // The normal save path treats an empty password as "keep the stored one".
+    // A configuration restore is explicit, so first copy any password fields
+    // verbatim (including empty) and let apply_network leave them untouched.
+    if (!json_string(net, "wifi_password", next.wifi_password, sizeof(next.wifi_password), true,
+                     err) ||
+        !json_string(net, "ap_password", next.ap_password, sizeof(next.ap_password), true, err) ||
+        !json_string(net, "mqtt_pass", next.mqtt_pass, sizeof(next.mqtt_pass), true, err)) {
+      send_error(request, 400, err.c_str());
+      return;
+    }
+    if (!apply_network(net, next, err)) {
+      send_error(request, 400, err.c_str());
+      return;
+    }
+    any = true;
+  }
+  if (in["safety"].is<JsonObject>()) {
+    if (!apply_safety(in["safety"].as<JsonObject>(), next, err)) {
+      send_error(request, 400, err.c_str());
+      return;
+    }
+    any = true;
+  }
+  if (in["hardware"].is<JsonObject>()) {
+    if (!apply_hardware(in["hardware"].as<JsonObject>(), next, err)) {
+      send_error(request, 400, err.c_str());
+      return;
+    }
+    any = true;
+  }
+  if (in["system"].is<JsonObject>()) {
+    if (!apply_system(in["system"].as<JsonObject>(), next, err)) {
+      send_error(request, 400, err.c_str());
+      return;
+    }
+    any = true;
+  }
+
+  if (!any) {
+    send_error(request, 400, "no configuration sections found");
+    return;
+  }
+
+  const Config backup = active;
+  active = next;
+  if (!config_save(active)) {
+    active = backup;
+    send_error(request, 500, "NVS write failed");
+    return;
+  }
+
+  if (!g_test_active && g_state != nullptr) {
+    g_state->mode = active.summer_mode ? MODE_SUMMER : MODE_HEAT;
+  }
+
+  const bool reboot_required = network_requires_reboot(backup, active) ||
+                               hardware_requires_reboot(backup, active) ||
+                               strcmp(backup.hostname, active.hostname) != 0;
+  log_event(0, 1201, "Configuration imported");
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["reboot_required"] = reboot_required;
+  send_json(request, 200, doc);
+}
+
 // ---------------------------------------------------------------------------
 // Log and counter handlers
 // ---------------------------------------------------------------------------
@@ -1790,8 +1925,12 @@ void handle_sim_temperature(AsyncWebServerRequest* request, JsonVariant& json) {
     return;
   }
 
-  if (!isfinite(value) || value < -20.0f || value > 120.0f) {
-    send_error(request, 400, "temperature out of range");
+  const float min_value = role == TempRole::Boiler ? 15.0f : -20.0f;
+  const float max_value = role == TempRole::Boiler ? 85.0f : 120.0f;
+  if (!isfinite(value) || value < min_value || value > max_value) {
+    send_error(request, 400,
+               role == TempRole::Boiler ? "boiler temperature out of range (15-85 C)"
+                                        : "temperature out of range");
     return;
   }
 
@@ -1977,6 +2116,49 @@ void handle_sim_clear_overrides(AsyncWebServerRequest* request) {
   log_event(0, 1506, "Sim manual overrides cleared");
   JsonDocument doc;
   doc["ok"] = true;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_clear_override(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>()) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+  JsonObject in = json.as<JsonObject>();
+  const bool mixer = in["mixer"] | false;
+  if (mixer) {
+    sim::clear_mixer_override();
+    log_event(0, 1507, "Sim mixer manual override cleared");
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["mixer"] = true;
+    send_json(request, 200, doc);
+    return;
+  }
+
+  const char* relay_name = in["relay"] | "";
+  Relay relay;
+  if (strcmp(relay_name, "heater") == 0) {
+    relay = Relay::Heater;
+  } else if (strcmp(relay_name, "floor") == 0) {
+    relay = Relay::PumpFloor;
+  } else if (strcmp(relay_name, "rad1") == 0) {
+    relay = Relay::PumpRad1;
+  } else if (strcmp(relay_name, "rad2") == 0) {
+    relay = Relay::PumpRad2;
+  } else {
+    send_error(request, 400, "relay or mixer is required");
+    return;
+  }
+
+  sim::clear_relay_override(relay);
+  char detail[96];
+  snprintf(detail, sizeof(detail), "Sim relay %s manual override cleared", relay_name);
+  log_event(0, 1508, detail);
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["relay"] = relay_name;
   send_json(request, 200, doc);
 }
 
@@ -2293,6 +2475,11 @@ void register_routes() {
               [](AsyncWebServerRequest* request) { handle_config_get(request, "system"); });
   g_server.on(AsyncURIMatcher::exact("/api/config/runtime"), HTTP_GET,
               [](AsyncWebServerRequest* request) { handle_config_get(request, "runtime"); });
+  g_server.on(AsyncURIMatcher::exact("/api/config/export"), HTTP_GET, handle_config_export);
+  g_server.on(AsyncURIMatcher::exact("/api/config/import"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_config_import(request, json);
+              });
 
   g_server.on(AsyncURIMatcher::exact("/api/config/network"), HTTP_PUT,
               [](AsyncWebServerRequest* request, JsonVariant& json) {
@@ -2401,6 +2588,10 @@ void register_routes() {
               });
   g_server.on(AsyncURIMatcher::exact("/api/sim/overrides/clear"), HTTP_POST,
               handle_sim_clear_overrides);
+  g_server.on(AsyncURIMatcher::exact("/api/sim/override/clear"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_clear_override(request, json);
+              });
   g_server.on(AsyncURIMatcher::exact("/api/sim/reset"), HTTP_POST, handle_sim_reset);
 #endif
 
