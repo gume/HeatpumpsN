@@ -211,7 +211,6 @@ void tick(const Config& config, SystemState& state) {
 
   // --- Relay arbitration ---------------------------------------------------
   const bool any_pump = floor_req || rad1_req || rad2_req;
-  const bool heater_on = heater_req && any_pump;
   if (heater_req && !any_pump) {
     state.active_alarms |= WARN_HEATER_NO_PUMP;
   } else {
@@ -221,7 +220,9 @@ void tick(const Config& config, SystemState& state) {
   apply_relay(Relay::PumpFloor, floor_req, state.pump_floor_phys, "pump_floor");
   apply_relay(Relay::PumpRad1, rad1_req, state.pump_rad1_phys, "pump_rad1");
   apply_relay(Relay::PumpRad2, rad2_req, state.pump_rad2_phys, "pump_rad2");
-  apply_relay(Relay::Heater, heater_on, state.heater_phys, "heater");
+  // Plan 03 §2.7 permits heater-on with all pumps off; L2 long_pause_s is the
+  // backstop that turns it off. L1 raises the diagnostic warning instead.
+  apply_relay(Relay::Heater, heater_req, state.heater_phys, "heater");
 
   // --- Pump power plausibility (dry-run and welded relay) -----------------
   const bool pump_on[3] = {state.pump_floor_phys, state.pump_rad1_phys, state.pump_rad2_phys};
