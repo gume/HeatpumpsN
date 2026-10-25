@@ -35,10 +35,10 @@ A residential heating system is being upgraded. Two systems exist:
 
 ## 3. Data Access and Dataset Coverage
 
-* **InfluxDB 2.x**, API at `[http://192.168.2.6:58086](http://192.168.2.6:58086)`, org `home_org`, bucket `home_assistant`, token `secret_token_heatpumps`.
+* **InfluxDB 2.x**, API at `[http://192.168.2.6:58086](http://192.168.2.6:58086)`, org `home_org`, bucket `home_assistant`, token `<secret_token>`.
 
 * Query via HTTP `/api/v2/query` (Flux language, CSV output) — e.g. from Python with `requests` + pandas — or via CLI:
-`docker exec influxdb influx query --raw --host http://localhost:58086 --org home_org --token secret_token_heatpumps '<flux>'` (use `--raw` to avoid output truncation; `--host http://localhost:58086` also works from outside the container).
+`docker exec influxdb influx query --raw --host http://localhost:58086 --org home_org --token <secret_token> '<flux>'` (use `--raw` to avoid output truncation; `--host http://localhost:58086` also works from outside the container).
 
 * Query InfluxDB **directly**, not via Grafana, to get full native resolution (~12 s sampling).
 
