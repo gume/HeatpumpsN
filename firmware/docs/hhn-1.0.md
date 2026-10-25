@@ -1,11 +1,17 @@
-# Legacy board: LOLIN S2 Mini carrier
+# HomeNet Heatpumps 1.0 carrier
 
-**Status:** legacy / temporary. This is the board the controller runs on until
-the new PCB arrives. The new board will have different wiring; nothing in this
-document should be treated as the final I/O map.
+**Status:** legacy / temporary. This is the board the plant runs on until the
+HomeNet Heatpumps 2.0 PCB arrives. The 1.0 carrier accepts several MCUs in the
+LOLIN S2 Mini footprint; the unit in the field currently has an ESP32-S2
+(LOLIN S2 Mini). Nothing in this document is the final I/O map for 2.0.
 
-This file documents the **physical** legacy carrier so the firmware can drive
-it safely today and so the mapping is preserved after the hardware changes.
+The carrier can also be run **emulated** on a boardless devkit
+(`-DHPN_IO_EMULATION`, PlatformIO env `esp32dev_sim`), which uses the same
+wiring description and the same L0 code. See
+[`io-emulation.md`](io-emulation.md).
+
+This file documents the **physical** 1.0 carrier so the firmware can drive it
+safely today and so the mapping is preserved after the hardware changes.
 Source of truth for the electrical details is the previous ESPHome
 configuration in [`../../analysis/OLD-CODE/`](../../analysis/OLD-CODE/):
 
@@ -14,15 +20,17 @@ configuration in [`../../analysis/OLD-CODE/`](../../analysis/OLD-CODE/):
 - `power.yaml` — ACS712 channels, sampling and calibration
 - `temperature.yaml` — 1-Wire sensors and ROM IDs
 
-## 1. Board and MCU
+## 1. Carrier and MCU
 
 | Item | Value |
 | --- | --- |
-| Board | WEMOS/LOLIN S2 Mini (`lolin_s2_mini`) |
+| Carrier | HomeNet Heatpumps 1.0 |
+| MCU fitted | WEMOS/LOLIN S2 Mini (`lolin_s2_mini`, ESP32-S2) |
 | MCU | ESP32-S2, single-core Xtensa LX7, 240 MHz |
 | Framework (legacy) | ESP-IDF via ESPHome |
 | Cores available to FreeRTOS | 1 (`HPN_HAS_DUAL_CORE == 0`) |
-| PlatformIO env | `esp32s2` (`-DHPN_BOARD_OLD_LOLIN_S2`) |
+| PlatformIO env | `esp32s2` (`-DHPN_CARRIER_HHN1`) |
+| Board profile | `hpn::board_config()` → `HomeNet Heatpumps 1.0` |
 
 Because the ESP32-S2 is single-core, the firmware must not pin any task to
 Core 1. All tasks are created with `xTaskCreate` and run on the single core.
@@ -207,19 +215,20 @@ behaviour above and is not implemented yet.
 
 | Concern | Where |
 | --- | --- |
-| Board profile selection | `firmware/platformio.ini` (`HPN_BOARD_OLD_LOLIN_S2`) |
+| Carrier profile selection | `firmware/platformio.ini` (`HPN_CARRIER_HHN1`) |
 | Pin/bit description | `firmware/include/hpn/board.h`, `firmware/src/board.cpp` |
 | Safe boot, 74HC595 init, direct-GPIO fallback | `firmware/src/l0_io.cpp` |
+| Real pins vs emulation | `firmware/src/io_backend.cpp`, `firmware/src/sim.cpp` |
 | Config defaults (sensor IDs, LED count, travel time) | `hpn::board_apply_defaults()` |
 | MUX channel selection | `l0::select_current_channel()` |
 | Task set and core placement | `firmware/src/tasks.cpp` |
 
 Implemented: output safe state, relay control, mixer direction/motion, MUX
-channel selection, LED strip initialization, RTOS task set.
+channel selection, LED chain output, RTOS task set, emulation of this carrier.
 
-Not implemented yet: 1-Wire sampling, current sampling and power plausibility,
-LED status animation, mixer pulse state machine and dead reckoning, all of
-L1/L2/L4. `l0::tick()` is a stub.
+Not implemented yet: 1-Wire sampling, hardware current sampling and power
+plausibility, LED status animation, mixer pulse state machine and dead
+reckoning, all of L1/L2/L4. `l0::tick()` is a stub.
 
 ## 9. Bring-up checklist before connecting the plant
 

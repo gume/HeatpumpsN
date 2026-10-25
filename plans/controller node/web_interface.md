@@ -29,6 +29,7 @@ The web portal is the **local human interface** to the heating controller node. 
 │   ├─ Sensor Health
 │   └─ Relay Counters
 ● Test Mode                          switch, manual control, test sequences
+● Board Emulation                    mocked carrier I/O (emulation builds only)
 ● Settings
 │   ├─ Safety & Timeouts
 │   ├─ Hardware & Pins
@@ -210,6 +211,37 @@ Single page, two sections, both 🔒-styled:
 
 Refreshing timestamps is the primary "is everything alive" check.
 
+### 3.7 Board Emulation (`HPN_IO_EMULATION` builds only)
+
+This page exists only when the firmware is compiled with the emulated I/O
+backend (`esp32dev_sim`); in hardware builds it is not served at all. It is a
+development aid, not a plant control.
+
+**Writable — mocked sensor answers** (mapped to `hpn::sim`):
+
+| Element | Range / values | Effect |
+|---|---|---|
+| Boiler temperature | −20 … 120 °C + valid toggle | `sim::set_temperature(TempRole::Boiler, …)` |
+| Floor return temperature | −20 … 120 °C + valid toggle | `… ReturnFloor …` |
+| Mixer output temperature | −20 … 120 °C + valid toggle | `… MixOut …` |
+| Floor / Rad 1 / Rad 2 power | 0 … 2000 W | `sim::set_power_w(CurrentChannel::Pump*, …)` |
+| Mixer power | 0 … 2000 W | `sim::set_power_w(CurrentChannel::Mixer, …)` |
+| Reset | button | `sim::reset()` — defaults 45/30/35 °C, 0 W |
+
+Setting 0 W while a pump relay is on simulates a dry run; nonzero power while
+off simulates a welded relay — useful to exercise L1 once it exists.
+
+**Read-only — emulated carrier:**
+
+- 74HC595 output byte and `OE` state
+- decoded relay states (heater, rad1, rad2, floor)
+- mixer direction + motion
+- selected MUX channel
+- LED chain colours (5 pixels on HHN 1.0)
+
+The page polls or subscribes to `hpn::sim::snapshot()`; the `revision` field
+lets it skip unchanged frames. Changes must not block `T_io`.
+
 ---
 
 ## 4. Data & Communication Model
@@ -260,6 +292,10 @@ Refreshing timestamps is the primary "is everything alive" check.
 | POST | `/api/counters/reset` | relay counter reset |
 | POST | `/api/system/reboot`, `/api/system/factory-reset` | system actions |
 | POST | `/api/update` | OTA firmware upload |
+| GET | `/api/sim` | emulated carrier + mocked inputs (`HPN_IO_EMULATION` only) |
+| POST | `/api/sim/temperature` | mock a temperature answer (emulation only) |
+| POST | `/api/sim/power` | mock pump/mixer power (emulation only) |
+| POST | `/api/sim/reset` | reset the emulation model (emulation only) |
 
 Config writes are validated server-side against the same range tables the UI uses; out-of-range writes are rejected with the reason.
 
@@ -380,6 +416,11 @@ Factory reset clears settings + counters (logged before clearing if possible), k
 
 ## 7. Mock Server (PC development)
 
+This is separate from the **on-device** I/O emulation
+(`HPN_IO_EMULATION`/`hpn::sim`, §3.7). The PC mock server fakes the portal API
+for frontend work; the on-device emulation fakes the carrier for L0/L1/L2
+development. The same frontend can talk to either.
+
 A Node.js server reproduces the full API so the frontend can be developed and tested without hardware:
 
 ```
@@ -406,7 +447,8 @@ This means the entire UI can be clicked through, themed, and reviewed before any
 
 | # | Criterion |
 |---|---|
-| P-1 | All 7 pages render; navigation works on desktop and narrow screen |
+| P-1 | All pages render; navigation works on desktop and narrow screen |
+| P-1a | Board Emulation page present in `esp32dev_sim` builds, absent in hardware builds |
 | P-2 | Event log shows latching safety events; acknowledgment works |
 | P-3 | Slow log chart renders offline (no CDN) |
 | P-4 | Sensor health page reflects injected sensor dropouts |

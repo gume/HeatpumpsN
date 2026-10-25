@@ -23,14 +23,22 @@
 | Status LEDs | Addressable RGB (WS2812B/SK6812) | `gpio_led_data` (TBD) | Single data pin driving up to 5 chained RGB LEDs (§1.2) |
 | Comms | WiFi | ESP32 internal | MQTT (primary), HTTP dashboard, serial debug |
 
-**Current hardware:** the controller temporarily runs on the legacy LOLIN S2
-Mini carrier documented in
-[`../../firmware/docs/board-old-lolin-s2.md`](../../firmware/docs/board-old-lolin-s2.md).
-On that board the pins above are not direct GPIOs: relays and the analogue-MUX
-select lines are driven by a 74HC595, pump current is multiplexed onto one ADC
-pin, and the LED chain has 5 elements. The `TBD` assignments become concrete
-only with the new board; until then the `old-lolin-s2` board profile supplies
+**Current hardware:** the plant runs the **HomeNet Heatpumps 1.0** carrier
+documented in
+[`../../firmware/docs/hhn-1.0.md`](../../firmware/docs/hhn-1.0.md), with an
+ESP32-S2 (LOLIN S2 Mini) fitted. On that carrier the pins above are not direct
+GPIOs: relays and the analogue-MUX select lines are driven by a 74HC595, pump
+current is multiplexed onto one ADC pin, and the LED chain has 5 elements. The
+`TBD` assignments become concrete only with **HomeNet Heatpumps 2.0** (ESP32-C3
+and ESP32-S3 primary targets); until then the `HHN1` carrier profile supplies
 the mapping.
+
+L0 is written against a compile-time I/O backend, so the same layers can run
+against the real 1.0 carrier or against an emulated 1.0 carrier on a boardless
+devkit (`-DHPN_IO_EMULATION`). See
+[`../../firmware/docs/io-emulation.md`](../../firmware/docs/io-emulation.md).
+The planned web dashboard exposes the emulated temperatures and pump power on a
+dedicated page.
 
 ### 1.1 Hardware Architecture & Boot Rules
 
@@ -53,10 +61,10 @@ Using addressable RGB LEDs (WS2812B or SK6812) requires only **one single GPIO p
 
 *(Note: If fewer LEDs are preferred, LEDs 3 and 4 can be omitted, leaving 3 LEDs for System, Boiler, and Floor).*
 
-*(On the temporary legacy carrier the chain has 5 LEDs but the old firmware
-mapped them differently — LED 1–3 to the three pumps, LED 4 to the mixer — see
-[`board-old-lolin-s2.md`](../../firmware/docs/board-old-lolin-s2.md) §6. The
-table above is the target semantics for the new board; L4 owns the animation.)*
+*(On HomeNet Heatpumps 1.0 the chain has 5 LEDs but the old firmware mapped them
+differently — LED 1–3 to the three pumps, LED 4 to the mixer — see
+[`hhn-1.0.md`](../../firmware/docs/hhn-1.0.md) §6. The table above is the target
+semantics for the new carrier; L4 owns the animation.)*
 
 ---
 
@@ -82,7 +90,7 @@ table above is the target semantics for the new board; L4 owns the animation.)*
 ### 2.3 Relay Hardware & Software Interlocks
 
 * Mixer `OPEN` and `CLOSE` relays can never be energized simultaneously. This is enforced both by physical relay wiring interlocks and by a $50\text{ ms}$ software direction-change dead-time in `T_io`.
-* On the temporary legacy carrier the mixer has **one** direction bit plus a motion bit in the 74HC595 instead of separate open/close relays. There is no hardware interlock on that board, so the dead time in `l0::set_mixer_motor()` is the only protection: set direction with the motor off, wait, then energize.
+* On HomeNet Heatpumps 1.0 the mixer has **one** direction bit plus a motion bit in the 74HC595 instead of separate open/close relays. There is no hardware interlock on that carrier, so the dead time in `l0::set_mixer_motor()` is the only protection: set direction with the motor off, wait, then energize.
 
 ### 2.4 Steady-Rate 1-Wire Temperature Polling & Error Filtering
 
@@ -100,5 +108,5 @@ table above is the target semantics for the new board; L4 owns the animation.)*
 * **Pump Power Plausibility (Optional):** If configured (`has_pump_power[i] == true`), L0 reads and publishes `pump_power_w[i]` and checks hardware plausibility:
   * `pump_*_phys == ON` with $\text{power} \approx 0\text{ W} \rightarrow$ raises `WARN_PUMP_DRY_RUN` (dry-run, disconnected pump, or manual hardware switch open).
   * `pump_*_phys == OFF` with $\text{power} > 0\text{ W} \rightarrow$ raises `ALARM_WELDED_RELAY` alarm.
-* **Temporary carrier:** on the legacy board the four ACS712 outputs share one ADC pin through a 74HC4051 whose select lines are bits 1–2 of the same 74HC595 as the relays, so a channel switch rewrites the output byte. `l0::select_current_channel()` is the only permitted way to change channels.
+* **Temporary carrier:** on HomeNet Heatpumps 1.0 the four ACS712 outputs share one ADC pin through a 74HC4051 whose select lines are bits 1–2 of the same 74HC595 as the relays, so a channel switch rewrites the output byte. `l0::select_current_channel()` is the only permitted way to change channels. Under emulation the ADC is not modelled; `l0::read_power_w()` returns the mocked watts instead.
 * **Reserved $\text{I}^2\text{C}$ Port:** Initialized on pins `i2c_sda` and `i2c_scl` when `pos_source == POS_SRC_I2C` for future direct magnetic encoder attachment (e.g., AS5600).

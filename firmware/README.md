@@ -1,31 +1,44 @@
 # HeatpumpsN firmware
 
 PlatformIO project for the ESP32 controller node. It currently implements a
-FreeRTOS task set, the boot-safe **L0** output layer and a board abstraction
-with two profiles. L1 safety arbitration, L2 control, L3 adaptation, and L4
-communications are idle stubs and the next implementation steps described in
+FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
+HomeNet Heatpumps 1.0 and 2.0, and a compile-time **I/O emulation** backend so
+the controller can be developed on a boardless devkit. L1 safety arbitration,
+L2 control, L3 adaptation, and L4 communications are idle stubs and the next
+implementation steps described in
 [`../plans/controller node/`](../plans/controller%20node/).
 
-## Targets and board profiles
+## Targets, carriers and backends
 
-| Environment | Board | Core | Board profile | Notes |
+| Environment | MCU board | Core | Carrier | Backend |
 | --- | --- | --- | --- | --- |
-| `esp32dev` | `esp32dev` | dual-core Xtensa | `generic-devkit` | Default build target |
-| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | `generic-devkit` | More RAM/GPIO |
-| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | `old-lolin-s2` | Legacy carrier, current physical board |
-| `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | `generic-devkit` | Limited GPIO, single core |
+| `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
+| `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — daily dev |
+| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, 74HC595 + MUX |
+| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, 2.0 target |
+| `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, 2.0 target |
 
-The board profile is selected at compile time with `-DHPN_BOARD_*` and chooses
-the output backend (direct GPIO or 74HC595), pin/bit assignment, sensor ROM
-IDs, LED count and mixer travel time. The generic profile leaves pins
-unassigned (`HPN_GPIO_UNASSIGNED`) until the new board is defined.
+Carriers describe wiring; the backend describes whether writes reach pins. They
+are independent compile-time choices:
 
-The legacy LOLIN S2 Mini carrier is documented in
-[`docs/board-old-lolin-s2.md`](docs/board-old-lolin-s2.md): pin map, 74HC595 bit
-map, MUX channels, ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety
-caveats of the old wiring. `esp32s2` uses the `lolin_s2_mini` board definition;
-switch it to `lolin_s2_pico` in `platformio.ini` if the physical board is a
-PICO.
+- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: 74HC595 outputs, analogue
+  current MUX, 5 LEDs, 1-Wire. ESP32-S2 in the field.
+- `-DHPN_CARRIER_BOARDLESS` — bare devkit, pins unassigned
+  (`HPN_GPIO_UNASSIGNED`) until the 2.0 layout exists.
+- `-DHPN_IO_EMULATION` — L0 runs against an in-memory model of the carrier
+  instead of pins.
+
+The HomeNet Heatpumps 1.0 carrier is documented in
+[`docs/hhn-1.0.md`](docs/hhn-1.0.md): pin map, 74HC595 bit map, MUX channels,
+ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety caveats of that
+wiring. The 2.0 carrier is still under planning and has no profile yet;
+ESP32-C3 and ESP32-S3 are its primary targets.
+
+The emulation model, its API and the planned web page are described in
+[`docs/io-emulation.md`](docs/io-emulation.md).
+
+`esp32s2` uses the `lolin_s2_mini` board definition; switch it to
+`lolin_s2_pico` in `platformio.ini` if the fitted MCU is a PICO.
 
 ## RTOS task set
 
@@ -58,10 +71,9 @@ The target board is attached to a remote runner. Run these from this
 directory (or add `-d firmware` from the repository root):
 
 ```bash
-pio remote run                              # build default target (esp32dev)
-pio remote run -e esp32s2                   # build a specific target
-pio remote run --target upload              # build + flash
-pio remote run -e esp32s2 --target upload
+pio remote run -e esp32dev_sim                # daily dev: boardless + emulated HHN 1.0
+pio remote run -e esp32s2                     # real HHN 1.0 carrier
+pio remote run -e esp32dev_sim --target upload
 timeout 10s pio remote device monitor -b 115200 || true
 ```
 
@@ -81,10 +93,14 @@ build/flash/monitor operations for the target board use the remote agent.
 firmware/
 ├── platformio.ini
 ├── docs/
-│   └── board-old-lolin-s2.md  # legacy carrier: pins, 74HC595, MUX, LEDs
+│   ├── hhn-1.0.md            # HomeNet Heatpumps 1.0 carrier: pins, 74HC595, MUX
+│   └── io-emulation.md       # emulation model, API, web integration
 ├── include/hpn/          # public contracts shared by all layers
 │   ├── build_target.h    # compile-time MCU / core count
-│   ├── board.h           # board profiles and output backends
+│   ├── board.h           # carrier profiles and output backends
+│   ├── io_types.h        # logical types: TempRole, CurrentChannel, Relay
+│   ├── io_backend.h      # real pins vs emulation seam
+│   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
@@ -94,12 +110,14 @@ firmware/
 │   ├── l4_comms.h        # L4 interface (stub)
 │   └── logger.h          # logger interface (stub)
 ├── src/
-│   ├── main.cpp          # boot sequence, board selection, RTOS start
-│   ├── board.cpp         # old LOLIN S2 and generic board definitions
+│   ├── main.cpp          # boot sequence, carrier selection, RTOS start
+│   ├── board.cpp         # HomeNet Heatpumps 1.0 and boardless definitions
+│   ├── io_backend.cpp    # hardware or emulated I/O implementation
+│   ├── sim.cpp           # emulation model (only under HPN_IO_EMULATION)
 │   ├── config.cpp        # compiled-in safe defaults
 │   ├── tasks.cpp         # task creation, priorities, core placement, WDT
 │   ├── state.cpp         # boot-safe SystemState initialization
-│   ├── l0_io.cpp         # the only code that touches GPIOs
+│   ├── l0_io.cpp         # carrier logic, the only layer that drives I/O
 │   ├── l1_safety.cpp     # L1 stub
 │   ├── l2_control.cpp    # L2 stub
 │   ├── l4_comms.cpp      # L4 stub
@@ -111,11 +129,11 @@ firmware/
 
 ## Safety notes for this scaffold
 
-- The active board is the **legacy** carrier unless `HPN_BOARD_GENERIC_DEVKIT`
-  is selected. See [`docs/board-old-lolin-s2.md`](docs/board-old-lolin-s2.md)
-  before wiring anything to it.
-- On the legacy carrier the relay outputs and the analogue-MUX select lines
+- Check the `[l0] backend` boot line. `esp32dev_sim` is emulated and must never
+  be expected to drive real relays; `esp32s2` is hardware.
+- On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX select lines
   share one 74HC595. Keep a single writer (`T_io`); the safe byte is `0x00`.
+  See [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
 - Unassigned pins use `HPN_GPIO_UNASSIGNED` and are never driven.
 - Relay-driver polarity at the 74HC595 outputs is assumed **active-high**;
   confirm it before connecting pumps or the boiler contact.

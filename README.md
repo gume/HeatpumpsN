@@ -66,8 +66,9 @@ Never run `pio remote device monitor` without a timeout: it blocks the session.
 Additional targets:
 
 ```bash
+pio remote run -d firmware -e esp32dev_sim   # boardless + emulated Heatpumps 1.0
+pio remote run -d firmware -e esp32s2        # Heatpumps 1.0 hardware (S2 Mini)
 pio remote run -d firmware -e esp32s3
-pio remote run -d firmware -e esp32s2   # legacy carrier: LOLIN S2 Mini
 pio remote run -d firmware -e esp32c3
 ```
 
@@ -91,20 +92,26 @@ nothing is pinned to a non-existent Core 1. `T_io` feeds the task watchdog only
 while the real-time tasks are healthy, so a hung safety or control task resets
 the controller rather than leaving outputs latched.
 
-## Board profiles
+## Carriers and I/O emulation
 
-Hardware wiring is isolated in a board profile selected at compile time:
+Two hardware carriers exist:
 
-| Profile | Selected by | Backend |
+| Carrier | Status | MCUs |
 | --- | --- | --- |
-| `old-lolin-s2` | `esp32s2` (`-DHPN_BOARD_OLD_LOLIN_S2`) | 74HC595 + analogue MUX |
-| `generic-devkit` | `esp32dev`, `esp32s3`, `esp32c3` | direct GPIO |
+| HomeNet Heatpumps 1.0 | in the plant today | any MCU in the LOLIN S2 Mini footprint; currently ESP32-S2 |
+| HomeNet Heatpumps 2.0 | under planning | ESP32-C3 and ESP32-S3 are the primary targets |
 
-The legacy LOLIN S2 Mini carrier is the temporary physical board while the new
-one is being designed. Its pin map, 74HC595 bit map, MUX channels, current-sensor
-scaling and safety caveats are documented in
-[`firmware/docs/board-old-lolin-s2.md`](firmware/docs/board-old-lolin-s2.md).
-The new board will get its own profile; the control logic stays untouched.
+Carrier wiring is isolated in a compile-time profile
+(`-DHPN_CARRIER_HHN1`, `-DHPN_CARRIER_BOARDLESS`). The 1.0 pin map, 74HC595 bit
+map, MUX channels, current-sensor scaling and safety caveats are documented in
+[`firmware/docs/hhn-1.0.md`](firmware/docs/hhn-1.0.md).
+
+The day-to-day development target is a **boardless ESP32 devkit** running the
+1.0 carrier **emulated** (`-DHPN_IO_EMULATION`, env `esp32dev_sim`): L0 drives an
+in-memory model of the carrier, mocked temperatures and pump power can be
+edited, and no pin is touched. The planned web dashboard gets a board-emulation
+page built on the same model. See
+[`firmware/docs/io-emulation.md`](firmware/docs/io-emulation.md).
 
 ## Git
 
