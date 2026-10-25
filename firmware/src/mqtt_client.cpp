@@ -24,7 +24,7 @@ namespace {
 constexpr uint32_t kReconnectIntervalMs = 5000;
 constexpr uint32_t kPublishIntervalMs = 1000;
 constexpr uint32_t kErrorLogIntervalMs = 30000;
-constexpr size_t kMqttBufferSize = 2048;
+constexpr size_t kMqttBufferSize = 4096;
 constexpr float kFloatPublishEpsilon = 0.05f;
 
 WiFiClient g_wifi_client;
@@ -35,6 +35,12 @@ SystemState* g_state = nullptr;
 
 Status g_status{};
 char g_base_topic[48] = "heatpumpsn/controller";
+char g_mixer_config_topic[128] = {};
+char g_mixer_state_topic[96] = {};
+char g_dhw_config_topic[128] = {};
+char g_dhw_state_topic[96] = {};
+char g_meter_signature[512] = {};
+char g_mqtt_payload[kMqttBufferSize] = {};
 char g_mac_hex[16] = "000000000000";
 char g_device_id[32] = "heatpumpsn_000000000000";
 char g_node_id[32] = "hpn_000000000000";
@@ -478,8 +484,16 @@ void handle_command(const char* topic, const char* value) {
       return;
     }
 
+    if (on && g_config != nullptr && g_config->summer_mode) {
+      web::log_event(1, 1808, "MQTT command rejected in summer mode");
+      return;
+    }
+
     if (strcmp(suffix, "cmd/heater") == 0) {
       g_state->heater_intended = on;
+      if (on) {
+        g_state->keepalive_age_s = 0;
+      }
     } else if (strcmp(suffix, "cmd/pump_floor") == 0) {
       g_state->pump_floor_intended = on;
     } else if (strcmp(suffix, "cmd/pump_rad1") == 0) {
@@ -512,17 +526,20 @@ void handle_command(const char* topic, const char* value) {
   }
 }
 
+bool handle_discovery_config(const char* topic, const char* payload);
+void handle_meter_message(const char* topic, const char* payload);
+
 void on_message(char* topic, uint8_t* payload, unsigned int length) {
   if (topic == nullptr || payload == nullptr) {
     return;
   }
 
-  char value[48];
-  const size_t copy_len = length < sizeof(value) - 1 ? length : sizeof(value) - 1;
-  memcpy(value, payload, copy_len);
-  value[copy_len] = '\0';
+  const size_t copy_len =
+      length < sizeof(g_mqtt_payload) - 1 ? length : sizeof(g_mqtt_payload) - 1;
+  memcpy(g_mqtt_payload, payload, copy_len);
+  g_mqtt_payload[copy_len] = '\0';
 
-  char* start = value;
+  char* start = g_mqtt_payload;
   while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
     ++start;
   }
@@ -532,7 +549,251 @@ void on_message(char* topic, uint8_t* payload, unsigned int length) {
     start[--len] = '\0';
   }
 
+  if (handle_discovery_config(topic, start)) {
+    return;
+  }
+  handle_meter_message(topic, start);
   handle_command(topic, start);
+}
+
+bool parse_float_payload(const char* text, float& out) {
+  if (text == nullptr || text[0] == '\0') {
+    return false;
+  }
+  char* end = nullptr;
+  const float value = strtof(text, &end);
+  if (end == text || !isfinite(value)) {
+    return false;
+  }
+  while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') {
+    ++end;
+  }
+  if (*end != '\0') {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+void copy_trimmed(char* dst, size_t dst_size, const char* src, size_t len) {
+  while (len > 0 && (src[0] == ' ' || src[0] == '\t')) {
+    ++src;
+    --len;
+  }
+  while (len > 0 && (src[len - 1] == ' ' || src[len - 1] == '\t' || src[len - 1] == '\r' ||
+                     src[len - 1] == '\n')) {
+    --len;
+  }
+  if (len >= dst_size) {
+    len = dst_size - 1;
+  }
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+}
+
+void strip_quotes(char* text) {
+  const size_t len = strlen(text);
+  if (len >= 2 && ((text[0] == '\'' && text[len - 1] == '\'') ||
+                   (text[0] == '"' && text[len - 1] == '"'))) {
+    text[len - 1] = '\0';
+    memmove(text, text + 1, len - 1);
+  }
+}
+
+// Parse the EMS-ESP style state payload for one configured field. Supports
+// top-level fields ("tapwateractive") and nested fields ("dhw.charging").
+bool extract_payload_field(const char* payload, const char* field, char* out, size_t out_size) {
+  if (payload == nullptr || field == nullptr || field[0] == '\0') {
+    return false;
+  }
+
+  char section[32] = {};
+  const char* cursor = payload;
+  while (*cursor != '\0') {
+    const char* line_end = strchr(cursor, '\n');
+    const size_t raw_len = line_end != nullptr ? static_cast<size_t>(line_end - cursor)
+                                               : strlen(cursor);
+    char line[192];
+    copy_trimmed(line, sizeof(line), cursor, raw_len);
+
+    const size_t len = strlen(line);
+    if (len == 0) {
+      if (line_end == nullptr) break;
+      cursor = line_end + 1;
+      continue;
+    }
+
+    if (line[len - 1] == ':') {
+      line[len - 1] = '\0';
+      copy_trimmed(section, sizeof(section), line, strlen(line));
+    } else {
+      char* colon = strchr(line, ':');
+      if (colon != nullptr) {
+        *colon = '\0';
+        char key[64];
+        char value[96];
+        copy_trimmed(key, sizeof(key), line, strlen(line));
+        copy_trimmed(value, sizeof(value), colon + 1, strlen(colon + 1));
+        strip_quotes(value);
+
+        char qualified[96];
+        if (section[0] != '\0') {
+          snprintf(qualified, sizeof(qualified), "%s.%s", section, key);
+        } else {
+          copy_string(qualified, sizeof(qualified), key);
+        }
+
+        if (strcmp(field, key) == 0 || strcmp(field, qualified) == 0) {
+          copy_string(out, out_size, value);
+          return true;
+        }
+      }
+    }
+
+    if (line_end == nullptr) {
+      break;
+    }
+    cursor = line_end + 1;
+  }
+  return false;
+}
+
+void handle_meter_message(const char* topic, const char* payload) {
+  if (g_state == nullptr || g_config == nullptr) {
+    return;
+  }
+
+  if (g_mixer_state_topic[0] != '\0' && strcmp(topic, g_mixer_state_topic) == 0) {
+    float value = 0.0f;
+    if (!parse_float_payload(payload, value)) {
+      return;
+    }
+    if (g_config->mixer_meter_scale == 0) {
+      value /= 100.0f;
+    }
+    if (value < 0.0f) value = 0.0f;
+    if (value > 1.0f) value = 1.0f;
+    g_state->pos_encoder = value;
+    g_state->pos_encoder_ms = millis();
+    g_state->pos_encoder_valid = true;
+    return;
+  }
+
+  if (g_dhw_state_topic[0] != '\0' && strcmp(topic, g_dhw_state_topic) == 0) {
+    bool active = false;
+    char value[32];
+    if (extract_payload_field(payload, g_config->dhw_meter_field, value, sizeof(value))) {
+      if (parse_on_off(value, active)) {
+        g_state->dhw_active = active;
+        return;
+      }
+      char* end = nullptr;
+      const long numeric = strtol(value, &end, 10);
+      if (end != value) {
+        g_state->dhw_active = numeric != 0;
+        return;
+      }
+    }
+    // Some HA discovery entries use a value_template that already extracts the
+    // boolean, so the state payload is just ON/OFF.
+    if (parse_on_off(payload, active)) {
+      g_state->dhw_active = active;
+    }
+  }
+}
+
+bool handle_discovery_config(const char* topic, const char* payload) {
+  if (g_mixer_config_topic[0] != '\0' && strcmp(topic, g_mixer_config_topic) == 0) {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+      const char* state_topic = doc["state_topic"];
+      if (state_topic != nullptr && state_topic[0] != '\0') {
+        copy_string(g_mixer_state_topic, sizeof(g_mixer_state_topic), state_topic);
+        if (g_client.connected()) {
+          g_client.subscribe(g_mixer_state_topic, 0);
+        }
+      }
+    }
+    return true;
+  }
+  if (g_dhw_config_topic[0] != '\0' && strcmp(topic, g_dhw_config_topic) == 0) {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+      const char* state_topic = doc["state_topic"];
+      if (state_topic != nullptr && state_topic[0] != '\0') {
+        copy_string(g_dhw_state_topic, sizeof(g_dhw_state_topic), state_topic);
+        if (g_client.connected()) {
+          g_client.subscribe(g_dhw_state_topic, 0);
+        }
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+void make_discovery_topic(char* out, size_t out_size, const char* component, const char* device,
+                          const char* field) {
+  snprintf(out, out_size, "homeassistant/%s/%s/%s/config", component, device, field);
+}
+
+void subscribe_meter_topics(const Config& config) {
+  g_mixer_config_topic[0] = '\0';
+  g_mixer_state_topic[0] = '\0';
+  g_dhw_config_topic[0] = '\0';
+  g_dhw_state_topic[0] = '\0';
+
+  if (config.mixer_meter_topic[0] != '\0') {
+    copy_string(g_mixer_state_topic, sizeof(g_mixer_state_topic), config.mixer_meter_topic);
+  } else if (config.mixer_meter_device[0] != '\0' && config.mixer_meter_field[0] != '\0') {
+    make_discovery_topic(g_mixer_config_topic, sizeof(g_mixer_config_topic), "sensor",
+                         config.mixer_meter_device, config.mixer_meter_field);
+  }
+
+  if (config.dhw_meter_topic[0] != '\0') {
+    copy_string(g_dhw_state_topic, sizeof(g_dhw_state_topic), config.dhw_meter_topic);
+  } else if (config.dhw_meter_device[0] != '\0' && config.dhw_meter_entity[0] != '\0') {
+    make_discovery_topic(g_dhw_config_topic, sizeof(g_dhw_config_topic), "binary_sensor",
+                         config.dhw_meter_device, config.dhw_meter_entity);
+  }
+
+  if (!g_client.connected()) {
+    return;
+  }
+  if (g_mixer_config_topic[0] != '\0') {
+    g_client.subscribe(g_mixer_config_topic, 1);
+  }
+  if (g_mixer_state_topic[0] != '\0') {
+    g_client.subscribe(g_mixer_state_topic, 0);
+  }
+  if (g_dhw_config_topic[0] != '\0') {
+    g_client.subscribe(g_dhw_config_topic, 1);
+  }
+  if (g_dhw_state_topic[0] != '\0') {
+    g_client.subscribe(g_dhw_state_topic, 0);
+  }
+}
+
+void refresh_meter_config(const Config& config) {
+  char signature[512];
+  snprintf(signature, sizeof(signature), "%s|%s|%u|%s|%s|%s|%s|%s",
+           config.mixer_meter_device, config.mixer_meter_field,
+           static_cast<unsigned>(config.mixer_meter_scale), config.mixer_meter_topic,
+           config.dhw_meter_device, config.dhw_meter_entity, config.dhw_meter_field,
+           config.dhw_meter_topic);
+  if (strcmp(signature, g_meter_signature) == 0) {
+    return;
+  }
+  copy_string(g_meter_signature, sizeof(g_meter_signature), signature);
+  if (g_client.connected()) {
+    g_client.disconnect();
+    g_status.connected = false;
+    g_status.disconnect_count++;
+    g_status.last_disconnect_ms = millis();
+    set_state("disconnected");
+  }
+  g_last_connect_attempt_ms = 0;
+  subscribe_meter_topics(config);
 }
 
 void attempt_connect() {
@@ -587,6 +848,7 @@ void attempt_connect() {
     Serial.printf("[mqtt] command subscription failed for %s\n", cmd_filter);
     web::log_event(1, 1807, "MQTT command subscription failed");
   }
+  subscribe_meter_topics(*g_config);
 
   publish_availability("online");
   publish_discovery();
@@ -660,6 +922,11 @@ void begin(const Config& config, SystemState& state) {
   g_last_publish_ms = 0;
   g_last_error_log_ms = 0;
   g_test_requested = false;
+  g_meter_signature[0] = '\0';
+  g_mixer_config_topic[0] = '\0';
+  g_mixer_state_topic[0] = '\0';
+  g_dhw_config_topic[0] = '\0';
+  g_dhw_state_topic[0] = '\0';
   reset_state_cache();
 
   Serial.printf("[mqtt] broker %s:%u, base %s, id %s\n",
@@ -673,6 +940,7 @@ void tick(const Config& config, SystemState& state) {
 
   g_status.enabled = config.mqtt_host[0] != '\0';
   refresh_broker_config(config);
+  refresh_meter_config(config);
 
   if (!g_status.enabled) {
     if (g_client.connected()) {

@@ -117,6 +117,20 @@ struct Config {
 
   // --- Carrier wiring ------------------------------------------------------
   uint8_t mixer_wiring;
+
+  // --- MQTT meter / DHW inputs --------------------------------------------
+  // The mixer position meter and DHW signal are consumed from MQTT. Device
+  // and field names build the Home Assistant discovery topic; the controller
+  // reads state_topic from that payload and subscribes there. The optional
+  // topic overrides skip discovery and subscribe directly.
+  char mixer_meter_device[33];
+  char mixer_meter_field[33];
+  uint8_t mixer_meter_scale;  // 0 = percent (0-100), 1 = fraction (0-1)
+  char mixer_meter_topic[96];
+  char dhw_meter_device[33];
+  char dhw_meter_entity[33];
+  char dhw_meter_field[33];
+  char dhw_meter_topic[96];
 };
 
 // Compiled-in defaults used before NVS has valid data. All values are safe

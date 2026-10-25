@@ -11,8 +11,9 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 2;
+constexpr uint16_t kVersion = 3;
 constexpr uint16_t kVersionV1 = 1;
+constexpr uint16_t kVersionV2 = 2;
 
 struct ConfigBlobHeader {
   uint32_t magic;
@@ -25,10 +26,21 @@ struct ConfigBlob {
   Config config;
 };
 
-// v1 ended with floor_pause_duration_s. New fields are append-only, so the
-// old Config is exactly the prefix before hostname.
+// New fields are append-only. Each historical version is therefore exactly a
+// prefix of the current struct: v1 ended before hostname, v2 ended before the
+// MQTT meter fields.
+constexpr size_t align_up(size_t value, size_t alignment) {
+  return (value + alignment - 1) / alignment * alignment;
+}
+
 constexpr size_t kConfigV1Size = offsetof(Config, hostname);
+// v2 ended with a single uint8_t (mixer_wiring), so the stored struct size
+// included trailing alignment padding. Round the next-field offset up to the
+// struct alignment to recover the exact stored size.
+constexpr size_t kConfigV2Size =
+    align_up(offsetof(Config, mixer_meter_device), alignof(Config));
 constexpr size_t kConfigV1BlobSize = sizeof(ConfigBlobHeader) + kConfigV1Size;
+constexpr size_t kConfigV2BlobSize = sizeof(ConfigBlobHeader) + kConfigV2Size;
 
 Preferences g_prefs;
 
@@ -59,6 +71,13 @@ bool config_load(Config& config) {
                  stored == kConfigV1BlobSize) {
         Config upgraded = config_defaults();
         memcpy(&upgraded, &blob.config, kConfigV1Size);
+        config = upgraded;
+        ok = true;
+        migrated = true;
+      } else if (blob.header.version == kVersionV2 && blob.header.size == kConfigV2Size &&
+                 stored == kConfigV2BlobSize) {
+        Config upgraded = config_defaults();
+        memcpy(&upgraded, &blob.config, kConfigV2Size);
         config = upgraded;
         ok = true;
         migrated = true;

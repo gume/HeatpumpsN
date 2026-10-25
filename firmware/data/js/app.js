@@ -1505,6 +1505,24 @@ function renderSettingsControl() {
         </div>
 
         <div class="form-section">
+          <h3>Mixer control law (observer)</h3>
+          <p class="small faint">Feedforward + PI defaults derived from the analysis dataset. Observer node will own these once it is online.</p>
+          <div class="form-grid">
+            ${fieldNumber('delay_s', 'Transport delay', cfg.delay_s, 0, 600, 1, 'Dead time between mixer movement and temperature response.', 'number', 's')}
+            ${fieldNumber('ff_boiler', 'Hot-side feedforward', cfg.ff_boiler, -2, 2, 0.01, 'Gain on the hot input (mixer hot in).', 'number', '')}
+            ${fieldNumber('ff_return', 'Cold-side feedforward', cfg.ff_return, -2, 2, 0.01, 'Gain on the cold input (mixer cold in / return).', 'number', '')}
+            ${fieldNumber('rad_coupling_ff', 'Radiator coupling', cfg.rad_coupling_ff, -10, 10, 0.1, 'Temperature offset when a radiator pump is running.', 'number', 'K')}
+            ${fieldNumber('kp', 'Proportional gain', cfg.kp, 0, 5, 0.01, 'Position correction per Kelvin of predicted error.', 'number', '')}
+            ${fieldNumber('ki', 'Integral gain', cfg.ki, 0, 1, 0.001, 'Integrator correction per Kelvin-second.', 'number', '')}
+            ${fieldNumber('start_flush_ms', 'Warm-up flush', cfg.start_flush_ms / 1000, 0, 600, 1, 'Floor pump flush duration after a cold start.', 'number', 's')}
+            ${fieldRange('flush_max_pos', 'Flush position cap', cfg.flush_max_pos, 0, 1, 0.01, '0–1', 'Mixer position cap during warm-up flush.')}
+            ${fieldNumber('flush_delta_t_ok', 'Flush delta-T ok', cfg.flush_delta_t_ok, 0, 20, 0.1, 'Early flush completion when the return has stabilised.', 'number', 'K')}
+            ${fieldNumber('min_useful_delta_t', 'Useful delta-T', cfg.min_useful_delta_t, 0, 20, 0.1, 'Floor delta-T below this indicates a saturated slab.', 'number', 'K')}
+            ${fieldNumber('floor_pause_duration_s', 'Floor pause', cfg.floor_pause_duration_s, 0, 86400, 10, 'Planned pause after a floor delta-T collapse.', 'int', 's')}
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3>Encoder</h3>
           <div class="form-grid">
             ${fieldSelect('pos_source', 'Encoder position source', cfg.pos_source, [
@@ -1578,6 +1596,27 @@ function renderSettingsNetwork() {
             ${fieldCheckbox('ntp_enabled', 'Enable NTP', cfg.ntp_enabled, 'Synchronize the controller wall clock over SNTP.')}
             ${fieldText('ntp_server', 'NTP server', cfg.ntp_server, 'Hostname or IP address of the NTP server.', 'text', 'pool.ntp.org')}
             ${fieldText('timezone', 'POSIX timezone', cfg.timezone, 'POSIX TZ string, for example CET-1CEST,M3.5.0,M10.5.0/3.', 'text', 'CET-1CEST,M3.5.0,M10.5.0/3')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="row between">
+            <h3>MQTT meters</h3>
+            <span class="chip">SUBSCRIBE</span>
+          </div>
+          <p class="small faint">The controller subscribes to these Home Assistant discovery topics, reads <span class="mono">state_topic</span>, and uses the value as mixer position feedback and DHW priority signal.</p>
+          <div class="form-grid">
+            ${fieldText('mixer_meter_device', 'Mixer meter device', cfg.mixer_meter_device, 'HA device name, for example mixermeter.', 'text', 'mixermeter')}
+            ${fieldText('mixer_meter_field', 'Mixer meter field', cfg.mixer_meter_field, 'HA object/field name, for example mixer_value.', 'text', 'mixer_value')}
+            ${fieldSelect('mixer_meter_scale', 'Mixer value scale', cfg.mixer_meter_scale, [
+              { value: 0, label: 'Percent (0–100)' },
+              { value: 1, label: 'Fraction (0–1)' }
+            ], 'How to convert the MQTT payload into a 0–1 position.')}
+            ${fieldText('mixer_meter_topic', 'Mixer state topic override', cfg.mixer_meter_topic, 'Optional: subscribe directly instead of using discovery.', 'text', '')}
+            ${fieldText('dhw_meter_device', 'DHW meter device', cfg.dhw_meter_device, 'HA device name, for example ems-esp.', 'text', 'ems-esp')}
+            ${fieldText('dhw_meter_entity', 'DHW entity', cfg.dhw_meter_entity, 'HA entity/object name, for example boiler_wwcharging.', 'text', 'boiler_wwcharging')}
+            ${fieldText('dhw_meter_field', 'DHW payload field', cfg.dhw_meter_field, 'Key in the payload, for example tapwateractive or dhw.charging.', 'text', 'tapwateractive')}
+            ${fieldText('dhw_meter_topic', 'DHW state topic override', cfg.dhw_meter_topic, 'Optional: subscribe directly instead of using discovery.', 'text', '')}
           </div>
         </div>
 
@@ -1845,6 +1884,9 @@ function normalizeSettings(section, data) {
     if (Number.isFinite(Number(data.travel_time_s))) {
       data.travel_time_ms = Math.round(Number(data.travel_time_s) * 1000);
       delete data.travel_time_s;
+    }
+    if (Number.isFinite(Number(data.start_flush_ms))) {
+      data.start_flush_ms = Math.round(Number(data.start_flush_ms) * 1000);
     }
   }
   return data;

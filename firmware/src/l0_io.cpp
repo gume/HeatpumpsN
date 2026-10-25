@@ -239,6 +239,14 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
       float celsius = 0.0f;
       SensorReading& reading = *readings[i];
       if (read_temperature(roles[i], celsius) && isfinite(celsius)) {
+        const float previous = reading.value_c;
+        const uint32_t previous_ms = reading.last_valid_ms;
+        if (reading.is_valid && previous_ms != 0 && now > previous_ms) {
+          const float dt_s = static_cast<float>(now - previous_ms) / 1000.0f;
+          reading.gradient_k_per_s = (celsius - previous) / dt_s;
+        } else {
+          reading.gradient_k_per_s = 0.0f;
+        }
         reading.value_c = celsius;
         reading.is_valid = true;
         reading.last_valid_ms = now;

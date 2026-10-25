@@ -45,10 +45,10 @@ Config config_defaults() {
   c.t_max_hard = 50.0f;
   c.t_max_warn = 45.0f;
   c.t_overtemp_hysteresis = 2.0f;
-  c.grad_limit = 0.5f;
+  c.grad_limit = 0.3f;
   c.mix_safe_pos = 0.0f;
   c.boiler_min_off_ms = 180000;
-  c.demand_timeout_s = 120;
+  c.demand_timeout_s = 600;  // tolerate HA keep-alive every ~5 min
   c.pump_stop_after_heating_s = 300;
   c.long_pause_s = 600;
   c.anti_seize_interval_s = 2592000;  // 30 days
@@ -56,16 +56,16 @@ Config config_defaults() {
   c.sensor_error_threshold = 3;
 
   // --- Hardware & Actuator Constants ---------------------------------------
-  c.setpoint_default = 30.0f;
+  c.setpoint_default = 35.0f;
   c.deadband_pos = 0.02f;
-  c.deadband_temp = 0.2f;
+  c.deadband_temp = 2.0f;
   c.min_pulse_ms = 50;
   c.max_pulse_ms = 1000;
   c.pulse_cooldown_ms = 200;
-  c.travel_time_ms = 120000;
+  c.travel_time_ms = 145000;
   c.tick_ms = 2000;
   c.temp_poll_interval_ms = 1000;
-  c.recalc_threshold = 0.10f;
+  c.recalc_threshold = 0.12f;
   c.encoder_check_interval_s = 3600;
   c.encoder_check_pulses = 100;
   c.encoder_staleness_s = 300;
@@ -92,6 +92,15 @@ Config config_defaults() {
   copy_str(c.sensor_id_mix, "");
   c.mixer_wiring = MIX_WIRING_OPEN_CLOSE;
 
+  copy_str(c.mixer_meter_device, "");
+  copy_str(c.mixer_meter_field, "");
+  c.mixer_meter_scale = 0;
+  copy_str(c.mixer_meter_topic, "");
+  copy_str(c.dhw_meter_device, "");
+  copy_str(c.dhw_meter_entity, "");
+  copy_str(c.dhw_meter_field, "");
+  copy_str(c.dhw_meter_topic, "");
+
   // --- Dynamic Heating Parameters (HA shadow) ------------------------------
   c.floor_setpoint_shadow = c.setpoint_default;
   c.summer_mode = false;
@@ -99,18 +108,21 @@ Config config_defaults() {
   // --- Control Loop Tuning (Observer / L3) ---------------------------------
   // Placeholders only. Values are to be derived from the analysis dataset
   // (analysis/) and validated by L3 before adoption.
-  c.delay_s = 0.0f;
+  // Defaults derived from analysis/report.md §5d and §9. The mixer's "boiler"
+  // sensor is the heat-exchanger secondary (T_incoming), so the corrected
+  // model B feedforward gains are used.
+  c.delay_s = 120.0f;
   c.gain = 1.0f;
-  c.ff_boiler = 1.0f;
-  c.ff_return = 0.0f;
+  c.ff_boiler = 0.47f;
+  c.ff_return = 0.87f;
   c.kp = 0.5f;
-  c.ki = 0.05f;
-  c.rad_coupling_ff = 0.0f;
+  c.ki = 0.02f;
+  c.rad_coupling_ff = -1.5f;
   c.start_flush_ms = 30000;
   c.flush_max_pos = 0.20f;
   c.flush_delta_t_ok = 2.0f;
-  c.min_useful_delta_t = 3.0f;
-  c.floor_pause_duration_s = 300;
+  c.min_useful_delta_t = 2.0f;
+  c.floor_pause_duration_s = 900;
 
   // Board-specific wiring, sensor IDs and temporary hardware defaults.
   hpn::board_apply_defaults(c);

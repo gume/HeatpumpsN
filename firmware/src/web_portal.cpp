@@ -484,6 +484,8 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   system["hostname"] = cfg.hostname;
   system["epoch"] = st.wall_time_epoch_s;
   system["ntpSynced"] = st.wall_time_epoch_s > 1600000000ULL;
+  system["dhwActive"] = st.dhw_active;
+  system["mixerIntegrator"] = st.integrator_val;
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();
   wifi_obj["configured"] = wifi::status().configured;
@@ -525,6 +527,14 @@ void fill_network(JsonObject o, const Config& c, bool include_secrets = false) {
   o["ntp_enabled"] = c.ntp_enabled;
   o["ntp_server"] = c.ntp_server;
   o["timezone"] = c.timezone;
+  o["mixer_meter_device"] = c.mixer_meter_device;
+  o["mixer_meter_field"] = c.mixer_meter_field;
+  o["mixer_meter_scale"] = c.mixer_meter_scale;
+  o["mixer_meter_topic"] = c.mixer_meter_topic;
+  o["dhw_meter_device"] = c.dhw_meter_device;
+  o["dhw_meter_entity"] = c.dhw_meter_entity;
+  o["dhw_meter_field"] = c.dhw_meter_field;
+  o["dhw_meter_topic"] = c.dhw_meter_topic;
   if (include_secrets) {
     // Configuration backups must be restorable, so the file carries the
     // credentials verbatim. The normal GET path only advertises their presence.
@@ -588,6 +598,20 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["sensor_id_boiler"] = c.sensor_id_boiler;
   o["sensor_id_ret"] = c.sensor_id_ret;
   o["sensor_id_mix"] = c.sensor_id_mix;
+
+  // Observer-owned control-loop tuning (plan 01 Cat 3). Exposed for bench
+  // tuning until the observer node owns these over MQTT.
+  o["delay_s"] = c.delay_s;
+  o["ff_boiler"] = c.ff_boiler;
+  o["ff_return"] = c.ff_return;
+  o["rad_coupling_ff"] = c.rad_coupling_ff;
+  o["kp"] = c.kp;
+  o["ki"] = c.ki;
+  o["start_flush_ms"] = c.start_flush_ms;
+  o["flush_max_pos"] = c.flush_max_pos;
+  o["flush_delta_t_ok"] = c.flush_delta_t_ok;
+  o["min_useful_delta_t"] = c.min_useful_delta_t;
+  o["floor_pause_duration_s"] = c.floor_pause_duration_s;
 }
 
 void fill_system(JsonObject o, const Config& c) {
@@ -765,6 +789,26 @@ bool apply_network(JsonObject in, Config& c, String& err) {
   if (!json_bool(in, "ntp_enabled", c.ntp_enabled, err)) return false;
   if (!json_string(in, "ntp_server", c.ntp_server, sizeof(c.ntp_server), true, err)) return false;
   if (!json_string(in, "timezone", c.timezone, sizeof(c.timezone), true, err)) return false;
+  if (!json_string(in, "mixer_meter_device", c.mixer_meter_device,
+                   sizeof(c.mixer_meter_device), true, err))
+    return false;
+  if (!json_string(in, "mixer_meter_field", c.mixer_meter_field, sizeof(c.mixer_meter_field), true,
+                   err))
+    return false;
+  if (!json_uint8(in, "mixer_meter_scale", c.mixer_meter_scale, 0, 1, err)) return false;
+  if (!json_string(in, "mixer_meter_topic", c.mixer_meter_topic, sizeof(c.mixer_meter_topic), true,
+                   err))
+    return false;
+  if (!json_string(in, "dhw_meter_device", c.dhw_meter_device, sizeof(c.dhw_meter_device), true,
+                   err))
+    return false;
+  if (!json_string(in, "dhw_meter_entity", c.dhw_meter_entity, sizeof(c.dhw_meter_entity), true,
+                   err))
+    return false;
+  if (!json_string(in, "dhw_meter_field", c.dhw_meter_field, sizeof(c.dhw_meter_field), true, err))
+    return false;
+  if (!json_string(in, "dhw_meter_topic", c.dhw_meter_topic, sizeof(c.dhw_meter_topic), true, err))
+    return false;
   if (c.ntp_enabled && c.ntp_server[0] == '\0') {
     err = "ntp_server must not be empty when NTP is enabled";
     return false;
@@ -834,6 +878,20 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_string(in, "sensor_id_ret", c.sensor_id_ret, sizeof(c.sensor_id_ret), true, err))
     return false;
   if (!json_string(in, "sensor_id_mix", c.sensor_id_mix, sizeof(c.sensor_id_mix), true, err))
+    return false;
+
+  if (!json_float(in, "delay_s", c.delay_s, 0.0f, 600.0f, err)) return false;
+  if (!json_float(in, "ff_boiler", c.ff_boiler, -2.0f, 2.0f, err)) return false;
+  if (!json_float(in, "ff_return", c.ff_return, -2.0f, 2.0f, err)) return false;
+  if (!json_float(in, "rad_coupling_ff", c.rad_coupling_ff, -10.0f, 10.0f, err)) return false;
+  if (!json_float(in, "kp", c.kp, 0.0f, 5.0f, err)) return false;
+  if (!json_float(in, "ki", c.ki, 0.0f, 1.0f, err)) return false;
+  if (!json_uint(in, "start_flush_ms", c.start_flush_ms, 0, 600000, err)) return false;
+  if (!json_float(in, "flush_max_pos", c.flush_max_pos, 0.0f, 1.0f, err)) return false;
+  if (!json_float(in, "flush_delta_t_ok", c.flush_delta_t_ok, 0.0f, 20.0f, err)) return false;
+  if (!json_float(in, "min_useful_delta_t", c.min_useful_delta_t, 0.0f, 20.0f, err))
+    return false;
+  if (!json_uint(in, "floor_pause_duration_s", c.floor_pause_duration_s, 0, 86400, err))
     return false;
 
   if (c.min_pulse_ms > c.max_pulse_ms) {
@@ -2221,6 +2279,32 @@ void handle_sim_clear_overrides(AsyncWebServerRequest* request) {
   send_json(request, 200, doc);
 }
 
+void handle_sim_intent(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>() || g_state == nullptr) {
+    send_error(request, 400, "request body must be a JSON object");
+    return;
+  }
+  JsonObject in = json.as<JsonObject>();
+  if (in["heater"].is<bool>()) g_state->heater_intended = in["heater"].as<bool>();
+  if (in["pump_floor"].is<bool>()) g_state->pump_floor_intended = in["pump_floor"].as<bool>();
+  if (in["pump_rad1"].is<bool>()) g_state->pump_rad1_intended = in["pump_rad1"].as<bool>();
+  if (in["pump_rad2"].is<bool>()) g_state->pump_rad2_intended = in["pump_rad2"].as<bool>();
+  if (in["dhw_active"].is<bool>()) g_state->dhw_active = in["dhw_active"].as<bool>();
+  if (in["keepalive"].is<bool>() && in["keepalive"].as<bool>()) {
+    g_state->keepalive_age_s = 0;
+  }
+  g_state->keepalive_age_s = 0;
+  log_event(0, 1510, "Simulated HA intent update");
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["heater_intended"] = g_state->heater_intended;
+  doc["pump_floor_intended"] = g_state->pump_floor_intended;
+  doc["pump_rad1_intended"] = g_state->pump_rad1_intended;
+  doc["pump_rad2_intended"] = g_state->pump_rad2_intended;
+  doc["dhw_active"] = g_state->dhw_active;
+  send_json(request, 200, doc);
+}
+
 void handle_sim_clear_override(AsyncWebServerRequest* request, JsonVariant& json) {
   if (!json.is<JsonObject>()) {
     send_error(request, 400, "request body must be a JSON object");
@@ -2688,6 +2772,10 @@ void register_routes() {
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_sim_mode(request, json);
               });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/intent"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_intent(request, json);
+              });
   g_server.on(AsyncURIMatcher::exact("/api/sim/overrides/clear"), HTTP_POST,
               handle_sim_clear_overrides);
   g_server.on(AsyncURIMatcher::exact("/api/sim/override/clear"), HTTP_POST,
@@ -2710,6 +2798,7 @@ void register_routes() {
 void begin(const Config& config, SystemState& state) {
   g_config = &config;
   g_state = &state;
+  state.mode = config.summer_mode ? MODE_SUMMER : MODE_HEAT;
 
   g_access_head = 0;
   g_access_count = 0;
