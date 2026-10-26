@@ -775,6 +775,7 @@ function renderDashboard() {
   const floor = circuits.floor || {};
   const mixerPos = Math.max(0, Math.min(100, num(floor.mixerPos, 0)));
   const mixerTarget = Math.max(0, Math.min(100, num(floor.mixerTarget, 0)));
+  const mixerMax = Math.max(1, Math.min(100, num(floor.mixerMaxPct, 100)));
   const encoderPos = Math.max(0, Math.min(100, num(floor.encoderPos, 0)));
   const mixerCmdLabel = floor.mixerEmergency
     ? 'emergency close'
@@ -820,6 +821,7 @@ function renderDashboard() {
           <div class="metric-row"><span class="k">Mixer power</span><span class="v">${fmtNum(power.mixer, 1)} W</span></div>
           <div class="metric-row"><span class="k">Estimated position</span><span class="v">${mixerPos.toFixed(1)}%</span></div>
           <div class="metric-row"><span class="k">Target position</span><span class="v">${mixerTarget.toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%</span></div>
           <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
           <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
           <div class="metric-row"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
@@ -1158,6 +1160,7 @@ function renderTest() {
   const mixerCmdLabel = floor.mixerEmergency
     ? 'emergency close'
     : (!floor.mixerMotion ? 'idle' : (num(floor.mixerDir, 0) > 0 ? 'opening' : 'closing'));
+  const mixerMax = Math.max(1, Math.min(100, num(floor.mixerMaxPct, 100)));
 
   if (!test.active) {
     return `<div class="stack">
@@ -1215,6 +1218,7 @@ function renderTest() {
         </div>
         <div class="metric-row"><span class="k">Estimated position</span><span class="v">${fmtNum(floor.mixerPos, 1)}%</span></div>
         <div class="metric-row"><span class="k">Target position</span><span class="v">${fmtNum(floor.mixerTarget, 1)}%</span></div>
+        <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%</span></div>
         <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
         <div class="metric-row"><span class="k">Encoder</span><span class="v">${fmtNum(floor.encoderPos, 1)}% ${floor.encoderValid ? '' : '⚠'}</span></div>
 
@@ -1227,11 +1231,11 @@ function renderTest() {
         <div class="field" style="margin-top:12px">
           <label for="mixer-target">Target position</label>
           <div class="range-row">
-            <input id="mixer-target" type="range" min="0" max="100" step="1" value="${Math.round(num(floor.mixerTarget, 0))}" aria-label="Mixer target position">
+            <input id="mixer-target" type="range" min="0" max="${mixerMax}" step="1" value="${Math.min(Math.round(num(floor.mixerTarget, 0)), mixerMax)}" aria-label="Mixer target position">
             <span class="unit">%</span>
             <button class="btn btn-sm" type="button" data-action="test-target">Store</button>
           </div>
-          <small>Stores the target. The servo drives continuously to it and stops on arrival; changing the target mid-move reverses immediately.</small>
+          <small>Stores the target. The servo drives continuously to it and stops on arrival; changing the target mid-move reverses immediately. L1 never opens past ${mixerMax}%.</small>
         </div>
       </section>
     </div>
@@ -1402,6 +1406,7 @@ function renderSettingsSafety() {
           <h3>Mixer and demand</h3>
           <div class="form-grid">
             ${fieldRange('mix_safe_pos', 'Safe mixer position', cfg.mix_safe_pos, 0, 1, 0.01, '0–1', 'Position used when the mixer must be parked safely.')}
+            ${fieldRange('mix_max_open_pct', 'Maximum mixer opening', cfg.mix_max_open_pct, 10, 100, 1, '%', 'L1 never drives the mixer above this limit. Lower it if a sudden temperature rise needs a faster close.')}
             ${fieldNumber('boiler_min_off_min', 'Boiler minimum off time', cfg.boiler_min_off_ms / 60000, 0, 60, 0.5, 'Minimum boiler off time before it may be re-energized.', 'number', 'min')}
             ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Time without a fresh HA demand before the demand is dropped.', 'int', 's')}
             ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Pumps keep running for this long after heating stops.', 'int', 's')}

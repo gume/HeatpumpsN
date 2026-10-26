@@ -55,6 +55,12 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     return;
   }
 
+  const float ceiling = mixer_ceiling(config);
+  // Never report or chase a target above the configured opening limit.
+  if (state.mix_target_pos > ceiling) {
+    state.mix_target_pos = ceiling;
+  }
+
   if (!floor_demand) {
     if (state.heater_requested || state.pump_rad1_requested || state.pump_rad2_requested) {
       state.mix_target_pos = 0.0f;
@@ -109,7 +115,7 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   // During the warm-up flush the position is still clamped (below), so the
   // hold is skipped there.
   if (!flush_active && fabsf(error) <= config.deadband_temp) {
-    state.mix_target_pos = state.pos_est_dr;
+    state.mix_target_pos = fminf(state.pos_est_dr, ceiling);
     return;
   }
 
@@ -126,7 +132,7 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   } else if (target < state.pos_est_dr - max_step) {
     target = state.pos_est_dr - max_step;
   }
-  state.mix_target_pos = clampf(target, 0.0f, 1.0f);
+  state.mix_target_pos = clampf(target, 0.0f, ceiling);
 }
 
 void service_position_tracking(const Config& config, SystemState& state, uint32_t now_ms) {

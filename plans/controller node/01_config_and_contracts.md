@@ -32,6 +32,7 @@ struct Config {
   float    t_overtemp_hysteresis;  // recovery band below t_max_warn, e.g. 2.0 K
   float    grad_limit;             // max dT/dt (K/s), e.g. 0.5
   float    mix_safe_pos;           // 0.0 = closed (confirmed safe position)
+  uint8_t  mix_max_open_pct;       // L1-enforced opening ceiling, 10-100 %, default 85 %
   uint32_t boiler_min_off_ms;      // anti-short-cycle backstop
   uint32_t demand_timeout_s;       // heater keep-alive timeout (e.g., refresh_time + 1m or 2x + 1m)
   uint32_t pump_stop_after_heating_s; // max pump run time after heating / when heater is off

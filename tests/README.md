@@ -20,7 +20,8 @@ tests/flash_and_check.sh --serial
 A successful run ends with:
 
 ```
-PASSED: 45 passed, 0 failed, 0 skipped
+PASSED: 59 passed, 0 failed, 0 skipped   # with --serial
+PASSED: 52 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.
@@ -73,8 +74,9 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    10 s cadence, and MQTT is connected when enabled.
 2. **Portal assets** — `/` and `/js/app.js` are served and contain the
    dashboard LED mirror and the error-text row.
-3. **Config contract** — the MQTT log fields exist on `/api/config/network`;
-   the obsolete pulse-width fields are gone.
+3. **Config contract** — the MQTT log fields exist on `/api/config/network`,
+   `mix_max_open_pct` exists on `/api/config/safety`, and the obsolete
+   pulse-width fields are gone.
 4. **RAM logs** — `/api/log/events` and `/api/log/slow` are populated, stay
    within capacity, have the documented record shape, and no NVS-corruption
    event (501) was latched.
@@ -94,7 +96,14 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    alarm must make LED 0 blink red.
 9. **No false diagnostics** — relay/pump transitions must not republish the
    error state topics.
-10. **Serial boot (optional)** — the board boots with the saved config, logs
+10. **Mixer opening ceiling** (emulation build) — `/api/config/safety` carries
+    a valid `mix_max_open_pct` and `/api/state` reports the same value as
+    `circuits.floor.mixerMaxPct`. In Test Mode with a short travel time, the
+    script parks the valve at 0 %, starts a 100 % move and lowers the ceiling
+    to 40 % mid-move; L1 must stop at 40 % with the motor off, the live value
+    must follow, and the portal must reject a target above the ceiling with
+    HTTP 400.
+11. **Serial boot (optional)** — the board boots with the saved config, logs
     no Preferences errors, no NVS corruption and no crash markers, then
     reconnects Wi-Fi and MQTT.
 
@@ -113,6 +122,9 @@ The script is written to be re-runnable on a shared bench:
   heater can energise immediately, then restores the original value. This is
   the anti-short-cycle protection and is safe to pause on the bench because no
   real heater is attached.
+- The mixer-ceiling check temporarily sets `mix_max_open_pct=100` and
+  `travel_time_ms=4000`, activates Test Mode, moves the valve, then restores
+  both values and the previous Test Mode state.
 - `--broker` changes `mqtt_host`/`mqtt_port` only for the duration of the run.
 - `--serial` **reboots the controller**; run it last.
 
@@ -121,8 +133,9 @@ save performed by the normal config PUT endpoint.
 
 ## Notes and limitations
 
-- Error-sensor and LED checks require `HPN_IO_EMULATION` (the `esp32dev_sim`
-  environment); they are reported as skipped otherwise.
+- Error-sensor, LED and mixer-ceiling enforcement checks require
+  `HPN_IO_EMULATION` (the `esp32dev_sim` environment); they are reported as
+  skipped otherwise.
 - Counter persistence and anti-seize CRC writes are not exercised on the
   bench board; those are covered by code review and the NVS integrity checks
   in the boot log.

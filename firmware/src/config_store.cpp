@@ -35,6 +35,11 @@ struct ConfigBlob {
 
 static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
+// mix_max_open_pct occupies the former tail padding of Config, so the v1 blob
+// size is unchanged and existing NVS data stays valid. If this fails, bump
+// kVersion and add an explicit upgrade path instead of silently changing the
+// layout.
+static_assert(sizeof(Config) == 1288, "Config layout changed; review the NVS format");
 
 Preferences g_prefs;
 
@@ -80,6 +85,12 @@ ConfigLoadResult config_load(Config& config) {
         result = ConfigLoadResult::Corrupt;
       } else if (blob.header.crc == blob_crc(blob)) {
         config = blob.config;
+        // Blobs written before the opening cap existed have 0 in this byte
+        // (it was tail padding). Any out-of-range value is equally invalid.
+        if (config.mix_max_open_pct < 10 || config.mix_max_open_pct > 100) {
+          config.mix_max_open_pct = 85;
+          Serial.println("[config] mixer opening limit defaulted to 85%");
+        }
         result = ConfigLoadResult::Loaded;
       } else {
         result = ConfigLoadResult::Corrupt;

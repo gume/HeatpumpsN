@@ -10,6 +10,8 @@
 
 L1 evaluates deterministically on every tick of `T_safety` (Core 1, highest priority, $500\text{ ms}$–$1\text{ s}$ interval) and **arbitrates all final relay and actuator outputs** (`heater_phys`, `pump_floor_phys`, `pump_rad1_phys`, `pump_rad2_phys`). It also owns the mixer servo: L1 alone energizes the mixer motor (`mix_motion` / `mix_dir`) from `mix_target_pos`, applying the stop–wait–switch direction-change dead-time.
 
+> **Opening ceiling.** Every opening move is clamped to `mix_max_open_pct` (default **85 %**, configurable from the portal). This is a hard ceiling in the servo: it applies to L2 targets, portal test commands and maintenance sweeps alike. Closing moves and end-stop homing to $0.0$ are unaffected, and lowering the ceiling while the valve is open drives it back down to the new limit.
+
 * Nothing reaches L0 hardware drivers without passing L1 arbitration.
 * L1 continues executing and enforcing safe states even if L2 (`T_control`) hangs or WiFi/MQTT (`T_comms`) is down.
 

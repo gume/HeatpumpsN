@@ -426,6 +426,7 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
       add_circuit_json(circuits, "floor", st.pump_floor_intended, st.pump_floor_phys, st.after_heating_timer_s);
   floor["mixerPos"] = st.pos_est_dr * 100.0f;
   floor["mixerTarget"] = st.mix_target_pos * 100.0f;
+  floor["mixerMaxPct"] = cfg.mix_max_open_pct;
   floor["mixerMotion"] = st.mix_motion;
   floor["mixerDir"] = st.mix_dir;
   floor["mixerEmergency"] = st.mix_emergency;
@@ -562,6 +563,7 @@ void fill_safety(JsonObject o, const Config& c) {
   o["t_overtemp_hysteresis"] = c.t_overtemp_hysteresis;
   o["grad_limit"] = c.grad_limit;
   o["mix_safe_pos"] = c.mix_safe_pos;
+  o["mix_max_open_pct"] = c.mix_max_open_pct;
   o["boiler_min_off_ms"] = c.boiler_min_off_ms;
   o["demand_timeout_s"] = c.demand_timeout_s;
   o["pump_stop_after_heating_s"] = c.pump_stop_after_heating_s;
@@ -836,6 +838,7 @@ bool apply_safety(JsonObject in, Config& c, String& err) {
     return false;
   if (!json_float(in, "grad_limit", c.grad_limit, 0.05f, 5.0f, err)) return false;
   if (!json_float(in, "mix_safe_pos", c.mix_safe_pos, 0.0f, 1.0f, err)) return false;
+  if (!json_uint8(in, "mix_max_open_pct", c.mix_max_open_pct, 10, 100, err)) return false;
   if (!json_uint(in, "boiler_min_off_ms", c.boiler_min_off_ms, 0, 3600000, err)) return false;
   if (!json_uint(in, "demand_timeout_s", c.demand_timeout_s, 10, 3600, err)) return false;
   if (!json_uint(in, "pump_stop_after_heating_s", c.pump_stop_after_heating_s, 0, 3600, err))
@@ -1315,8 +1318,9 @@ void tick_sequence(uint32_t now_ms) {
       case 0:
         g_state->mix_free_run_dir = 1;
         g_state->mix_free_run_until_ms = now_ms + stroke_ms;
-        g_state->mix_target_pos = 1.0f;
-        log_event(0, 1430, "Mixer sweep: driving fully open");
+        g_state->mix_target_pos =
+            g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f;
+        log_event(0, 1430, "Mixer sweep: opening to the configured limit");
         g_sequence_step = 1;
         g_sequence_next_ms = now_ms + stroke_ms + 1000u;
         break;
@@ -2092,15 +2096,17 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
       send_error(request, 409, "mixer is locked by an emergency close");
       return;
     }
+    const float ceiling = g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f;
 
     if (strcmp(mixer, "stop") == 0) {
       // Freeze the servo where the valve is now so it does not chase the old
       // target again.
-      g_state->mix_target_pos = g_state->pos_est_dr;
+      g_state->mix_target_pos = fminf(g_state->pos_est_dr, ceiling);
       log_event(0, 1102, "Test command: mixer stop");
       JsonDocument doc;
       doc["ok"] = true;
       doc["mixer"] = "stop";
+      doc["max"] = ceiling;
       doc["note"] = "stop_requested";
       send_json(request, 200, doc);
       return;
@@ -2113,7 +2119,7 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
       const bool open = strcmp(mixer, "open") == 0;
       float target = g_state->pos_est_dr + (open ? kNudge : -kNudge);
       if (target < 0.0f) target = 0.0f;
-      if (target > 1.0f) target = 1.0f;
+      if (target > ceiling) target = ceiling;
       g_state->mix_target_pos = target;
 
       char detail[96];
@@ -2125,6 +2131,7 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
       doc["ok"] = true;
       doc["mixer"] = mixer;
       doc["position"] = target;
+      doc["max"] = ceiling;
       doc["note"] = "nudge_queued";
       send_json(request, 200, doc);
       return;
@@ -2136,12 +2143,18 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
         send_error(request, 400, "mixer position must be between 0 and 1");
         return;
       }
+      if (position > ceiling + 0.0001f) {
+        send_error(request, 400,
+                   "mixer position exceeds the configured maximum opening");
+        return;
+      }
       g_state->mix_target_pos = position;
       log_event(0, 1104, "Test command: mixer target position stored");
       JsonDocument doc;
       doc["ok"] = true;
       doc["mixer"] = "target";
       doc["position"] = position;
+      doc["max"] = ceiling;
       doc["note"] = "target_stored";
       send_json(request, 200, doc);
       return;

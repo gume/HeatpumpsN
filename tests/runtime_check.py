@@ -271,6 +271,10 @@ class Controller:
         self.changed_network: set[str] = set()
         self.original_safety: dict[str, Any] = {}
         self.changed_safety: set[str] = set()
+        self.hardware: dict[str, Any] = {}
+        self.original_hardware: dict[str, Any] = {}
+        self.changed_hardware: set[str] = set()
+        self.test_was_active = False
         self.original_temperatures: list[dict[str, Any]] = []
         self.original_manual_relays: dict[str, bool] = {}
         self.restored = False
@@ -304,6 +308,20 @@ class Controller:
         except Exception as error:  # noqa: BLE001
             self.checker.fail("safety config readable", str(error))
             self.safety = {}
+
+        try:
+            self.hardware = http_json(self.base, "/api/config/hardware")
+            self.original_hardware = dict(self.hardware)
+        except Exception as error:  # noqa: BLE001
+            self.checker.fail("hardware config readable", str(error))
+            self.hardware = {}
+
+        try:
+            self.test_was_active = bool(
+                http_json(self.base, "/api/state").get("test", {}).get("active")
+            )
+        except Exception:  # noqa: BLE001 - optional
+            self.test_was_active = False
 
         self.emulation = bool(self.status.get("portal", {}).get("emulation"))
         self.base_topic = str(self.network.get("mqtt_base_topic", "")) or "heatpumpsn/controller"
@@ -346,6 +364,13 @@ class Controller:
         if record:
             self.changed_safety.update(patch.keys())
         self.safety.update(patch)
+        return response
+
+    def _put_hardware(self, patch: dict[str, Any], record: bool = True) -> dict[str, Any]:
+        response = http_json(self.base, "/api/config/hardware", "PUT", patch)
+        if record:
+            self.changed_hardware.update(patch.keys())
+        self.hardware.update(patch)
         return response
 
     def prepare(self) -> None:
@@ -417,6 +442,17 @@ class Controller:
                     self._put_safety(patch, record=False)
                 except Exception as error:  # noqa: BLE001
                     print(f"[ WARN ] could not restore safety config: {error}")
+        if self.changed_hardware and self.original_hardware:
+            patch = {
+                key: self.original_hardware[key]
+                for key in self.changed_hardware
+                if key in self.original_hardware
+            }
+            if patch:
+                try:
+                    self._put_hardware(patch, record=False)
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not restore hardware config: {error}")
 
     # -- emulation helpers ------------------------------------------------
 
@@ -472,9 +508,11 @@ class Controller:
         if self.emulation:
             self.check_error_sensors()
             self.check_leds()
+            self.check_mixer_cap()
         else:
             self.checker.skip("error-sensor fault transitions", "requires HPN_IO_EMULATION")
             self.checker.skip("LED mapping", "requires HPN_IO_EMULATION")
+            self.checker.skip("mixer opening cap enforcement", "requires HPN_IO_EMULATION")
 
     def check_status(self) -> None:
         status = self.status
@@ -522,6 +560,9 @@ class Controller:
             not missing,
             "missing " + ", ".join(missing) if missing else "",
         )
+        self.checker.expect(
+            "mixer opening cap field exposed", "mix_max_open_pct" in self.safety
+        )
         removed = ("min_pulse_ms", "max_pulse_ms", "pulse_cooldown_ms")
         found: list[str] = []
         for section in ("safety", "hardware", "system"):
@@ -545,6 +586,12 @@ class Controller:
         self.checker.expect("no NVS corruption event (501)", not corrupted)
 
         samples = http_json(self.base, "/api/log/slow")
+        # The first sample is written on the 10 s cadence. A freshly flashed
+        # board may not have produced one yet when the checks start.
+        deadline = time.monotonic() + 12.0
+        while not samples.get("samples") and time.monotonic() < deadline:
+            time.sleep(1.0)
+            samples = http_json(self.base, "/api/log/slow")
         slow = samples.get("samples", [])
         self.checker.expect("RAM slow log populated", len(slow) > 0, f"{len(slow)} samples")
         self.checker.expect("slow log within capacity", len(slow) <= 180)
@@ -853,6 +900,145 @@ class Controller:
             len(messages) == 2,
             f"{len(messages)} messages: {[topic for topic, _ in messages]}",
         )
+
+    # -- mixer opening ceiling --------------------------------------------
+
+    def _floor(self) -> dict[str, Any]:
+        live = http_json(self.base, "/api/state")
+        return live.get("circuits", {}).get("floor", {})
+
+    def _test_mode(self, active: bool) -> dict[str, Any]:
+        path = "/api/test/activate" if active else "/api/test/deactivate"
+        return http_json(self.base, path, "POST", {})
+
+    def _wait_mixer(
+        self,
+        timeout: float,
+        predicate: Any,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        floor = self._floor()
+        while time.monotonic() < deadline:
+            floor = self._floor()
+            if predicate(floor):
+                break
+            time.sleep(0.2)
+        return floor
+
+    def check_mixer_cap(self) -> None:
+        """The L1 opening ceiling blocks every writer, not just the UI."""
+        safety = http_json(self.base, "/api/config/safety")
+        cap = int(safety.get("mix_max_open_pct", 0) or 0)
+        if not self.checker.expect(
+            "mixer opening cap in config (10-100%)", 10 <= cap <= 100, f"{cap}%"
+        ):
+            self.checker.skip("mixer opening cap enforcement", "invalid config value")
+            return
+
+        floor = self._floor()
+        live_cap = float(floor.get("mixerMaxPct", -1))
+        self.checker.expect(
+            "live state reports the mixer cap",
+            abs(live_cap - cap) <= 0.5,
+            f"{live_cap:g}%",
+        )
+
+        # A short travel time keeps the check fast; both constants are live and
+        # restored below, so normal control is unaffected afterwards.
+        test_cap = 40
+        fast_travel_ms = 4000
+        original_travel_ms = int(self.hardware.get("travel_time_ms", 0) or 0)
+        if original_travel_ms < 1000:
+            self.checker.skip(
+                "mixer opening cap enforcement", "travel_time_ms unavailable"
+            )
+            return
+        activated = False
+        try:
+            if not self.test_was_active:
+                self._test_mode(True)
+                activated = True
+            self._put_hardware({"travel_time_ms": fast_travel_ms})
+            self._put_safety({"mix_max_open_pct": 100})
+            time.sleep(0.5)
+
+            # Park the valve at the end stop so the opening move has a known
+            # start position regardless of the preceding checks.
+            http_json(
+                self.base,
+                "/api/test/command",
+                "POST",
+                {"mixer": "target", "position": 0.0},
+            )
+            parked = self._wait_mixer(
+                15.0,
+                lambda f: not f.get("mixerMotion") and float(f.get("mixerPos", 100)) <= 1.0,
+            )
+            parked_ok = not parked.get("mixerMotion") and float(parked.get("mixerPos", 100)) <= 1.0
+
+            # Start a full-stroke opening move, then lower the ceiling while the
+            # motor is running. L1 must stop at the new limit immediately.
+            http_json(
+                self.base,
+                "/api/test/command",
+                "POST",
+                {"mixer": "target", "position": 1.0},
+            )
+            opening = self._wait_mixer(
+                10.0,
+                lambda f: bool(f.get("mixerMotion")) and float(f.get("mixerPos", 0)) >= 15.0,
+            )
+            started = bool(opening.get("mixerMotion")) and float(opening.get("mixerPos", 0)) >= 15.0
+            self.checker.expect(
+                "mixer opens above 15% before the cap change",
+                parked_ok and started,
+                f"parked={parked.get('mixerPos', '?')} opening={opening.get('mixerPos', '?')}",
+            )
+
+            self._put_safety({"mix_max_open_pct": test_cap})
+            stopped = self._wait_mixer(10.0, lambda f: not f.get("mixerMotion"))
+            stopped_pos = float(stopped.get("mixerPos", -1))
+            self.checker.expect(
+                "L1 stops the mixer at the lowered cap",
+                not stopped.get("mixerMotion")
+                and test_cap - 5.0 <= stopped_pos <= test_cap + 5.0,
+                f"{stopped_pos:.1f}% motion={bool(stopped.get('mixerMotion'))}",
+            )
+            self.checker.expect(
+                "live cap follows the config change",
+                abs(float(stopped.get("mixerMaxPct", -1)) - test_cap) <= 0.5,
+                f"{stopped.get('mixerMaxPct', '?')}%",
+            )
+
+            # Test Mode bypasses L2, so this is the portal's own guard.
+            code, _, _ = http_request(
+                self.base,
+                "/api/test/command",
+                "POST",
+                {"mixer": "target", "position": 0.8},
+            )
+            self.checker.expect(
+                "portal rejects a target above the cap",
+                code == 400,
+                f"HTTP {code}",
+            )
+        finally:
+            try:
+                self._put_safety({"mix_max_open_pct": cap}, record=False)
+                self.changed_safety.discard("mix_max_open_pct")
+            except Exception as error:  # noqa: BLE001
+                print(f"[ WARN ] could not restore mix_max_open_pct: {error}")
+            if original_travel_ms >= 1000:
+                try:
+                    self._put_hardware({"travel_time_ms": original_travel_ms}, record=False)
+                    self.changed_hardware.discard("travel_time_ms")
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not restore travel_time_ms: {error}")
+            if activated:
+                try:
+                    self._test_mode(False)
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not leave Test Mode: {error}")
 
     # -- optional serial boot check ---------------------------------------
 

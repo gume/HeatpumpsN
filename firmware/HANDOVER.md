@@ -1,171 +1,157 @@
-# Firmware session handover — RAM logs, MQTT streaming, CRC32, HA error sensors, LEDs
+# Firmware session handover — configurable mixer opening ceiling
 
 **Date:** 2026-10-26
-**Base commit:** `6ed1ff3` ("simulation")
-**Working tree:** clean; all changes are committed (see §6).
+**Base commit:** `7e079f7` ("firmware: RAM-only logs, MQTT streaming, CRC32 NVS, HA error sensors, status LEDs")
 **Device:** remote ESP32-D0WDQ6 bench board flashed with `esp32dev_sim`
 (HHN 1.0 emulation), Wi-Fi `Testing`, controller `http://192.168.2.14`,
-broker `smcl.tmit.bme.hu:31883`. The real HHN 1.0 carrier is `esp32s2`; the
-physical LED order still needs a check on that board.
+broker `smcl.tmit.bme.hu:31883`.
 
-> **Read this first.** This session changed the NVS layout, the logging
-> ownership and the MQTT entity set. Both `esp32s2` and `esp32dev_sim` build
-> clean, and the `esp32dev_sim` image has been flashed and verified on the bench
-> board (see §4). Upload the filesystem before the application because
-> `data/js/app.js` and its `.gz` sibling changed.
+> **Read this first.** The mixer can no longer be commanded above a configurable
+> ceiling. L1 is the authoritative enforcement point; L2, the portal and the UI
+> know the same value. Both firmware environments build clean, the
+> `esp32dev_sim` image and LittleFS assets are flashed, and the bench run passes
+> every runtime check (see §4). Upload the filesystem as well as the application
+> because `data/js/app.js` and its `.gz` sibling changed.
 
 ---
 
 ## 1. Objective
 
-1. Never store log messages in the MCU flash. Keep them in RAM circular buffers,
-   with optional publishing to MQTT.
-2. Add two Home Assistant text sensors: numeric `system_error_code` (`0` = no
-   error) and the matching human-readable `system_error_text`.
-3. Remove all NVS state migration and migration preparation. Add CRC32 to the
-   NVS stores to detect corruption.
-4. Add the missing status-LED control.
+The old controller never opened the heating mixer past **85 %**. A fully open
+mixer closes too slowly when the boiler temperature rises suddenly, so the
+extra range was a safety liability rather than useful headroom. This session
+adds a configurable maximum opening:
+
+1. New parameter `mix_max_open_pct`, default **85 %**, range 10–100 %.
+2. L1 refuses to drive the mixer above it on **every** opening move.
+3. L2 and the portal clamp their targets to the same value.
+4. Configurable from the device (Settings → Safety & timeouts).
+5. Existing NVS configurations keep working without losing settings.
 
 ---
 
 ## 2. What changed
 
-### 2.1 RAM-only logging (`hpn::logger`)
+### 2.1 Config and NVS layout
 
-`firmware/include/hpn/logger.h`, `firmware/src/logger.cpp` now own both streams:
+`firmware/include/hpn/config.h`
 
-* event buffer: **96** records, detail up to 95 chars, sequence number, uptime,
-  severity, code, latched flag;
-* slow buffer: **180** samples at a **10 s** cadence (boiler/return/mix
-  temperatures, dead-reckoned position, four physical relay states).
+* `uint8_t mix_max_open_pct` is the final `Config` member.
+* `mixer_ceiling(config)` returns the ceiling as a `float` (0.01–1.0), clamped
+  defensively, and is the single source of truth for every layer.
+* The field reuses the former tail padding of the v1 blob, so
+  `sizeof(Config)` stays **1288 bytes**. `config_store.cpp` now asserts this
+  statically; a future layout change must bump the blob version instead of
+  silently invalidating stored settings.
 
-Nothing is written to flash. The web portal reads snapshots through
-`logger::events_after()` / `logger::slow_after()`; its old `EventEntry`,
-`SlowSample` and ring-buffer globals were removed. `web::log_event()` simply
-delegates to `logger::log_event()`.
+`firmware/src/config.cpp` sets the compiled default to **85**.
 
-`T_logger` samples the slow log and emits a diagnostic event whenever
-`system_error_code` or `active_alarms` changes. `logger::begin()` is called
-**before** `l4::begin()` so web/MQTT startup events are not discarded by the
-buffer reset.
+`firmware/src/config_store.cpp` upgrades a loaded blob whose value is outside
+10–100 (including `0`, the old padding byte) to 85 and logs
+`[config] mixer opening limit defaulted to 85%`.
 
-Optional MQTT streaming (new config fields):
+### 2.2 L1 enforcement (`firmware/src/l1_safety.cpp`)
 
-* `mqtt_log_enabled` (default **false**);
-* `mqtt_log_slow_topic[96]`, `mqtt_log_event_topic[96]` — full-topic overrides;
-  empty means `<base>/log/slow` and `<base>/log/event`.
+`service_mixer()` is the only code that energizes the motor, so it owns the
+hard limit:
 
-Records are JSON lines (`seq`, `ts`, optional `wall`, plus the record fields)
-and are published non-retained. Per-stream cursors advance only after a
-successful publish, so a broker outage does not block logging and the retained
-RAM backlog is sent after reconnection. Enabling the feature starts at the
-current cursor, so it streams new records rather than an old backlog.
+* the requested target is normalized and clamped to the ceiling before any
+  comparison;
+* a normal opening move stops at the ceiling and the dead-reckoned position is
+  clamped to it;
+* a free-run request (maintenance sweep / homing) opening upward stops at the
+  ceiling and clears `mix_free_run_dir` / `mix_free_run_until_ms`, so it cannot
+  pulse against the cap on the following ticks;
+* a backstop clamps `pos_est_dr` after every opening tick, covering any path
+  that bypassed the earlier checks;
+* closing moves, emergency close and end-stop homing to 0 % are unaffected.
 
-### 2.2 Home Assistant error sensors
+Boot log: `[l1] mixer opening limit 85%` (actual configured value).
 
-`publish_error_sensors()` adds two diagnostic entities:
+Lowering the ceiling while the valve is open drives it back down to the new
+limit; raising it does not move the valve by itself.
 
-* `sensor.system_error_code` → `<base>/state/system_error_code`;
-* `sensor.system_error_text` → `<base>/state/system_error_text`.
+### 2.3 L2 and portal
 
-`format_error_text()` (in `state.cpp`) returns `No error` for code `0` with no
-flags, otherwise the code name, relevant state detail and active warning/alarm
-names. Both entities are published only when the code or alarm mask changes;
-ordinary relay, pump, mixer and setpoint changes do not touch them. The same
-text is exposed in the portal's live JSON (`safety.errorText`,
-`system.errorText`) and displayed on the dashboard.
+`firmware/src/l2_control.cpp`
 
-### 2.3 CRC32 NVS stores, no migration
+* `service_mixer_control()` clamps `mix_target_pos` at the top of the function,
+  so early returns (DHW hold, no floor demand, deadband hold) cannot report a
+  target above the cap either;
+* every computed and held target is clamped with `mixer_ceiling()`.
 
-`firmware/include/hpn/crc32.h` adds a portable IEEE CRC32. `config_store.*`
-now stores one blob with `{magic, version, size, crc}` and version **1**. All
-v1–v4 migration code and the append-only layout assumptions are gone.
+`firmware/src/web_portal.cpp`
 
-Load result is one of `Loaded`, `Missing`, `Stale`, `Corrupt`:
+* `/api/config/safety` exposes and validates `mix_max_open_pct` (10–100);
+* `/api/state` adds `circuits.floor.mixerMaxPct`;
+* Test Mode nudges are clamped to the ceiling; an explicit
+  `{"mixer":"target","position":>cap}` is rejected with **HTTP 400** and
+  responses include the active `max`;
+* the mixer sweep sequence opens only to the configured ceiling and logs
+  `Mixer sweep: opening to the configured limit`.
 
-* **Stale** — old-format blob. Discarded silently and compiled defaults used;
-  no alarm because this is not data corruption.
-* **Corrupt** — current-format blob fails the size/CRC check. Compiled defaults
-  are used and `main.cpp` latches `WARN_NVS_CORRUPTED` +
-  `ERR_NVS_DATA_CORRUPTED` (code `501`).
+### 2.4 UI and docs
 
-The relay counters (`hpnctr`, now version **2**) and the anti-seize schedule
-(`hpnanti`, now a `{magic, next_day, crc}` blob) use the same pattern. Legacy
-counter/anti-seize formats are discarded silently; current-format CRC failures
-latch the same warning/error.
+`firmware/data/js/app.js` (+ regenerated `.gz`):
 
-### 2.4 Status LEDs
+* Settings → Safety & timeouts: **Maximum mixer opening** (10–100 %, step 1)
+  with an explanation of the slow-close risk;
+* Dashboard and Test page show **Maximum opening** next to the estimated and
+  target positions;
+* the Test page target slider is bounded by the live ceiling and the help text
+  names it.
 
-New `firmware/include/hpn/led_status.h` + `firmware/src/led_status.cpp`, called
-from `l4::tick()` after MQTT/web. L0 still owns the NeoPixel write. The animator
-uses the plan 02 §1.2 mapping:
-
-| LED | Meaning |
-| --- | --- |
-| 0 | green online; yellow breathing when Wi-Fi/MQTT is down; red blink on critical alarm |
-| 1 | orange heater on; cyan DHW priority; purple blink anti-short-cycle hold-off |
-| 2 | green floor pump running; cyan breathing flush; magenta ΔT collapse; red rapid blink hard over-temp |
-| 3–4 | orange radiator pump running; red welded-relay or dry-run fault |
-
-The frame is rebuilt at most every 50 ms and only written when it changes.
-Unassigned LED GPIO remains a no-op.
-
-### 2.5 UI and docs
-
-* Network settings page adds the log enable checkbox and both topic overrides.
-* Dashboard LEDs now mirror the physical animator, and the Safety card shows
-  `Error text`.
-* `app.js.gz` regenerated.
-* Updated `firmware/README.md`, `firmware/docs/hhn-1.0.md`,
-  `plans/controller node/01`, `02`, `06`, `web_interface.md` and
-  `plans/mqtt_messaging_plan.md` to match the implementation.
+Updated `firmware/README.md`, `plans/controller node/01`, `03` and `04`.
 
 ---
 
 ## 3. Design decisions / caveats
 
-* Logs are lost on reboot by design. There is no flash archive and no NVS ring.
-* The error text sensor reflects **diagnostic posture**, not every actuator
-  transition. A warning/alarm mask change or error-code change updates it.
-* Old-format NVS blobs are discarded without an alarm. If the user sees code
-  `501`, the data really failed its current-format CRC/size check.
-* The `501` / `WARN_NVS_CORRUPTED` latch lasts for the current boot. A
-  successful config save rewrites the blob but deliberately does **not** clear
-  the live flag, because the counters or anti-seize blob may still be damaged.
-  The next boot clears it once every persisted blob validates.
-* MQTT log streaming is opt-in to avoid unexpected broker traffic. The web
-  portal always has the RAM buffers.
-* Counter/anti-seize writes keep their previous hourly/5-minute deferred
-  schedules; only the blob format gained a CRC.
-* `resolve_log_topic()` no longer takes an unused `Config` argument.
-* The MQTT log payload buffer is 768 bytes. A record that cannot fit advances
-  the cursor instead of stalling the stream forever.
+* **L1 is authoritative.** Higher layers clamp for a coherent UI and to reject
+  bad requests early, but a stale L2 target or a direct writer still cannot
+  open the valve past the ceiling.
+* **The ceiling is not a position.** It limits the commanded opening only.
+  Position estimation, encoder resync, homing and closing remain unchanged.
+* **Old NVS blobs stay valid.** The new byte was previously tail padding, so no
+  version bump or migration is needed. A stored `0` is treated as "unset" and
+  upgraded to 85.
+* **No automatic return to the cap on boot.** If the valve is physically above
+  the cap, L1 only refuses further opening; it does not force a close on boot.
+  Normal control or a lower target will bring it down.
+* **Emergency close wins.** `mix_emergency` still forces `0.0` and is exempt
+  from the ceiling logic.
 
 ---
 
 ## 4. Verification performed
 
-* `pio remote run -e esp32s2` → **SUCCESS**, RAM 28.9 % (94 540 B), flash 75.3 %
-  (1 234 327 B of 1 638 400 B).
-* `pio remote run -e esp32dev_sim` → **SUCCESS**, RAM 25.1 % (82 204 B), flash
-  76.5 % (1 253 676 B).
-* No compiler warnings in either environment.
-* `node --check firmware/data/js/app.js` passes; gzip regenerated.
-* Flashed `esp32dev_sim` and verified on the bench ESP32-D0WDQ6:
-  * boot: saved config loaded, no Preferences errors, no NVS `501`, the legacy
-    anti-seize scalar discarded, MQTT connected and HA discovery published;
-  * `python3 tests/runtime_check.py --serial` → **PASSED: 52 passed, 0 failed,
-    0 skipped**; without `--serial` → **45/45**;
-  * MQTT log streaming verified on the default and override topics;
-  * HA `system_error_code` / `system_error_text` verified `0 → 202 → 0` and
-    `0 → 201 → 0`, including warning text without a double space;
-  * all five LED states verified through the emulation model, including the red
-    critical blink and the purple anti-short-cycle blink.
-* Fixed during verification: a partial 8-byte `Preferences::getBytes()` read
-  misclassified the 1112-byte legacy config blob as corrupt (false `501`); the
-  legacy anti-seize `UInt` key made `getBytesLength()` log an error. Config and
-  counter loads now read the whole blob, and the anti-seize loader checks the
-  stored type and removes legacy scalars before writing a blob.
+* `pio remote run -e esp32dev_sim` → **SUCCESS**, RAM 25.1 % (82 204 B),
+  flash 76.6 % (1 254 440 B of 1 638 400 B).
+* `pio remote run -e esp32s2` → **SUCCESS**, RAM 28.9 % (94 540 B), flash
+  75.4 % (1 235 055 B).
+* Only the pre-existing `wifi_client.cpp` `-Wformat` warning is present.
+* `node --check firmware/data/js/app.js` passes; `app.js.gz` regenerated with
+  `gzip -9 -n`.
+* Flashed `esp32dev_sim` plus the LittleFS image on the bench ESP32-D0WDQ6.
+* `python3 tests/runtime_check.py --serial` → **PASSED: 59 passed, 0 failed,
+  0 skipped**; without `--serial` → **52/52**.
+* New runtime checks:
+  * `mix_max_open_pct` present in `/api/config/safety` (85 % on the bench) and
+    `mixerMaxPct` matches it in `/api/state`;
+  * temporary Test Mode, `travel_time_ms=4000`, target `0 %`, then target
+    `100 %`; after the valve passed 15 % the ceiling was lowered to **40 %**
+    mid-move. L1 stopped at **40.0 %, motion off**;
+  * `/api/state` reported the new 40 % ceiling immediately;
+  * `POST /api/test/command {"mixer":"target","position":0.8}` returned
+    **HTTP 400**;
+  * the test restores `mix_max_open_pct`, `travel_time_ms` and Test Mode;
+    `/api/config/*` confirmed 85 % and 145 000 ms afterwards.
+* Boot log contains `[l1] mixer opening limit 85%`; the existing config blob
+  loaded with no NVS corruption and no Preferences read errors.
+
+Fixed during verification: `check_ram_logs()` now waits up to 12 s for the first
+slow-log sample, because a freshly flashed board may still be inside the 10 s
+cadence window when the checks start.
 
 ---
 
@@ -182,89 +168,60 @@ python3 ../tests/runtime_check.py --base-url http://192.168.2.14 --serial
 ```
 
 `tests/flash_and_check.sh --serial` (from the repository root) does the build,
-flash and checks in one step.
+flash and checks in one step; set `HPN_UPLOAD_FS=1` to include the UI assets.
 
 After boot, check:
 
-1. `[config] loaded saved configuration from NVS` or
-   `format differs ... using compiled defaults` (no `CRC/format check failed`
-   on a normal first boot after the format change).
-2. Portal → Dashboard shows `Error text: No error` and the five LEDs match the
-   table above.
-3. Settings → Network & MQTT: enable log streaming; watch `<base>/log/event`
-   and `<base>/log/slow` for JSON lines.
-4. HA discovers `System error code` and `System error text`; force a warning
-   (for example a sensor fault on the bench) and confirm both update.
-5. `/api/log/events` and `/api/log/slow` still return records from RAM.
+1. `[config] loaded saved configuration from NVS` (no CRC/format failure) and
+   `[l1] mixer opening limit 85%`.
+2. Portal → Settings → Safety & timeouts shows **Maximum mixer opening** at
+   85; saving 40 makes the Dashboard/Test page display 40 and the Test slider
+   stop at 40.
+3. Test Mode: commanding 80 % while the cap is 40 returns an error; a nudge
+   upward past 40 stops at the cap.
+4. Closing and end-stop homing still reach 0 %.
 
 Always bound the serial monitor with `timeout`; never run an unbounded
-`pio remote device monitor`. The automated suite performs checks 1–5 and the
-bounded boot capture; use it instead of repeating them by hand.
+`pio remote device monitor`. The automated suite covers checks 1–4 and the
+bounded boot capture.
 
 ---
 
 ## 6. Working-tree state
 
-Modified:
+Modified for this change:
 
 ```
 firmware/README.md
+firmware/HANDOVER.md
 firmware/data/js/app.js
 firmware/data/js/app.js.gz
-firmware/docs/hhn-1.0.md
 firmware/include/hpn/config.h
-firmware/include/hpn/config_store.h
-firmware/include/hpn/logger.h
-firmware/include/hpn/state.h
 firmware/src/config.cpp
 firmware/src/config_store.cpp
-firmware/src/l4_comms.cpp
-firmware/src/logger.cpp
-firmware/src/main.cpp
-firmware/src/mqtt_client.cpp
-firmware/src/state.cpp
-firmware/src/tasks.cpp
+firmware/src/l1_safety.cpp
+firmware/src/l2_control.cpp
 firmware/src/web_portal.cpp
 plans/controller node/01_config_and_contracts.md
-plans/controller node/02_hardware_and_l0.md
-plans/controller node/06_interfaces_and_logging.md
-plans/controller node/web_interface.md
-plans/mqtt_messaging_plan.md
-```
-
-New:
-
-```
-firmware/include/hpn/crc32.h
-firmware/include/hpn/led_status.h
-firmware/src/led_status.cpp
-tests/README.md
-tests/flash_and_check.sh
+plans/controller node/03_safety_layer_l1.md
+plans/controller node/04_control_and_coordination_l2.md
 tests/runtime_check.py
+tests/README.md
 ```
 
-Untracked and unrelated to this work: `reviews/` and the recent
-`simulation/sim_run_hil_*.csv/png` files.
+Untracked / unrelated and deliberately not part of this commit: `reviews/`,
+the `simulation/sim_run_hil_*.csv/png` files, the `simulation/test_run_*`
+artefacts, and the existing local edits under `simulation/`.
 
 ---
 
 ## 7. Open items
 
-1. ~~Flash and run the checks in §5~~ — done on 2026-10-26 with
-   `esp32dev_sim`; see §4.
-2. ~~Confirm the HA error sensors appear with the expected names and update
-   only on posture changes~~ — done; both entities update on code/alarm-mask
-   changes, never on relay transitions.
-3. Verify the physical LED order on a real HHN 1.0 board (the new mapping
-   differs from the legacy ESPHome firmware). The bench run used the emulated
-   carrier, so only the logical mapping is proven.
-4. Decide whether the event log should also capture every `*_intended` vs
-   `*_phys` divergence transition with more context; today the logger emits
-   diagnostic-posture transitions and the existing lifecycle/sequence events
-   from the portal/MQTT.
-5. Consider a future explicit flash archive if logs must survive reboot; this
-   was deliberately not implemented.
-6. Resolved this session: a successful config save does not clear the NVS
-   corruption latch early; the flag is held until the next valid boot so
-   counter/anti-seize damage is not masked. Revisit only if a manual
-   acknowledge/clear action is added to the portal.
+1. Confirm on a real HHN 1.0 carrier (`esp32s2`) that lowering the cap while
+   the valve is open produces the expected close and that 85 % is mechanically
+   identical to the old controller's ceiling.
+2. Decide whether the dashboard should raise a visible warning when the
+   estimated position is above the configured cap (for example after a config
+   change or an encoder resync).
+3. The simulator/HIL tooling in `simulation/` has local, unrelated edits that
+   were not reviewed or committed in this session.

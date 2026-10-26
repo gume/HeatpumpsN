@@ -67,11 +67,19 @@ void start_mixer(SystemState& state, int8_t want_dir) {
 
 void service_mixer(const Config& config, SystemState& state, bool force_close, bool allow_open) {
   const uint32_t now = millis();
+  const float ceiling = mixer_ceiling(config);
 
-  const float target = force_close ? 0.0f
-                                   : (state.mix_target_pos < 0.0f   ? 0.0f
-                                      : state.mix_target_pos > 1.0f ? 1.0f
-                                                                    : state.mix_target_pos);
+  // The ceiling is absolute: even a stale target or a maintenance sweep cannot
+  // command the valve past it. Force-close always wins.
+  float target = force_close ? 0.0f : state.mix_target_pos;
+  if (!isfinite(target) || target < 0.0f) {
+    target = 0.0f;
+  } else if (target > 1.0f) {
+    target = 1.0f;
+  }
+  if (!force_close && target > ceiling) {
+    target = ceiling;
+  }
   const int8_t free_dir = force_close ? 0 : state.mix_free_run_dir;
 
   if (state.mix_motion) {
@@ -93,6 +101,14 @@ void service_mixer(const Config& config, SystemState& state, bool force_close, b
         stop = true;
         state.mix_free_run_dir = 0;
         state.mix_free_run_until_ms = 0;
+      } else if (state.mix_dir > 0 && next >= ceiling) {
+        // A sweep may exercise the valve, but only up to the configured
+        // opening limit. End the free-run so it does not restart on the next
+        // tick and pulse against the cap.
+        next = ceiling;
+        stop = true;
+        state.mix_free_run_dir = 0;
+        state.mix_free_run_until_ms = 0;
       }
     } else {
       if (next <= 0.0f) {
@@ -107,6 +123,11 @@ void service_mixer(const Config& config, SystemState& state, bool force_close, b
       } else if (state.mix_dir > 0 ? next >= target : next <= target) {
         stop = true;
       }
+    }
+    // Backstop for any opening move, including a free-run sweep.
+    if (state.mix_dir > 0 && next > ceiling) {
+      next = ceiling;
+      stop = true;
     }
     state.pos_est_dr = next;
 
@@ -144,8 +165,9 @@ void service_mixer(const Config& config, SystemState& state, bool force_close, b
 }  // namespace
 
 void begin(const Config& config, SystemState& state) {
-  (void)config;
   (void)state;
+  Serial.printf("[l1] mixer opening limit %u%%\n",
+                static_cast<unsigned>(config.mix_max_open_pct));
   g_mix_last_dir = 0;
   g_mixer_last_ms = 0;
   g_heater_off_ms = millis();  // hold anti-short-cycle at cold boot

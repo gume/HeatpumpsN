@@ -133,7 +133,24 @@ struct Config {
   bool mqtt_log_enabled;
   char mqtt_log_slow_topic[96];
   char mqtt_log_event_topic[96];
+
+  // --- Output limits -------------------------------------------------------
+  // Absolute upper bound for the mixer opening, in percent (10-100). L1 never
+  // drives the valve above this value; L2 and the portal clamp their targets
+  // to it. This field reuses the former tail padding of the v1 NVS layout, so
+  // sizeof(Config) is unchanged and existing blobs remain valid. A stored 0
+  // (the old padding value) is upgraded to the 85 % default on load.
+  uint8_t mix_max_open_pct;
 };
+
+// Mixer opening ceiling as a fraction (0.01-1.0). Single source of truth for
+// the L1 enforcement and the higher-layer clamps.
+inline float mixer_ceiling(const Config& config) {
+  uint8_t pct = config.mix_max_open_pct;
+  if (pct < 1) pct = 1;
+  if (pct > 100) pct = 100;
+  return static_cast<float>(pct) / 100.0f;
+}
 
 // Compiled-in defaults used before NVS has valid data. All values are safe
 // placeholders; safety-relevant numbers must be finalized in the plan and

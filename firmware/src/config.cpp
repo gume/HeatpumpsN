@@ -47,6 +47,7 @@ Config config_defaults() {
   c.t_overtemp_hysteresis = 2.0f;
   c.grad_limit = 0.3f;
   c.mix_safe_pos = 0.0f;
+  c.mix_max_open_pct = 85;  // old controller ceiling; slow closing is unsafe
   c.boiler_min_off_ms = 180000;
   c.demand_timeout_s = 600;  // tolerate HA keep-alive every ~5 min
   c.pump_stop_after_heating_s = 300;

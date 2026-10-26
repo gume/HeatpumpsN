@@ -357,7 +357,8 @@ local `pio run -t upload` first. Keep the helper inside `src/` and keep the
 `tests/runtime_check.py` is a repeatable integration check against a running
 controller. It prints `PASSED` on success and covers the HTTP API, the RAM log
 rings, MQTT discovery/state topics and log streaming, HA error-sensor
-transitions, the five-LED mapping, and (with `--serial`) the boot log.
+transitions, the five-LED mapping, the L1 mixer opening ceiling, and (with
+`--serial`) the boot log.
 
 ```bash
 python3 tests/runtime_check.py --base-url http://192.168.2.14
@@ -365,9 +366,10 @@ tests/flash_and_check.sh --serial        # build + flash esp32dev_sim + checks
 ```
 
 Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-26):
-`PASSED: 52 passed, 0 failed, 0 skipped` with `--serial`, and `45/45` without
+`PASSED: 59 passed, 0 failed, 0 skipped` with `--serial`, and `52/52` without
 the reboot. The boot log showed the saved config loading, no Preferences
-errors, no `501` latch and no crash markers.
+errors, no `501` latch, no crash markers and the `[l1] mixer opening limit`
+line.
 
 Requirements, the full check list and the state the suite restores are in
 [`../tests/README.md`](../tests/README.md). `--serial` reboots the board.
@@ -436,6 +438,10 @@ is a Python SConscript despite its extension; see the remote upload section.
 
 - Check the `[l0] backend` boot line. `esp32dev_sim` is emulated and must never
   be expected to drive real relays; `esp32s2` is hardware.
+- The mixer opening is capped by `safety.mix_max_open_pct` (default **85 %**).
+  L1 refuses to open past it on every move, including maintenance sweeps; L2
+  and the portal clamp their targets to it. Closing and end-stop homing are
+  unaffected.
 - `HPN_BENCH_LOOPBACK` is enabled only for `esp32dev_sim`. It is a wiring aid
   for the portal, not L1 safety arbitration. Never add it to a hardware build.
 - The portal's Test Mode and configuration editor are not safety-rated. The
