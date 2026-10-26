@@ -36,7 +36,7 @@ Initiated **only by a human user via the local Web Dashboard** for:
 ### 3.2 Pipeline Contract & Expiry Transition
 
 * **Pipeline Intake:** Test mode acts as a command emulator entering at the same L4 intake point as HA commands, remaining **fully subject to all L1 safety rules** (`t_max_hard`, `t_max_warn`, `grad_limit`, sensor faults, and `boiler_min_off_ms`), with a visible countdown timer (`test_mode_rem_s`).
-* **Direct Mixer Jogging:** Specifically in `MODE_TEST_OVERRIDE`, L2 closed-loop mixer control can be paused to allow **direct manual mixer jogging** from the Web Dashboard (issuing small open/close pulses or step targets directly through L1 $\rightarrow$ L0) to verify mechanical travel and wiring polarity.
+* **Direct Mixer Jogging:** Specifically in `MODE_TEST_OVERRIDE`, L2 closed-loop mixer control can be paused to allow **direct manual mixer jogging** from the Web Dashboard (nudging `mix_target_pos` by $\pm 2\%$ steps, or storing an explicit target, through the L1 servo) to verify mechanical travel and wiring polarity. A jog may be stopped at any time; the emergency lock refuses jogs while it is held.
 * **Test Mode Expiry Mid-Heating (HA Offline):** When `test_mode_rem_s` reaches $0$, mode transitions to the persisted NVS mode (normally `MODE_HEAT`). If HA is offline, `keepalive_age_s >= demand_timeout_s` is immediately true, which funnels safely into the staged shutdown: `heater_phys` is opened immediately (`DIV_DEMAND_LOSS`), running pumps circulate for `pump_stop_after_heating_s`, and then all pumps turn off (`DIV_AFTER_HEATING_TIMEOUT`).
 
 ### 3.3 Built-In Identification Test Routines (User-Initiated, Observer-Consumed)

@@ -13,7 +13,6 @@ constexpr float kIntegratorLimit = 0.35f;
 constexpr uint32_t kDeltaTCollapseDebounceMs = 60000u;
 
 uint32_t g_last_tick_ms = 0;
-uint32_t g_mix_next_req_ms = 0;
 uint32_t g_floor_flush_end_ms = 0;
 uint32_t g_floor_pause_end_ms = 0;
 uint32_t g_delta_low_since_ms = 0;
@@ -48,6 +47,14 @@ bool radiator_active(const SystemState& state) {
 // validation remain future work.
 void service_mixer_control(const Config& config, SystemState& state, bool floor_demand,
                            bool dhw_active, bool flush_active) {
+  // Emergency lock: L1 owns the mixer and forces a full close. Do not let the
+  // closed loop overwrite the target while the lock is held.
+  if (state.mix_emergency) {
+    state.mix_target_pos = 0.0f;
+    state.integrator_val = g_integrator;
+    return;
+  }
+
   if (!floor_demand) {
     if (state.heater_requested || state.pump_rad1_requested || state.pump_rad2_requested) {
       state.mix_target_pos = 0.0f;
@@ -94,13 +101,32 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     g_integrator += config.ki * error;
   }
   g_integrator = clampf(g_integrator, -kIntegratorLimit, kIntegratorLimit);
+  state.integrator_val = g_integrator;
+
+  // If the measured temperature is already at target, hold the current valve
+  // position. The feedforward model is not accurate enough to justify moving
+  // to an absolute position when the feedback error is inside the deadband.
+  // During the warm-up flush the position is still clamped (below), so the
+  // hold is skipped there.
+  if (!flush_active && fabsf(error) <= config.deadband_temp) {
+    state.mix_target_pos = state.pos_est_dr;
+    return;
+  }
 
   float target = pos_ff + config.kp * error + g_integrator;
   if (flush_active) {
     target = fminf(target, config.flush_max_pos);
   }
+
+  // Limit how far the target can move in one control tick. This prevents large
+  // feedforward corrections from producing long motor bursts.
+  const float max_step = 0.10f;
+  if (target > state.pos_est_dr + max_step) {
+    target = state.pos_est_dr + max_step;
+  } else if (target < state.pos_est_dr - max_step) {
+    target = state.pos_est_dr - max_step;
+  }
   state.mix_target_pos = clampf(target, 0.0f, 1.0f);
-  state.integrator_val = g_integrator;
 }
 
 void service_position_tracking(const Config& config, SystemState& state, uint32_t now_ms) {
@@ -123,47 +149,12 @@ void service_position_tracking(const Config& config, SystemState& state, uint32_
   }
 }
 
-void service_mixer_target(const Config& config, SystemState& state) {
-  if (state.mix_free_run || state.mix_pulse_ms_phys > 0 || state.mix_pulse_ms_req > 0) {
-    return;
-  }
-
-  const uint32_t now = millis();
-  if (g_mix_next_req_ms != 0 && static_cast<int32_t>(now - g_mix_next_req_ms) < 0) {
-    return;
-  }
-
-  float target = clampf(state.mix_target_pos, 0.0f, 1.0f);
-  const float error = target - state.pos_est_dr;
-  if (fabsf(error) <= config.deadband_pos) {
-    return;
-  }
-
-  const float travel_ms = config.travel_time_ms > 0 ? static_cast<float>(config.travel_time_ms)
-                                                     : 145000.0f;
-  float pulse_ms = fabsf(error) * travel_ms;
-  if (pulse_ms < static_cast<float>(config.min_pulse_ms)) {
-    pulse_ms = static_cast<float>(config.min_pulse_ms);
-  }
-  if (pulse_ms > static_cast<float>(config.max_pulse_ms)) {
-    pulse_ms = static_cast<float>(config.max_pulse_ms);
-  }
-  if (pulse_ms < 1.0f) {
-    pulse_ms = 1.0f;
-  }
-
-  state.mix_pulse_dir_req = error > 0.0f ? 1 : -1;
-  state.mix_pulse_ms_req = static_cast<uint32_t>(pulse_ms + 0.5f);
-  g_mix_next_req_ms = now + state.mix_pulse_ms_req + config.pulse_cooldown_ms + 50u;
-}
-
 }  // namespace
 
 void begin(const Config& config, SystemState& state) {
   (void)config;
   (void)state;
   g_last_tick_ms = 0;
-  g_mix_next_req_ms = 0;
   g_floor_flush_end_ms = 0;
   g_floor_pause_end_ms = 0;
   g_delta_low_since_ms = 0;
@@ -191,7 +182,6 @@ void tick(const Config& config, SystemState& state) {
     state.pump_rad1_requested = state.pump_rad1_intended;
     state.pump_rad2_requested = state.pump_rad2_intended;
     service_position_tracking(config, state, now);
-    service_mixer_target(config, state);
     g_floor_was_on = state.pump_floor_requested;
     return;
   }
@@ -329,10 +319,9 @@ void tick(const Config& config, SystemState& state) {
   state.pump_rad1_requested = req_rad1;
   state.pump_rad2_requested = req_rad2;
 
-  // --- Mixer position loop and command ------------------------------------
+  // --- Mixer position loop ------------------------------------------------
   service_mixer_control(config, state, req_floor, state.dhw_active, g_floor_flush_active);
   service_position_tracking(config, state, now);
-  service_mixer_target(config, state);
 
   const bool safety_error = state.system_error_code == ERR_L1_HARD_OVERTEMP ||
                             state.system_error_code == ERR_SENSOR_MIX_LOST ||

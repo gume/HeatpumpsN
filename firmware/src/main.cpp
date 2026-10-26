@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -17,9 +18,42 @@ bool g_tasks_started = false;
 
 }  // namespace
 
+namespace {
+
+const char* reset_reason_name(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:
+      return "power-on";
+    case ESP_RST_EXT:
+      return "external";
+    case ESP_RST_SW:
+      return "software";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT:
+      return "task-watchdog";
+    case ESP_RST_WDT:
+      return "other-watchdog";
+    case ESP_RST_DEEPSLEEP:
+      return "deep-sleep";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_SDIO:
+      return "sdio";
+    default:
+      return "unknown";
+  }
+}
+
+}  // namespace
+
 void setup() {
   Serial.begin(115200);
   delay(100);
+  const esp_reset_reason_t reset_reason = esp_reset_reason();
+  Serial.printf("[boot] reset reason: %s\n", reset_reason_name(reset_reason));
 
   const hpn::BoardConfig& board = hpn::board_config();
   Config& config = config_mutable();

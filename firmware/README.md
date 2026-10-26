@@ -1,5 +1,8 @@
 # HeatpumpsN firmware
 
+> **Session handover:** [`HANDOVER.md`](HANDOVER.md) tracks in-progress work,
+> open issues and the exact device/build state. Read it before resuming.
+
 PlatformIO project for the ESP32 controller node. It currently implements a
 FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
 HomeNet Heatpumps 1.0 and 2.0, a compile-time **I/O emulation** backend so the

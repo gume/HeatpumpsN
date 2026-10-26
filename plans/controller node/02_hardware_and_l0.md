@@ -75,22 +75,41 @@ semantics for the new carrier; L4 owns the animation.)*
 * L0 (`T_io` on Core 1) is the **only layer** permitted to execute physical pin writes (`digitalWrite`, PWM/relay toggling).
 * All higher layers merely set logical intents (`*_intended` or `*_requested`) that L1 validates and passes down to L0 as `*_phys` commands.
 
-### 2.2 Mixer Pulse State Machine & Zero-Homing Policy
+### 2.2 Mixer Actuator (Target-Position Servo) & Zero-Homing Policy
 
-* **State Transitions:** `IDLE` $\rightarrow$ `PULSE(dir)` $\rightarrow$ `COOLDOWN` $\rightarrow$ `IDLE`.
-* **Pulse Clamping & Dead-Time:** Enforces a $50\text{ ms}$ software direction-change dead-time. Pulses shorter than `min_pulse_ms` are rejected. Pulses are clamped to `max_pulse_ms` and separated by at least `pulse_cooldown_ms`.
-* **Dead Reckoning:** Integrates pulse durations over `travel_time_ms` to maintain `pos_est_dr` ($0.0$–$1.0$).
-* **End-Stop Zero-Homing Policy:** To prevent excessive mechanical wear, full overdrive zero-homing ($1.2 \times \text{travel\_time\_ms}$ in the close direction) is **not** performed on regular closed-loop moves. It is strictly limited to:
+* **Command Model:** There is no pulse train, pulse length or cooldown. Every layer
+  sets `mix_target_pos`; L1 is the single servo that energizes the motor and runs
+  it **continuously** until the dead-reckoned position reaches the target, a soft
+  end stop ($0\%$/$100\%$) or the free-run deadline. `min_pulse_ms`, `max_pulse_ms`
+  and `pulse_cooldown_ms` no longer exist.
+* **Direction-Change Dead-Time:** When the target requires the opposite direction
+  while the motor is energized, L1 stops the motion, waits a short
+  `kMixerDirSwitchMs` ($50\text{ ms}$) for the relay contacts to release, then sets
+  the new direction and re-energizes. A reversal (for example target $40\% \to
+  20\%$ while opening) therefore stops and restarts immediately, with no
+  cooldown. Manual bench nudges step the target by $\pm 2\%$.
+* **Dead Reckoning:** Integrates the energized duration over `travel_time_ms` to
+  maintain `pos_est_dr` ($0.0$–$1.0$).
+* **End-Stop Zero-Homing Policy:** To prevent excessive mechanical wear, full
+  overdrive zero-homing is **not** performed on regular closed-loop moves. It is
+  strictly limited to:
   1. Initial controller boot,
   2. Completion of Summer Anti-Seize exercise or Test 1 stroke sweep,
   3. Re-synchronization when $|\text{pos\_est\_dr} - \text{pos\_encoder}| > \text{recalc\_threshold}$, and
   4. Prolonged idle closure (e.g., continuous idle at $0.0$ for $> 24\text{ hours}$).
-  Routine moves to $0.0$ travel only the calculated pulse duration needed to reach $0.0$.
+  Homing and sweep run in *free-run* mode (`mix_free_run_dir` + deadline), which
+  ignores the target and the soft limits; routine moves travel only as far as the
+  target requires.
 
 ### 2.3 Relay Hardware & Software Interlocks
 
-* Mixer `OPEN` and `CLOSE` relays can never be energized simultaneously. This is enforced both by physical relay wiring interlocks and by a $50\text{ ms}$ software direction-change dead-time in `T_io`.
-* On HomeNet Heatpumps 1.0 the mixer has **one** direction bit plus a motion bit in the 74HC595 instead of separate open/close relays. There is no hardware interlock on that carrier, so the dead time in `l0::set_mixer_motor()` is the only protection: set direction with the motor off, wait, then energize.
+* Mixer `OPEN` and `CLOSE` relays can never be energized simultaneously. This is
+  enforced both by physical relay wiring interlocks and by the $50\text{ ms}$
+  stop-wait-switch sequence in L1's mixer servo.
+* On HomeNet Heatpumps 1.0 the mixer has **one** direction bit plus a motion bit in
+  the 74HC595 instead of separate open/close relays. There is no hardware
+  interlock on that carrier, so the L1 sequence (motion off $\rightarrow$ wait
+  $\rightarrow$ set direction $\rightarrow$ motion on) is the only protection.
 
 ### 2.4 Steady-Rate 1-Wire Temperature Polling & Error Filtering
 

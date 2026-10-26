@@ -755,7 +755,11 @@ function renderDashboard() {
   const power = live.power || {};
   const floor = circuits.floor || {};
   const mixerPos = Math.max(0, Math.min(100, num(floor.mixerPos, 0)));
+  const mixerTarget = Math.max(0, Math.min(100, num(floor.mixerTarget, 0)));
   const encoderPos = Math.max(0, Math.min(100, num(floor.encoderPos, 0)));
+  const mixerCmdLabel = floor.mixerEmergency
+    ? 'emergency close'
+    : (!floor.mixerMotion ? 'idle' : (num(floor.mixerDir, 0) > 0 ? 'opening' : 'closing'));
   const recent = state.events.slice(-6).reverse();
 
   const modeTone = mode.current === 'test' ? 'err' : mode.current === 'summer' ? 'ok' : 'warn';
@@ -796,6 +800,8 @@ function renderDashboard() {
         <div class="mixer-metrics">
           <div class="metric-row"><span class="k">Mixer power</span><span class="v">${fmtNum(power.mixer, 1)} W</span></div>
           <div class="metric-row"><span class="k">Estimated position</span><span class="v">${mixerPos.toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">Target position</span><span class="v">${mixerTarget.toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
           <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
           <div class="metric-row"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
         </div>
@@ -1129,6 +1135,9 @@ function renderTest() {
   const heater = live.heater || {};
   const safety = live.safety || {};
   const system = live.system || {};
+  const mixerCmdLabel = floor.mixerEmergency
+    ? 'emergency close'
+    : (!floor.mixerMotion ? 'idle' : (num(floor.mixerDir, 0) > 0 ? 'opening' : 'closing'));
 
   if (!test.active) {
     return `<div class="stack">
@@ -1181,22 +1190,18 @@ function renderTest() {
 
       <section class="card guarded">
         <div class="card-head">
-          <div><h2>Mixer</h2><p>Pulse the motor or store a target position</p></div>
+          <div><h2>Mixer</h2><p>Nudge the motor ±2% or store a target position</p></div>
           <span class="chip">${fmtNum(floor.mixerPos, 1)}%</span>
         </div>
         <div class="metric-row"><span class="k">Estimated position</span><span class="v">${fmtNum(floor.mixerPos, 1)}%</span></div>
         <div class="metric-row"><span class="k">Target position</span><span class="v">${fmtNum(floor.mixerTarget, 1)}%</span></div>
+        <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
         <div class="metric-row"><span class="k">Encoder</span><span class="v">${fmtNum(floor.encoderPos, 1)}% ${floor.encoderValid ? '' : '⚠'}</span></div>
 
         <div class="row" style="margin-top:12px">
-          <label class="small muted" for="mix-pulse">Pulse</label>
-          <select id="mix-pulse" class="btn btn-sm" style="min-height:32px">
-            <option value="500">500 ms</option>
-            <option value="1000" selected>1000 ms</option>
-          </select>
-          <button class="btn btn-sm" type="button" data-action="test-mixer" data-mixer="open">Open</button>
+          <button class="btn btn-sm" type="button" data-action="test-mixer" data-mixer="open">Open +2%</button>
           <button class="btn btn-sm" type="button" data-action="test-mixer" data-mixer="stop">Stop</button>
-          <button class="btn btn-sm" type="button" data-action="test-mixer" data-mixer="close">Close</button>
+          <button class="btn btn-sm" type="button" data-action="test-mixer" data-mixer="close">Close −2%</button>
         </div>
 
         <div class="field" style="margin-top:12px">
@@ -1206,7 +1211,7 @@ function renderTest() {
             <span class="unit">%</span>
             <button class="btn btn-sm" type="button" data-action="test-target">Store</button>
           </div>
-          <small>Stores the target. L2 now drives the valve toward it with pulse control and dead-reckoned position feedback.</small>
+          <small>Stores the target. The servo drives continuously to it and stops on arrival; changing the target mid-move reverses immediately.</small>
         </div>
       </section>
     </div>
@@ -1489,9 +1494,6 @@ function renderSettingsControl() {
             ${fieldRange('deadband_pos', 'Position deadband', cfg.deadband_pos, 0, 0.2, 0.005, '0–1', 'Mixer position deadband.')}
             ${fieldRange('deadband_temp', 'Temperature deadband', cfg.deadband_temp, 0.1, 5, 0.1, 'K', 'Temperature deadband around the setpoint.')}
             ${fieldRange('recalc_threshold', 'Recalculation threshold', cfg.recalc_threshold, 0.01, 1, 0.01, 'K', 'Minimum temperature change before recalculating.')}
-            ${fieldNumber('min_pulse_ms', 'Minimum pulse', cfg.min_pulse_ms, 10, 1000, 1, 'Shortest mixer pulse.', 'int', 'ms')}
-            ${fieldNumber('max_pulse_ms', 'Maximum pulse', cfg.max_pulse_ms, 10, 10000, 1, 'Longest single mixer pulse.', 'int', 'ms')}
-            ${fieldNumber('pulse_cooldown_ms', 'Pulse cooldown', cfg.pulse_cooldown_ms, 0, 60000, 1, 'Minimum time between pulses.', 'int', 'ms')}
             ${fieldNumber('travel_time_s', 'Full travel time', cfg.travel_time_ms / 1000, 1, 600, 1, 'Time from fully closed to fully open.', 'number', 's')}
           </div>
         </div>
@@ -1740,7 +1742,8 @@ function renderSettingsSystem() {
         <dt>Chip</dt><dd>${esc(status.chip || '?')} · ${esc(status.cores || '?')} cores</dd>
         <dt>Uptime</dt><dd>${fmtUptime(status.uptime || 0)}</dd>
         <dt>Free heap</dt><dd>${fmtBytes(status.freeHeap)}${status.minFreeHeap !== undefined ? ` · min ${fmtBytes(status.minFreeHeap)}` : ''}</dd>
-        <dt>CPU load</dt><dd>${status.cpuLoad !== undefined ? `${num(status.cpuLoad, 0).toFixed(1)} %` : 'n/a'}${status.taskCount !== undefined ? ` · ${status.taskCount} tasks` : ''}</dd>
+        <dt>CPU load</dt><dd>${status.cpuLoad !== undefined ? `${num(status.cpuLoad, 0).toFixed(2)} %` : 'n/a'}${status.taskCount !== undefined ? ` · ${status.taskCount} tasks` : ''}</dd>
+        <dt>Last reset</dt><dd>${esc(status.resetReason || '—')}</dd>
         <dt>Wi-Fi</dt><dd>${esc(status.wifi?.ip || '—')} · ${esc(status.wifi?.state || '—')}</dd>
         <dt>Hostname</dt><dd>${esc(status.hostname || cfg.hostname || '—')}</dd>
         <dt>Time</dt><dd>${ntp.synced ? `synchronized · ${esc(fmtEpoch(ntp.epoch))}` : (ntp.enabled ? 'waiting for NTP sync' : 'NTP disabled')}</dd>
@@ -1971,8 +1974,7 @@ async function testToggle(button) {
 
 async function testMixer(mixer) {
   try {
-    const pulse = Number($('#mix-pulse')?.value || 1000);
-    const result = await apiPost('/api/test/command', { mixer, pulse_ms: pulse });
+    const result = await apiPost('/api/test/command', { mixer });
     toast(`Mixer ${mixer}${result.note ? ` (${result.note})` : ''}.`, 'ok');
   } catch (err) {
     toast(err.message, 'err', 6000);

@@ -145,8 +145,8 @@ function renderTemperatureControls(temps, snapshot) {
     const valid = pending ? pending.valid : item.valid !== false;
     const locked = role === 'boiler' && realisticBoiler;
     const disabled = locked ? 'disabled' : '';
-    const min = role === 'boiler' ? 15 : -20;
-    const max = role === 'boiler' ? 85 : 120;
+    const min = 15;
+    const max = 85;
 
     return `<div class="emu-control">
       <div class="row between"><strong>${esc(TEMP_LABELS[role])}</strong><span class="small faint mono">${esc(role)}</span></div>
@@ -341,7 +341,7 @@ function render() {
       </section>
 
       <section class="card writable">
-        <div class="card-head"><div><h2>Temperature inputs</h2><p>Feed the simulated carrier</p></div><span class="chip">3 roles</span></div>
+        <div class="card-head"><div><h2>Temperature inputs</h2><p>Feed the simulated carrier</p></div><span class="chip">15–85 °C</span></div>
         <div class="stack">${renderTemperatureControls(temps, snapshot)}</div>
       </section>
 
@@ -392,7 +392,7 @@ async function init() {
 
   await refreshSim();
   if (state.timer) clearInterval(state.timer);
-  state.timer = setInterval(refreshSim, 750);
+  state.timer = setInterval(refreshSim, 1500);
 }
 
 function syncRange(target, value) {

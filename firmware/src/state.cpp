@@ -21,6 +21,11 @@ void state_init(SystemState& state) {
   state.pos_encoder = 0.0f;
   state.pos_encoder_valid = false;
   state.mix_target_pos = 0.0f;
+  state.mix_motion = false;
+  state.mix_dir = 0;
+  state.mix_emergency = false;
+  state.mix_free_run_dir = 0;
+  state.mix_free_run_until_ms = 0;
 
   state.divergence_reason = DIV_NONE;
   state.system_error_code = ERR_OK;

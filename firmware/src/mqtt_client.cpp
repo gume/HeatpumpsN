@@ -245,8 +245,8 @@ void publish_states() {
   const bool mixer_motion = sim_state.mixer_motion;
   const bool mixer_open = sim_state.mixer_open;
 #else
-  const bool mixer_motion = st.mix_pulse_ms_phys > 0;
-  const bool mixer_open = st.mix_pulse_dir_phys > 0;
+  const bool mixer_motion = st.mix_motion;
+  const bool mixer_open = st.mix_dir > 0;
 #endif
   const char* mixer_state =
       !mixer_motion ? "idle" : (mixer_open ? "opening" : "closing");

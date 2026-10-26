@@ -20,7 +20,7 @@ When iterating on this specification using LLMs, the following documentation rul
 | :--- | :--- | :--- |
 | **`00_index_and_architecture.md`** | **Master Index & Software Architecture** (This file) | Overview (§1), Layer Model & FreeRTOS Tasks (§3), Open Points (§12) |
 | **`01_config_and_contracts.md`** | **Configuration, Ownership & State Contracts** | Parameter Ownership & `struct Config` (§4), Shared `SystemState` (§3.3), Dual-State (`_intended` vs. `_phys`) & Reason Code Contracts |
-| **`02_hardware_and_l0.md`** | **Hardware Map & L0 Actuator/Sensor Drivers** | Hardware / I/O Map (§2), L0 Drivers, 1-Wire Error Rejection, Mixer Pulse State Machine, Pump Power Sensors (§9) |
+| **`02_hardware_and_l0.md`** | **Hardware Map & L0 Actuator/Sensor Drivers** | Hardware / I/O Map (§2), L0 Drivers, 1-Wire Error Rejection, Mixer Target-Position Servo, Pump Power Sensors (§9) |
 | **`03_safety_layer_l1.md`** | **Safety Layer (L1) Arbitration** | Tick-by-Tick Safety Rules, Hard Overtemp, Gradient Cutoff, Sensor Fault Postures, Lockouts & Backstops (§8) |
 | **`04_control_and_coordination_l2.md`** | **Command Intake, L2 Control & Coordination** | Keep-Alive & Timeouts (§5.1), DHW Time-Sharing (§5.2), Summer Rejection (§5.3), Smith-Predictor Mixer Loop, Encoder Sync, Flush, $\Delta T$ Collapse & Coordination Table (§6) |
 | **`05_modes_and_testing.md`** | **Operational Modes & Identification Tests** | Heat Mode (§7.1), Summer & Anti-Seize Exercise (§7.2), Test Override Mode, Direct Mixer Jogging & Observer ID Routines (§7.3) |
@@ -95,7 +95,7 @@ The controller performs closed-loop control of the floor mixer output, coordinat
 | Task | Content | Priority |
 | :--- | :--- | :--- |
 | `T_safety` (L1) | Fast tick ($500\text{ ms}$–$1\text{ s}$), evaluates all safety rules, **owns final arbitration**, outputs validated commands to L0 | Highest |
-| `T_io` (L0) | Continuous 1-wire polling, pulse state machine, **direct GPIO pin writes**, optional pump power sensors | High |
+| `T_io` (L0) | Continuous 1-wire polling, **direct GPIO pin writes**, optional pump power sensors | High |
 | `T_control` (L2+L3) | Control tick (default $2\text{ s}$), mixer loop, coordination, applies L3-validated parameters | High (below L0/L1) |
 
 *Architectural Rationale:* L1 runs in a separate highest-priority task so it keeps arbitrating even if L2 hangs; `T_io` runs with high priority to maintain precise pulse timing and non-blocking sensor acquisition; WiFi on Core 0 keeps control timing deterministic on Core 1.

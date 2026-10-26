@@ -51,6 +51,10 @@ struct Config {
   float setpoint_default;
   float deadband_pos;
   float deadband_temp;
+  // Deprecated and unused: the mixer is now a continuous target-position servo
+  // (L1 stops at `mix_target_pos`), so there is no pulse length or cooldown.
+  // These three are retained only so saved-NVS blobs keep their binary layout;
+  // they are not exposed in the web configuration and never read by control.
   uint32_t min_pulse_ms;
   uint32_t max_pulse_ms;
   uint32_t pulse_cooldown_ms;

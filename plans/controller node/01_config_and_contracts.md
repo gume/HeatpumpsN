@@ -38,8 +38,10 @@ struct Config {
   // --- Hardware & Actuator Constants ---
   float    setpoint_default;       // fallback floor setpoint if none in NVS/HA
   float    deadband_pos, deadband_temp;
-  uint32_t min_pulse_ms, max_pulse_ms, pulse_cooldown_ms;
-  uint32_t travel_time_ms, tick_ms;
+  uint32_t travel_time_ms, tick_ms; // full-stroke time (dead reckoning) and control tick
+  // (min_pulse_ms / max_pulse_ms / pulse_cooldown_ms were removed: the mixer is a
+  // continuous target-position servo, not a pulse train. The struct keeps them as
+  // reserved fields for NVS layout only -- see config.h.)
   uint32_t temp_poll_interval_ms;  // steady 1-wire polling interval (e.g. 1000 ms)
   float    recalc_threshold;       // enc/DR divergence threshold for warning/re-sync
   uint32_t encoder_check_interval_s; // interval for periodic encoder check (e.g. 3600 s)
@@ -191,11 +193,12 @@ struct SystemState {
   uint32_t pos_encoder_ms;     // monotonic timestamp of last encoder update
   bool     pos_encoder_valid;
   float    integrator_val;     // L2 mixer PI integrator state
-  float    mix_target_pos;     // L2 requested target position [0.0 .. 1.0]
-  int8_t   mix_pulse_dir_req;  // L2 requested pulse: -1 = close, 0 = idle, +1 = open
-  uint32_t mix_pulse_ms_req;   // L2 requested pulse duration (ms)
-  int8_t   mix_pulse_dir_phys; // L1 arbitrated pulse executing at L0: -1=close, 0=idle, +1=open
-  uint32_t mix_pulse_ms_phys;  // L1 arbitrated pulse duration executing at L0 (ms)
+  float    mix_target_pos;     // desired position; the only mixer command
+  bool     mix_motion;         // L1 -> L0: motor energized right now
+  int8_t   mix_dir;            // L1 -> L0: +1 opening, -1 closing, 0 idle
+  bool     mix_emergency;      // emergency close latched; other writers locked out
+  int8_t   mix_free_run_dir;   // non-zero: homing/sweep, ignore target and limits
+  uint32_t mix_free_run_until_ms; // free-run safety deadline
 
   // --- Relays: Intended (L4), Requested (L2), Physical (L1 -> L0) ---
   bool     heater_intended,     heater_requested,     heater_phys;

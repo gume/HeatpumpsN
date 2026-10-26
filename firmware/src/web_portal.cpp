@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -205,6 +206,35 @@ const char* severity_name(uint8_t severity) {
   }
 }
 
+// Reset cause latched by the SoC for the current boot. Reading it does not
+// clear it, so it is safe to query from the status handler at any time.
+const char* reset_reason_name() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+      return "power-on";
+    case ESP_RST_EXT:
+      return "external";
+    case ESP_RST_SW:
+      return "software";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT:
+      return "task-watchdog";
+    case ESP_RST_WDT:
+      return "other-watchdog";
+    case ESP_RST_DEEPSLEEP:
+      return "deep-sleep";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_SDIO:
+      return "sdio";
+    default:
+      return "unknown";
+  }
+}
+
 const char* mode_name(OperationalMode mode) {
   switch (mode) {
     case MODE_HEAT:
@@ -356,6 +386,11 @@ void log_access_request(AsyncWebServerRequest* request, int status) {
   if (request == nullptr) {
     return;
   }
+  // The emulation page polls /api/sim continuously; excluding it keeps the
+  // serial console and the in-RAM access log readable.
+  if (request->url().startsWith("/api/sim")) {
+    return;
+  }
   String ip = request->client() != nullptr ? request->client()->remoteIP().toString() : String("?");
   log_access_raw(ip.c_str(), request->methodToString(), request->url().c_str(), status);
 }
@@ -428,6 +463,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
       add_circuit_json(circuits, "floor", st.pump_floor_intended, st.pump_floor_phys, st.after_heating_timer_s);
   floor["mixerPos"] = st.pos_est_dr * 100.0f;
   floor["mixerTarget"] = st.mix_target_pos * 100.0f;
+  floor["mixerMotion"] = st.mix_motion;
+  floor["mixerDir"] = st.mix_dir;
+  floor["mixerEmergency"] = st.mix_emergency;
   floor["encoderPos"] = st.pos_encoder * 100.0f;
   floor["encoderValid"] = st.pos_encoder_valid;
 
@@ -567,9 +605,6 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["setpoint_default"] = c.setpoint_default;
   o["deadband_pos"] = c.deadband_pos;
   o["deadband_temp"] = c.deadband_temp;
-  o["min_pulse_ms"] = c.min_pulse_ms;
-  o["max_pulse_ms"] = c.max_pulse_ms;
-  o["pulse_cooldown_ms"] = c.pulse_cooldown_ms;
   o["travel_time_ms"] = c.travel_time_ms;
   o["tick_ms"] = c.tick_ms;
   o["temp_poll_interval_ms"] = c.temp_poll_interval_ms;
@@ -845,9 +880,6 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_float(in, "setpoint_default", c.setpoint_default, 5.0f, 80.0f, err)) return false;
   if (!json_float(in, "deadband_pos", c.deadband_pos, 0.0f, 0.2f, err)) return false;
   if (!json_float(in, "deadband_temp", c.deadband_temp, 0.1f, 5.0f, err)) return false;
-  if (!json_uint(in, "min_pulse_ms", c.min_pulse_ms, 10, 1000, err)) return false;
-  if (!json_uint(in, "max_pulse_ms", c.max_pulse_ms, 10, 10000, err)) return false;
-  if (!json_uint(in, "pulse_cooldown_ms", c.pulse_cooldown_ms, 0, 60000, err)) return false;
   if (!json_uint(in, "travel_time_ms", c.travel_time_ms, 1000, 600000, err)) return false;
   if (!json_uint(in, "tick_ms", c.tick_ms, 100, 60000, err)) return false;
   if (!json_uint(in, "temp_poll_interval_ms", c.temp_poll_interval_ms, 100, 60000, err))
@@ -896,10 +928,6 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_uint(in, "floor_pause_duration_s", c.floor_pause_duration_s, 0, 86400, err))
     return false;
 
-  if (c.min_pulse_ms > c.max_pulse_ms) {
-    err = "min_pulse_ms must not exceed max_pulse_ms";
-    return false;
-  }
   return true;
 }
 
@@ -1127,8 +1155,8 @@ void update_counters(const SystemState& st, uint32_t now_ms) {
   update_counter_locked(CTR_RAD1, st.pump_rad1_phys, now_ms);
   update_counter_locked(CTR_RAD2, st.pump_rad2_phys, now_ms);
   update_counter_locked(CTR_FLOOR, st.pump_floor_phys, now_ms);
-  update_counter_locked(CTR_MIX_OPEN, st.mix_pulse_ms_phys > 0 && st.mix_pulse_dir_phys > 0, now_ms);
-  update_counter_locked(CTR_MIX_CLOSE, st.mix_pulse_ms_phys > 0 && st.mix_pulse_dir_phys < 0, now_ms);
+  update_counter_locked(CTR_MIX_OPEN, st.mix_motion && st.mix_dir > 0, now_ms);
+  update_counter_locked(CTR_MIX_CLOSE, st.mix_motion && st.mix_dir < 0, now_ms);
 
   if (g_counter_runtime_ms == 0) {
     g_counter_runtime_ms = now_ms;
@@ -1206,9 +1234,10 @@ void deactivate_test(const char* reason) {
     g_state->pump_floor_intended = false;
     g_state->pump_rad1_intended = false;
     g_state->pump_rad2_intended = false;
-    g_state->mix_pulse_ms_req = 0;
-    g_state->mix_pulse_dir_req = 0;
-    g_state->mix_free_run = false;
+    g_state->mix_motion = false;
+    g_state->mix_dir = 0;
+    g_state->mix_free_run_dir = 0;
+    g_state->mix_free_run_until_ms = 0;
     float pos = g_state->pos_est_dr;
     if (pos < 0.0f) pos = 0.0f;
     if (pos > 1.0f) pos = 1.0f;
@@ -1265,16 +1294,16 @@ void tick_sequence(uint32_t now_ms) {
   if (g_sequence == Sequence::EndstopHome) {
     switch (g_sequence_step) {
       case 0:
-        g_state->mix_free_run = true;
+        g_state->mix_free_run_dir = -1;
+        g_state->mix_free_run_until_ms = now_ms + stroke_ms;
         g_state->mix_target_pos = 0.0f;
-        g_state->mix_pulse_dir_req = -1;
-        g_state->mix_pulse_ms_req = stroke_ms;
         log_event(0, 1420, "Endstop home: driving mixer fully closed");
         g_sequence_step = 1;
-        g_sequence_next_ms = now_ms + stroke_ms;
+        g_sequence_next_ms = now_ms + stroke_ms + 1000u;
         break;
       default:
-        g_state->mix_free_run = false;
+        g_state->mix_free_run_dir = 0;
+        g_state->mix_free_run_until_ms = 0;
         g_state->pos_est_dr = 0.0f;
         g_state->mix_target_pos = 0.0f;
         g_sequence = Sequence::None;
@@ -1288,25 +1317,24 @@ void tick_sequence(uint32_t now_ms) {
   if (g_sequence == Sequence::MixerSweep) {
     switch (g_sequence_step) {
       case 0:
-        g_state->mix_free_run = true;
+        g_state->mix_free_run_dir = 1;
+        g_state->mix_free_run_until_ms = now_ms + stroke_ms;
         g_state->mix_target_pos = 1.0f;
-        g_state->mix_pulse_dir_req = 1;
-        g_state->mix_pulse_ms_req = stroke_ms;
         log_event(0, 1430, "Mixer sweep: driving fully open");
         g_sequence_step = 1;
-        g_sequence_next_ms = now_ms + stroke_ms;
+        g_sequence_next_ms = now_ms + stroke_ms + 1000u;
         break;
       case 1:
-        g_state->mix_free_run = true;
+        g_state->mix_free_run_dir = -1;
+        g_state->mix_free_run_until_ms = now_ms + stroke_ms;
         g_state->mix_target_pos = 0.0f;
-        g_state->mix_pulse_dir_req = -1;
-        g_state->mix_pulse_ms_req = stroke_ms;
         log_event(0, 1431, "Mixer sweep: driving fully closed");
         g_sequence_step = 2;
-        g_sequence_next_ms = now_ms + stroke_ms;
+        g_sequence_next_ms = now_ms + stroke_ms + 1000u;
         break;
       default:
-        g_state->mix_free_run = false;
+        g_state->mix_free_run_dir = 0;
+        g_state->mix_free_run_until_ms = 0;
         g_state->pos_est_dr = 0.0f;
         g_state->mix_target_pos = 0.0f;
         g_sequence = Sequence::None;
@@ -1399,6 +1427,59 @@ void anti_seize_service(const Config& config, SystemState& state, uint32_t now_m
     g_anti_seize_dirty = true;
   }
   anti_seize_flush(now_ms);
+}
+
+// ---------------------------------------------------------------------------
+// CPU load sampling (recent one-second window, not boot average)
+// ---------------------------------------------------------------------------
+
+float g_cpu_load_pct = 0.0f;
+uint32_t g_cpu_last_sample_ms = 0;
+uint32_t g_cpu_last_total = 0;
+uint32_t g_cpu_last_idle = 0;
+// Raw run-time counter deltas from the last window. Exposed in /api/status so
+// the load figure can be validated against the FreeRTOS counters.
+uint32_t g_cpu_total_delta = 0;
+uint32_t g_cpu_idle_delta = 0;
+
+void update_cpu_load(uint32_t now_ms) {
+#if defined(configUSE_TRACE_FACILITY) && configUSE_TRACE_FACILITY
+  if (now_ms - g_cpu_last_sample_ms < 1000u) {
+    return;
+  }
+  g_cpu_last_sample_ms = now_ms;
+
+  static TaskStatus_t task_status[24];
+  uint32_t total = 0;
+  UBaseType_t wanted = uxTaskGetNumberOfTasks();
+  if (wanted > 24) wanted = 24;
+  const UBaseType_t got = uxTaskGetSystemState(task_status, wanted, &total);
+  uint32_t idle = 0;
+  for (UBaseType_t i = 0; i < got; ++i) {
+    if (task_status[i].pcTaskName != nullptr &&
+        strncmp(task_status[i].pcTaskName, "IDLE", 4) == 0) {
+      idle += task_status[i].ulRunTimeCounter;
+    }
+  }
+
+  if (g_cpu_last_total != 0 && total > g_cpu_last_total) {
+    const uint32_t total_delta = total - g_cpu_last_total;
+    const uint32_t idle_delta = idle - g_cpu_last_idle;
+    g_cpu_total_delta = total_delta;
+    g_cpu_idle_delta = idle_delta;
+    if (total_delta > 0) {
+      float load = 100.0f * (1.0f - static_cast<float>(idle_delta) /
+                                       static_cast<float>(total_delta));
+      if (load < 0.0f) load = 0.0f;
+      if (load > 100.0f) load = 100.0f;
+      g_cpu_load_pct = load;
+    }
+  }
+  g_cpu_last_total = total;
+  g_cpu_last_idle = idle;
+#else
+  (void)now_ms;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1940,10 +2021,14 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
   }
 
   if (mixer[0] != '\0') {
+    if (g_state->mix_emergency) {
+      send_error(request, 409, "mixer is locked by an emergency close");
+      return;
+    }
+
     if (strcmp(mixer, "stop") == 0) {
-      g_state->mix_pulse_ms_req = 0;
-      // Freeze the position loop where the valve is now so the next target
-      // does not make L2 drive the motor again immediately.
+      // Freeze the servo where the valve is now so it does not chase the old
+      // target again.
       g_state->mix_target_pos = g_state->pos_est_dr;
       log_event(0, 1102, "Test command: mixer stop");
       JsonDocument doc;
@@ -1955,43 +2040,25 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
     }
 
     if (strcmp(mixer, "open") == 0 || strcmp(mixer, "close") == 0) {
-      uint32_t pulse_ms = in["pulse_ms"] | 1000;
-      uint32_t max_pulse = g_config != nullptr && g_config->max_pulse_ms > 0 ? g_config->max_pulse_ms : 1000;
-      if (max_pulse < 500) {
-        max_pulse = 500;
-      }
-      if (pulse_ms < 500) {
-        pulse_ms = 500;
-      }
-      if (pulse_ms > max_pulse) {
-        pulse_ms = max_pulse;
-      }
-
+      // A nudge is just a target two percent away; the servo drives to it and
+      // a later "stop" or another nudge interrupts it.
+      constexpr float kNudge = 0.02f;
       const bool open = strcmp(mixer, "open") == 0;
-      g_state->mix_pulse_dir_req = open ? 1 : -1;
-      g_state->mix_pulse_ms_req = pulse_ms;
-
-      // Keep the position loop aligned with the raw pulse so L2 does not fight
-      // the manual nudge once the pulse has finished.
-      const uint32_t travel_ms =
-          g_config != nullptr && g_config->travel_time_ms > 0 ? g_config->travel_time_ms : 120000;
-      float expected = g_state->pos_est_dr +
-                       (open ? 1.0f : -1.0f) *
-                           (static_cast<float>(pulse_ms) / static_cast<float>(travel_ms));
-      if (expected < 0.0f) expected = 0.0f;
-      if (expected > 1.0f) expected = 1.0f;
-      g_state->mix_target_pos = expected;
+      float target = g_state->pos_est_dr + (open ? kNudge : -kNudge);
+      if (target < 0.0f) target = 0.0f;
+      if (target > 1.0f) target = 1.0f;
+      g_state->mix_target_pos = target;
 
       char detail[96];
-      snprintf(detail, sizeof(detail), "Test command: mixer %s for %ums", mixer,
-               static_cast<unsigned>(pulse_ms));
+      snprintf(detail, sizeof(detail), "Test command: mixer %s to %.1f%%", mixer,
+               static_cast<double>(target * 100.0f));
       log_event(0, 1103, detail);
 
       JsonDocument doc;
       doc["ok"] = true;
       doc["mixer"] = mixer;
-      doc["pulse_ms"] = pulse_ms;
-      doc["note"] = "pulse_queued";
+      doc["position"] = target;
+      doc["note"] = "nudge_queued";
       send_json(request, 200, doc);
       return;
     }
@@ -2123,8 +2190,8 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   JsonObject controller = doc["controller"].to<JsonObject>();
   controller["estimatedPosition"] = g_state != nullptr ? g_state->pos_est_dr * 100.0f : 0.0f;
   controller["targetPosition"] = g_state != nullptr ? g_state->mix_target_pos * 100.0f : 0.0f;
-  controller["motion"] = g_state != nullptr && g_state->mix_pulse_ms_phys > 0;
-  controller["direction"] = g_state != nullptr ? g_state->mix_pulse_dir_phys : 0;
+  controller["motion"] = g_state != nullptr && g_state->mix_motion;
+  controller["direction"] = g_state != nullptr ? g_state->mix_dir : 0;
 
   doc["followController"] = snapshot.follow_controller;
   doc["realisticPower"] = snapshot.realistic_power;
@@ -2172,12 +2239,11 @@ void handle_sim_temperature(AsyncWebServerRequest* request, JsonVariant& json) {
     return;
   }
 
-  const float min_value = role == TempRole::Boiler ? 15.0f : -20.0f;
-  const float max_value = role == TempRole::Boiler ? 85.0f : 120.0f;
-  if (!isfinite(value) || value < min_value || value > max_value) {
-    send_error(request, 400,
-               role == TempRole::Boiler ? "boiler temperature out of range (15-85 C)"
-                                        : "temperature out of range");
+  // Emulated sensors use one scale, 15-85 C, for every role.
+  constexpr float kEmuTempMin = 15.0f;
+  constexpr float kEmuTempMax = 85.0f;
+  if (!isfinite(value) || value < kEmuTempMin || value > kEmuTempMax) {
+    send_error(request, 400, "temperature out of range (15-85 C)");
     return;
   }
 
@@ -2478,30 +2544,10 @@ void handle_status(AsyncWebServerRequest* request) {
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["minFreeHeap"] = ESP.getMinFreeHeap();
   doc["taskCount"] = static_cast<uint32_t>(uxTaskGetNumberOfTasks());
-#if defined(configUSE_TRACE_FACILITY) && configUSE_TRACE_FACILITY
-  {
-    static TaskStatus_t task_status[24];
-    uint32_t total_run_time = 0;
-    UBaseType_t wanted = uxTaskGetNumberOfTasks();
-    if (wanted > 24) wanted = 24;
-    const UBaseType_t got = uxTaskGetSystemState(task_status, wanted, &total_run_time);
-    uint32_t idle_run_time = 0;
-    for (UBaseType_t i = 0; i < got; ++i) {
-      if (task_status[i].pcTaskName != nullptr &&
-          strncmp(task_status[i].pcTaskName, "IDLE", 4) == 0) {
-        idle_run_time += task_status[i].ulRunTimeCounter;
-      }
-    }
-    doc["taskCount"] = static_cast<uint32_t>(got);
-    if (total_run_time > 0) {
-      float load = 100.0f * (1.0f - static_cast<float>(idle_run_time) /
-                                       static_cast<float>(total_run_time));
-      if (load < 0.0f) load = 0.0f;
-      if (load > 100.0f) load = 100.0f;
-      doc["cpuLoad"] = load;
-    }
-  }
-#endif
+  doc["cpuLoad"] = g_cpu_load_pct;
+  doc["cpuTotalDelta"] = g_cpu_total_delta;
+  doc["cpuIdleDelta"] = g_cpu_idle_delta;
+  doc["resetReason"] = reset_reason_name();
   doc["hostname"] = WiFi.getHostname();
 
   const time_t epoch = time(nullptr);
@@ -2941,6 +2987,12 @@ void begin(const Config& config, SystemState& state) {
   g_anti_seize_dirty = false;
   g_anti_seize_loaded = false;
   g_anti_seize_last_write_ms = millis();
+  g_cpu_load_pct = 0.0f;
+  g_cpu_last_sample_ms = 0;
+  g_cpu_last_total = 0;
+  g_cpu_last_idle = 0;
+  g_cpu_total_delta = 0;
+  g_cpu_idle_delta = 0;
   g_last_broadcast_ms = 0;
   g_last_cleanup_ms = 0;
   g_last_wifi_connected = wifi::status().connected;
@@ -2971,6 +3023,16 @@ void begin(const Config& config, SystemState& state) {
 #if defined(HPN_IO_EMULATION)
   log_event(0, 1003, "Board emulation page served at /emulation.html");
 #endif
+  {
+    char detail[48];
+    snprintf(detail, sizeof(detail), "Reset reason: %s", reset_reason_name());
+    log_event(esp_reset_reason() == ESP_RST_PANIC || esp_reset_reason() == ESP_RST_TASK_WDT ||
+                  esp_reset_reason() == ESP_RST_INT_WDT || esp_reset_reason() == ESP_RST_WDT ||
+                  esp_reset_reason() == ESP_RST_BROWNOUT
+                  ? 2
+                  : 0,
+              1004, detail);
+  }
   Serial.println("[web] HTTP server on port 80");
 }
 
@@ -2981,6 +3043,7 @@ void tick(const Config& config, SystemState& state) {
   }
 
   const uint32_t now = millis();
+  update_cpu_load(now);
 
   if (g_test_active) {
     if (static_cast<int32_t>(now - g_test_end_ms) >= 0) {

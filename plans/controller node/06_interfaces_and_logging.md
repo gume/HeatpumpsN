@@ -34,7 +34,7 @@ Two distinct log streams are buffered in `T_logger` and published via MQTT (`upt
    keepalive_age_s, after_heating_timer_s
    ```
 2. **Event Log (Immediate on Occurrence):**
-   * **Mixer Pulses:** Start timestamp, direction (`OPEN`/`CLOSE`), duration ($\text{ms}$), $T_{\text{boiler}}$, $T_{\text{return\_floor}}$, $T_{\text{mix\_out}}$ before/after, and encoder delta.
+   * **Mixer Moves:** Start timestamp, direction (`OPEN`/`CLOSE`), energized duration ($\text{ms}$), $T_{\text{boiler}}$, $T_{\text{return\_floor}}$, $T_{\text{mix\_out}}$ before/after, and encoder delta.
    * **Safety & Sensor Events:** Every L1 safety trip/recovery and L0 sensor glitch (`-127 degC`, `+85 degC`, CRC, slew jump) or persistent fault with full state context.
    * **Configuration Changes:** Parameter name, old value, new value, ownership category (Cat 1 / Cat 2 / Cat 3), and config version counter.
    * **Command vs. Physical Divergence Transitions:** Every transition where `heater_intended != heater_phys` or `pump_*_intended != pump_*_phys`, recording the new `divergence_reason` and `system_error_code`.
@@ -109,7 +109,7 @@ call if five was intended.
 * **Current state:** the station-mode Wi-Fi client (`hpn::wifi`), MQTT/HA client (`hpn::mqtt`) and LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a versioned NVS blob; the portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. Relay counters are persisted hourly in hardware builds and stay RAM-only under emulation. The captive-portal provisioning flow and fallback AP are still TODO.
 * **Provisioning:** Captive portal and web UI for WiFi credentials, fallback AP settings, and MQTT broker parameters.
 * **Configuration Editor:** Full read/write access to **Category 1 (Long-Term Configuration)** parameters; read-only display of **Category 2 (HA)** and **Category 3 (Observer)** parameters.
-* **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close step pulses), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).
+* **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close $\pm 2\%$ nudges and stop), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).
 
 ### 2.3 Observer Interface (L3 Parameter Ingestion)
 

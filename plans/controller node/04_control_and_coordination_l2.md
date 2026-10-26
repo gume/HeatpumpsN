@@ -2,7 +2,7 @@
 
 **Parent:** `00_index_and_architecture.md`  
 **Reads/Depends on:** `01_config_and_contracts.md` (`struct Config` Cat 1–3, `SystemState`), `02_hardware_and_l0.md` (sensors & dead-reckoned position), `06_interfaces_and_logging.md` (HA command intake)  
-**Outputs to:** `03_safety_layer_l1.md` (`*_requested` relay states & mixer pulse requests), `06_interfaces_and_logging.md` (`divergence_reason`, telemetry)
+**Outputs to:** `03_safety_layer_l1.md` (`*_requested` relay states & `mix_target_pos`), `06_interfaces_and_logging.md` (`divergence_reason`, telemetry)
 
 ---
 
@@ -43,12 +43,12 @@ Communication between Home Assistant (HA) and the controller uses **switches** a
    * Whenever the heater is active (`heater_phys == ON`) or any radiator pump (`pump_rad1_phys` or `pump_rad2_phys`) is running, **if there is no active floor heating demand (`pump_floor_phys == OFF`)**, L2 commands the floor mixer **fully closed ($0.0$)** to prevent parasitic thermosiphon or unmixed hot water migration into the floor slab.
    * When floor heating is active (`pump_floor_phys == ON`), the mixer regulates `T_mix_out` toward `floor_setpoint_shadow`.
 2. **Supply-Temperature Gating & Integrator Anti-Windup:**
-   * Whenever $T_{\text{boiler}} < \text{floor\_setpoint\_shadow} + \text{deadband\_temp}$ (e.g., cold boiler, warm-up phase, `dhw_active == true`, or after-run), or when `heater_phys == OFF`, or during the **warm-up flush** (§2.3), the L2 **integrator (`ki`) is frozen** and `OPEN` pulses beyond the feedforward position estimate are inhibited. This prevents integrator windup from driving the mixer $100\%$ open while supply water is cool.
+   * Whenever $T_{\text{boiler}} < \text{floor\_setpoint\_shadow} + \text{deadband\_temp}$ (e.g., cold boiler, warm-up phase, `dhw_active == true`, or after-run), or when `heater_phys == OFF`, or during the **warm-up flush** (§2.3), the L2 **integrator (`ki`) is frozen** and opening beyond the feedforward position estimate is inhibited. This prevents integrator windup from driving the mixer $100\%$ open while supply water is cool.
 3. **Predictive Closed-Loop Evaluation (Discrete Smith-Predictor):**
    * Predicts $T_{\text{mix\_out}}$ at $t + \text{delay\_s}$ using the current position estimate (`pos_est_dr`), the feedforward blending model
      $$T_{\text{ff}} = \text{pos\_est\_dr} \cdot \text{ff\_boiler} \cdot T_{\text{boiler}} + (1 - \text{pos\_est\_dr}) \cdot \text{ff\_return} \cdot T_{\text{return\_floor}} - \text{rad\_coupling\_ff} \cdot [(\text{pump\_rad1\_phys} \lor \text{pump\_rad2\_phys}) ? 1 : 0]$$
-     and the measured trend $dT/dt$ extrapolated over $\text{delay\_s}$ — if a temperature trajectory is already underway toward the setpoint, L2 **waits** rather than over-pulsing.
-   * If the predicted error at $t + \text{delay\_s}$ is within `deadband_temp`, no pulse is issued. Otherwise, L2 computes $\Delta\text{pos}$, sets `mix_target_pos`, converts it via `travel_time_ms` into a pulse duration clamped to $[\text{min\_pulse\_ms}, \text{max\_pulse\_ms}]$, sets `mix_pulse_dir_req` and `mix_pulse_ms_req`, and enforces `pulse_cooldown_ms`. Sub-threshold requests ($< \text{min\_pulse\_ms}$) accumulate in `integrator_val` until they exceed `min_pulse_ms`.
+     and the measured trend $dT/dt$ extrapolated over $\text{delay\_s}$ — if a temperature trajectory is already underway toward the setpoint, L2 **waits** rather than overshooting.
+   * If the predicted error at $t + \text{delay\_s}$ is within `deadband_temp`, the target is held at the current position. Otherwise L2 computes the desired position and sets `mix_target_pos`; a per-tick `max_step` clamp ($10\%$) limits how fast the target slews. L2 never issues pulses: L1 drives **one continuous servo move** to `mix_target_pos` and stops on arrival (see [`02_hardware_and_l0.md`](02_hardware_and_l0.md) §2.2). If the new target demands the opposite direction, L1 stops, waits the $50\text{ ms}$ direction-change dead-time and reverses immediately — there is no cooldown and no `max_pulse_ms`.
 
 ### 2.2 Mixer Position Tracking & Abstract Encoder Consistency Checks
 

@@ -91,12 +91,12 @@ struct SystemState {
   uint32_t pos_encoder_ms;
   bool pos_encoder_valid;
   float integrator_val;
-  float mix_target_pos;
-  int8_t mix_pulse_dir_req;
-  uint32_t mix_pulse_ms_req;
-  int8_t mix_pulse_dir_phys;
-  uint32_t mix_pulse_ms_phys;
-  bool mix_free_run;  // homing/sweep: ignore soft limits until the pulse ends
+  float mix_target_pos;            // desired position; the only mixer command
+  bool mix_motion;                 // motor energized right now (L1 -> L0)
+  int8_t mix_dir;                  // +1 opening, -1 closing, 0 idle
+  bool mix_emergency;              // emergency close latched; writers locked out
+  int8_t mix_free_run_dir;         // non-zero: homing/sweep, ignore target/limits
+  uint32_t mix_free_run_until_ms;  // free-run safety deadline
 
   // --- Relays: Intended (L4), Requested (L2), Physical (L1 -> L0) ----------
   bool heater_intended, heater_requested, heater_phys;

@@ -10,12 +10,18 @@ namespace hpn {
 namespace l1 {
 namespace {
 
-uint32_t g_mixer_end_ms = 0;
 uint32_t g_mixer_last_ms = 0;
+int8_t g_mix_last_dir = 0;  // last direction the relay was commanded to
 uint32_t g_heater_off_ms = 0;
 bool g_overtemp_latched = false;
 uint8_t g_dry_run_count[3] = {};
 uint8_t g_welded_count[3] = {};
+
+// Minimum time the mixer motion stays de-energized when the direction changes,
+// so the relay contacts have physically dropped before the opposite coil is
+// driven. The stop / wait / switch-order start sequence lives here in L1
+// because it owns the dead-reckoned position and the exact energised interval.
+constexpr uint32_t kMixerDirSwitchMs = 50u;
 
 void apply_relay(Relay relay, bool requested, bool& physical, const char* name) {
   if (requested == physical) {
@@ -30,53 +36,109 @@ bool persistent_fault(const SensorReading& reading, uint8_t threshold) {
   return !reading.is_valid && reading.consecutive_errors >= threshold;
 }
 
-// Execute at most one mixer pulse at a time and dead-reckon position from the
-// arbitrated direction. Reaching 0 % or 100 % is a soft end stop and re-zeroes
-// the estimate; a free-run request (homing/sweep) ignores the soft limits.
-void service_mixer(const Config& config, SystemState& state, int8_t dir_req, uint32_t ms_req) {
-  const uint32_t now = millis();
-  if (g_mixer_last_ms == 0) {
-    g_mixer_last_ms = now;
+// L1 mixer position servo. Every other layer (L2, the web portal, the test
+// sequences and the emergency logic) only sets `mix_target_pos`; this is the
+// single place that energizes the motor. A move runs continuously until the
+// dead-reckoned position reaches the target, a soft end stop (0 %/100 %) or the
+// free-run deadline. There are no pulses, durations or cooldowns.
+void stop_mixer(SystemState& state) {
+  if (!state.mix_motion) {
+    return;
   }
+  l0::set_mixer_motor(false, state.mix_dir > 0);
+  state.mix_motion = false;
+  state.mix_dir = 0;
+}
 
-  if (state.mix_pulse_ms_phys > 0) {
+// Energize the motor in `want_dir`. If the relays were last driven the other
+// way, drop the motion, wait for the contacts to release, then switch direction
+// and start again.
+void start_mixer(SystemState& state, int8_t want_dir) {
+  if (g_mix_last_dir != 0 && want_dir != g_mix_last_dir) {
+    l0::set_mixer_motor(false, g_mix_last_dir > 0);
+    delay(kMixerDirSwitchMs);
+  }
+  l0::set_mixer_motor(true, want_dir > 0);
+  g_mix_last_dir = want_dir;
+  state.mix_motion = true;
+  state.mix_dir = want_dir;
+  g_mixer_last_ms = millis();
+}
+
+void service_mixer(const Config& config, SystemState& state, bool force_close, bool allow_open) {
+  const uint32_t now = millis();
+
+  const float target = force_close ? 0.0f
+                                   : (state.mix_target_pos < 0.0f   ? 0.0f
+                                      : state.mix_target_pos > 1.0f ? 1.0f
+                                                                    : state.mix_target_pos);
+  const int8_t free_dir = force_close ? 0 : state.mix_free_run_dir;
+
+  if (state.mix_motion) {
     const uint32_t dt = now - g_mixer_last_ms;
     g_mixer_last_ms = now;
 
     const uint32_t travel_ms = config.travel_time_ms > 0 ? config.travel_time_ms : 145000;
     const float step = static_cast<float>(dt) / static_cast<float>(travel_ms);
-    float next = state.pos_est_dr + (state.mix_pulse_dir_phys > 0 ? step : -step);
+    float next = state.pos_est_dr + (state.mix_dir > 0 ? step : -step);
 
-    bool at_limit = false;
-    if (!state.mix_free_run) {
+    bool stop = false;
+    if (free_dir != 0) {
+      // Free-run (homing/sweep): ignore the target and the soft limits, stop
+      // when the request changes or the deadline passes.
+      if (free_dir != state.mix_dir) {
+        stop = true;
+      } else if (state.mix_free_run_until_ms == 0 ||
+                 static_cast<int32_t>(now - state.mix_free_run_until_ms) >= 0) {
+        stop = true;
+        state.mix_free_run_dir = 0;
+        state.mix_free_run_until_ms = 0;
+      }
+    } else {
       if (next <= 0.0f) {
         next = 0.0f;
-        at_limit = true;
+        stop = true;
       } else if (next >= 1.0f) {
         next = 1.0f;
-        at_limit = true;
+        stop = true;
+      }
+      if (!allow_open && state.mix_dir > 0) {
+        stop = true;
+      } else if (state.mix_dir > 0 ? next >= target : next <= target) {
+        stop = true;
       }
     }
     state.pos_est_dr = next;
 
-    if (at_limit || static_cast<int32_t>(now - g_mixer_end_ms) >= 0) {
-      l0::set_mixer_motor(false, false);
-      state.mix_pulse_ms_phys = 0;
-      state.mix_pulse_dir_phys = 0;
+    if (stop) {
+      stop_mixer(state);
     }
     return;
   }
 
   g_mixer_last_ms = now;
-  if (ms_req == 0 || dir_req == 0) {
+
+  if (free_dir != 0) {
+    if (state.mix_free_run_until_ms == 0 ||
+        static_cast<int32_t>(now - state.mix_free_run_until_ms) >= 0) {
+      // Expired or unbounded free-run request: self-heal instead of restarting.
+      state.mix_free_run_dir = 0;
+      state.mix_free_run_until_ms = 0;
+      return;
+    }
+    start_mixer(state, free_dir);
     return;
   }
 
-  state.mix_pulse_dir_phys = dir_req > 0 ? 1 : -1;
-  state.mix_pulse_ms_phys = ms_req;
-  g_mixer_end_ms = now + ms_req;
-  g_mixer_last_ms = now;
-  l0::set_mixer_motor(true, state.mix_pulse_dir_phys > 0);
+  const float error = target - state.pos_est_dr;
+  if (fabsf(error) <= config.deadband_pos) {
+    return;
+  }
+  const int8_t want_dir = error > 0.0f ? 1 : -1;
+  if (want_dir > 0 && !allow_open) {
+    return;
+  }
+  start_mixer(state, want_dir);
 }
 
 }  // namespace
@@ -84,7 +146,7 @@ void service_mixer(const Config& config, SystemState& state, int8_t dir_req, uin
 void begin(const Config& config, SystemState& state) {
   (void)config;
   (void)state;
-  g_mixer_end_ms = 0;
+  g_mix_last_dir = 0;
   g_mixer_last_ms = 0;
   g_heater_off_ms = millis();  // hold anti-short-cycle at cold boot
   g_overtemp_latched = false;
@@ -265,26 +327,17 @@ void tick(const Config& config, SystemState& state) {
     state.active_alarms &= ~ALARM_WELDED_RELAY;
   }
 
-  // --- Mixer pulse arbitration --------------------------------------------
-  int8_t dir = state.mix_pulse_dir_req;
-  uint32_t ms = state.mix_pulse_ms_req;
+  // --- Mixer servo ---------------------------------------------------------
+  // Emergency (over-temperature, local sensor fault or welded relay) is not a
+  // special movement: it just commands the safe position and locks every other
+  // writer out while it is active.
+  state.mix_emergency = force_mixer_close;
   if (force_mixer_close) {
     state.mix_target_pos = 0.0f;
-    if (state.mix_pulse_ms_phys == 0 && state.mix_pulse_ms_req == 0) {
-      dir = -1;
-      ms = config.max_pulse_ms > 0 ? config.max_pulse_ms : 1000;
-    } else {
-      dir = 0;
-      ms = 0;
-    }
-  } else if (dir > 0 && !allow_mixer_open) {
-    dir = 0;
-    ms = 0;
+    state.mix_free_run_dir = 0;
+    state.mix_free_run_until_ms = 0;
   }
-
-  service_mixer(config, state, dir, ms);
-  state.mix_pulse_dir_req = 0;
-  state.mix_pulse_ms_req = 0;
+  service_mixer(config, state, force_mixer_close, allow_mixer_open);
 }
 
 }  // namespace l1

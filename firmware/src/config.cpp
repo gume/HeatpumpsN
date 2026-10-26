@@ -59,6 +59,7 @@ Config config_defaults() {
   c.setpoint_default = 35.0f;
   c.deadband_pos = 0.02f;
   c.deadband_temp = 2.0f;
+  // Reserved (see config.h): retained for NVS layout compatibility only.
   c.min_pulse_ms = 50;
   c.max_pulse_ms = 1000;
   c.pulse_cooldown_ms = 200;
