@@ -687,31 +687,50 @@ function dashboardLeds(live) {
   const safety = live.safety || {};
   const system = live.system || {};
   const flags = Array.isArray(safety.flags) ? safety.flags : [];
-  const latched = Array.isArray(safety.latched) ? safety.latched : [];
-  const errorCode = num(safety.errorCode, 0);
-  const critical = latched.length > 0 || errorCode !== 0;
-  const warning = flags.length > 0;
+  const hasFlag = (name) => flags.includes(name);
+  // Physical LED mapping (plans/controller node/02_hardware_and_l0.md §1.2).
+  // LED 0 only turns red for critical alarms; ordinary warnings stay yellow
+  // via the system/LED 0 path below.
+  const critical = hasFlag('overtemp_hard') || hasFlag('sensor_fault_mix') || hasFlag('welded_relay');
+  const pumpFault = hasFlag('welded_relay') || hasFlag('pump_dry_run');
+  const mqttDown = !!mqtt.enabled && !mqtt.connected;
   const heaterOn = !!num(heater.phys, 0);
   const floorOn = !!num((circuits.floor || {}).phys, 0);
   const rad1On = !!num((circuits.rad1 || {}).phys, 0);
   const rad2On = !!num((circuits.rad2 || {}).phys, 0);
   const divergence = String(system.divergence || 'none');
+  const flushActive = String(system.flush || 'idle') === 'active';
 
   let systemLed;
   if (critical) {
-    systemLed = { color: 'red', text: 'Alarm', note: `error ${errorCode}` };
-  } else if (!wifi.connected) {
-    systemLed = { color: 'red', text: 'Offline', note: 'Wi-Fi down' };
-  } else if (warning) {
-    systemLed = { color: 'yellow', text: 'Warning', note: flags[0] };
-  } else if (!mqtt.connected) {
-    systemLed = { color: 'yellow', text: 'Wi-Fi only', note: 'MQTT off' };
+    systemLed = { color: 'red', text: 'Alarm', note: `error ${num(safety.errorCode, 0)}` };
+  } else if (!wifi.connected || mqttDown) {
+    systemLed = {
+      color: 'yellow',
+      text: 'Degraded',
+      note: !wifi.connected ? 'Wi-Fi down' : 'MQTT down'
+    };
   } else {
     systemLed = { color: 'green', text: 'Online', note: 'Wi-Fi + MQTT' };
   }
 
+  let boilerLed;
+  if (heaterOn) {
+    boilerLed = { color: 'orange', text: 'Heating', note: 'heater ON' };
+  } else if (system.dhwActive) {
+    boilerLed = { color: 'cyan', text: 'DHW', note: 'hot-water priority' };
+  } else if (divergence === 'anti_short_cycle') {
+    boilerLed = { color: 'purple', text: 'Hold-off', note: 'anti-short-cycle' };
+  } else {
+    boilerLed = { color: 'off', text: 'Standby', note: 'heater OFF' };
+  }
+
   let floorLed;
-  if (divergence === 'floor_delta_t_collapsed') {
+  if (hasFlag('overtemp_hard')) {
+    floorLed = { color: 'red', text: 'Over-temperature', note: 'hard cutoff' };
+  } else if (flushActive) {
+    floorLed = { color: 'cyan', text: 'Flushing', note: 'start-up flush' };
+  } else if (divergence === 'floor_delta_t_collapsed') {
     floorLed = { color: 'magenta', text: 'ΔT pause', note: 'floor divergence' };
   } else if (floorOn) {
     floorLed = { color: 'green', text: 'Running', note: 'pump ON' };
@@ -719,15 +738,15 @@ function dashboardLeds(live) {
     floorLed = { color: 'off', text: 'Idle', note: 'pump OFF' };
   }
 
-  const pumpLed = (on) => on
-    ? { color: 'orange', text: 'Running', note: 'pump ON' }
-    : { color: 'off', text: 'Idle', note: 'pump OFF' };
+  const pumpLed = (on) => pumpFault
+    ? { color: 'red', text: 'Fault', note: 'pump fault' }
+    : on
+      ? { color: 'orange', text: 'Running', note: 'pump ON' }
+      : { color: 'off', text: 'Idle', note: 'pump OFF' };
 
   return [
     { label: 'LED 0 · System', ...systemLed },
-    heaterOn
-      ? { label: 'LED 1 · Boiler', color: 'orange', text: 'Heating', note: 'heater ON' }
-      : { label: 'LED 1 · Boiler', color: 'off', text: 'Standby', note: 'heater OFF' },
+    { label: 'LED 1 · Boiler', ...boilerLed },
     { label: 'LED 2 · Floor', ...floorLed },
     { label: 'LED 3 · Rad 1', ...pumpLed(rad1On) },
     { label: 'LED 4 · Rad 2', ...pumpLed(rad2On) }
@@ -816,6 +835,7 @@ function renderDashboard() {
         </div>
         ${safetyFlags(safety.flags)}
         <div class="metric-row" style="margin-top:10px"><span class="k">Error code</span><span class="v">${esc(safety.errorCode ?? 0)}</span></div>
+        <div class="metric-row"><span class="k">Error text</span><span class="v">${esc(safety.errorText || 'No error')}</span></div>
         <div class="metric-row"><span class="k">Divergence</span><span class="v">${esc(system.divergence || 'none')}</span></div>
         <div class="metric-row"><span class="k">Flush</span><span class="v">${esc(system.flush || 'idle')}</span></div>
       </section>
@@ -1599,6 +1619,19 @@ function renderSettingsNetwork() {
             ${fieldCheckbox('ntp_enabled', 'Enable NTP', cfg.ntp_enabled, 'Synchronize the controller wall clock over SNTP.')}
             ${fieldText('ntp_server', 'NTP server', cfg.ntp_server, 'Hostname or IP address of the NTP server.', 'text', 'pool.ntp.org')}
             ${fieldText('timezone', 'POSIX timezone', cfg.timezone, 'POSIX TZ string, for example CET-1CEST,M3.5.0,M10.5.0/3.', 'text', 'CET-1CEST,M3.5.0,M10.5.0/3')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="row between">
+            <h3>MQTT telemetry logs</h3>
+            <span class="chip">RAM → MQTT</span>
+          </div>
+          <p class="small faint">Log records are always kept in RAM circular buffers and are never written to flash. Enable streaming to publish new records as JSON lines. An empty topic uses the base-derived default.</p>
+          <div class="form-grid">
+            ${fieldCheckbox('mqtt_log_enabled', 'Publish logs to MQTT', cfg.mqtt_log_enabled, 'Stream new slow-log samples and event records while the broker is connected.')}
+            ${fieldText('mqtt_log_slow_topic', 'Slow log topic', cfg.mqtt_log_slow_topic, 'Full topic override. Leave empty for <base>/log/slow.', 'text', '')}
+            ${fieldText('mqtt_log_event_topic', 'Event log topic', cfg.mqtt_log_event_topic, 'Full topic override. Leave empty for <base>/log/event.', 'text', '')}
           </div>
         </div>
 

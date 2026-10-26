@@ -5,18 +5,24 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "hpn/crc32.h"
+
 namespace hpn {
 namespace {
 
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 4;
-constexpr uint16_t kVersionV1 = 1;
-constexpr uint16_t kVersionV2 = 2;
-constexpr uint16_t kVersionV3 = 3;
+constexpr uint16_t kVersion = 1;
 
 struct ConfigBlobHeader {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+  uint32_t crc;
+};
+
+struct ConfigBlobPrefix {
   uint32_t magic;
   uint16_t version;
   uint16_t size;
@@ -27,88 +33,81 @@ struct ConfigBlob {
   Config config;
 };
 
-// New fields are append-only. Each historical version is therefore exactly a
-// prefix of the current struct: v1 ended before hostname, v2 ended before the
-// MQTT meter fields.
-constexpr size_t align_up(size_t value, size_t alignment) {
-  return (value + alignment - 1) / alignment * alignment;
-}
-
-constexpr size_t kConfigV1Size = offsetof(Config, hostname);
-// v2 ended with a single uint8_t (mixer_wiring), so the stored struct size
-// included trailing alignment padding. Round the next-field offset up to the
-// struct alignment to recover the exact stored size.
-constexpr size_t kConfigV2Size =
-    align_up(offsetof(Config, mixer_meter_device), alignof(Config));
-// v3 ended with a char array; the next field is a float, so the stored size is
-// the next-field offset rounded up to the struct alignment.
-constexpr size_t kConfigV3Size = align_up(offsetof(Config, mix_ff_offset), alignof(Config));
-constexpr size_t kConfigV1BlobSize = sizeof(ConfigBlobHeader) + kConfigV1Size;
-constexpr size_t kConfigV2BlobSize = sizeof(ConfigBlobHeader) + kConfigV2Size;
-constexpr size_t kConfigV3BlobSize = sizeof(ConfigBlobHeader) + kConfigV3Size;
+static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
+static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
 
 Preferences g_prefs;
 
 bool open_store() { return g_prefs.begin(kNamespace, false); }
 
+uint32_t blob_crc(ConfigBlob& blob) {
+  const uint32_t saved = blob.header.crc;
+  blob.header.crc = 0;
+  const uint32_t crc = crc32_ieee(&blob, sizeof(blob));
+  blob.header.crc = saved;
+  return crc;
+}
+
 }  // namespace
 
-bool config_load(Config& config) {
+ConfigLoadResult config_load(Config& config) {
   if (!open_store()) {
     Serial.println("[config] NVS open failed; using compiled defaults");
-    return false;
+    return ConfigLoadResult::Corrupt;
   }
 
   const size_t stored = g_prefs.getBytesLength(kKey);
-  bool ok = false;
-  bool migrated = false;
+  ConfigLoadResult result = ConfigLoadResult::Missing;
 
-  // Read into a zeroed v2 blob. For a v1 blob only the old prefix is filled;
-  // the appended fields stay zero and are then replaced by compiled defaults.
-  if (stored >= sizeof(ConfigBlobHeader) && stored <= sizeof(ConfigBlob)) {
-    ConfigBlob blob{};
-    if (g_prefs.getBytes(kKey, &blob, stored) == stored && blob.header.magic == kMagic) {
-      if (blob.header.version == kVersion && blob.header.size == sizeof(Config) &&
-          stored == sizeof(ConfigBlob)) {
+  if (stored != 0) {
+    // Preferences::getBytes() requires a buffer large enough for the whole
+    // blob, so a short prefix read cannot be used to sniff the format. The
+    // current format is the largest one (fields were only ever removed from
+    // older versions), so anything that still fits is read in full.
+    if (stored < sizeof(ConfigBlobPrefix)) {
+      result = ConfigLoadResult::Corrupt;
+    } else if (stored > sizeof(ConfigBlob)) {
+      // Larger than any recorded format: an old/foreign blob, not damage.
+      result = ConfigLoadResult::Stale;
+    } else {
+      ConfigBlob blob{};
+      if (g_prefs.getBytes(kKey, &blob, stored) != stored) {
+        result = ConfigLoadResult::Corrupt;
+      } else if (blob.header.magic != kMagic || blob.header.version != kVersion) {
+        // Old-format or foreign blob. No migration: discard it and use defaults.
+        result = ConfigLoadResult::Stale;
+      } else if (stored != sizeof(ConfigBlob) || blob.header.size != sizeof(Config)) {
+        result = ConfigLoadResult::Corrupt;
+      } else if (blob.header.crc == blob_crc(blob)) {
         config = blob.config;
-        ok = true;
-      } else if (blob.header.version == kVersionV1 && blob.header.size == kConfigV1Size &&
-                 stored == kConfigV1BlobSize) {
-        Config upgraded = config_defaults();
-        memcpy(&upgraded, &blob.config, kConfigV1Size);
-        config = upgraded;
-        ok = true;
-        migrated = true;
-      } else if (blob.header.version == kVersionV2 && blob.header.size == kConfigV2Size &&
-                 stored == kConfigV2BlobSize) {
-        Config upgraded = config_defaults();
-        memcpy(&upgraded, &blob.config, kConfigV2Size);
-        config = upgraded;
-        ok = true;
-        migrated = true;
-      } else if (blob.header.version == kVersionV3 && blob.header.size == kConfigV3Size &&
-                 stored == kConfigV3BlobSize) {
-        Config upgraded = config_defaults();
-        memcpy(&upgraded, &blob.config, kConfigV3Size);
-        config = upgraded;
-        ok = true;
-        migrated = true;
+        result = ConfigLoadResult::Loaded;
+      } else {
+        result = ConfigLoadResult::Corrupt;
       }
     }
   }
 
   g_prefs.end();
 
-  if (ok) {
-    Serial.println(migrated ? "[config] migrated saved v1 configuration"
-                            : "[config] loaded saved configuration from NVS");
-  } else if (stored != 0) {
-    Serial.printf("[config] ignoring invalid NVS blob (%u bytes)\n", static_cast<unsigned>(stored));
-  } else {
-    Serial.println("[config] no saved configuration; using compiled defaults");
+  switch (result) {
+    case ConfigLoadResult::Loaded:
+      Serial.println("[config] loaded saved configuration from NVS");
+      break;
+    case ConfigLoadResult::Stale:
+      Serial.printf("[config] saved configuration format differs (%u bytes); using compiled defaults\n",
+                    static_cast<unsigned>(stored));
+      break;
+    case ConfigLoadResult::Corrupt:
+      Serial.printf("[config] NVS CRC/format check failed (%u bytes); using compiled defaults\n",
+                    static_cast<unsigned>(stored));
+      break;
+    case ConfigLoadResult::Missing:
+    default:
+      Serial.println("[config] no saved configuration; using compiled defaults");
+      break;
   }
 
-  return ok;
+  return result;
 }
 
 bool config_save(const Config& config) {
@@ -122,13 +121,24 @@ bool config_save(const Config& config) {
   blob.header.version = kVersion;
   blob.header.size = sizeof(Config);
   blob.config = config;
+  blob.header.crc = 0;
+  blob.header.crc = blob_crc(blob);
+
+  // A second pass verifies that the checksum helper is deterministic before
+  // the blob is committed.
+  if (blob.header.crc != blob_crc(blob)) {
+    g_prefs.end();
+    Serial.println("[config] internal CRC error; settings not saved");
+    return false;
+  }
 
   const size_t written = g_prefs.putBytes(kKey, &blob, sizeof(blob));
   g_prefs.end();
 
   const bool ok = written == sizeof(blob);
-  Serial.printf("[config] save %s (%u bytes)\n", ok ? "ok" : "FAILED",
-                static_cast<unsigned>(written));
+  Serial.printf("[config] save %s (%u bytes, crc %08lx)\n", ok ? "ok" : "FAILED",
+                static_cast<unsigned>(written),
+                static_cast<unsigned long>(blob.header.crc));
   return ok;
 }
 

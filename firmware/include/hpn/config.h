@@ -51,13 +51,6 @@ struct Config {
   float setpoint_default;
   float deadband_pos;
   float deadband_temp;
-  // Deprecated and unused: the mixer is now a continuous target-position servo
-  // (L1 stops at `mix_target_pos`), so there is no pulse length or cooldown.
-  // These three are retained only so saved-NVS blobs keep their binary layout;
-  // they are not exposed in the web configuration and never read by control.
-  uint32_t min_pulse_ms;
-  uint32_t max_pulse_ms;
-  uint32_t pulse_cooldown_ms;
   uint32_t travel_time_ms;
   uint32_t tick_ms;
   uint32_t temp_poll_interval_ms;
@@ -106,13 +99,6 @@ struct Config {
   float min_useful_delta_t;
   uint32_t floor_pause_duration_s;
 
-  // =========================================================================
-  // APPEND-ONLY FIELDS
-  //
-  // Keep new fields at the end so config_store can migrate older NVS blobs by
-  // copying the known prefix and filling the remainder with defaults.
-  // =========================================================================
-
   // --- Network identity and time -------------------------------------------
   char hostname[33];
   bool ntp_enabled;
@@ -139,6 +125,14 @@ struct Config {
   // Analysis model B intercept (K). Observer-owned; kept configurable so the
   // feedforward can be recalibrated without a firmware change.
   float mix_ff_offset;
+
+  // --- MQTT log streaming --------------------------------------------------
+  // Logs always live in RAM ring buffers. When enabled, new records are also
+  // published to MQTT. An empty topic means the base-derived default
+  // (<base>/log/slow or <base>/log/event).
+  bool mqtt_log_enabled;
+  char mqtt_log_slow_topic[96];
+  char mqtt_log_event_topic[96];
 };
 
 // Compiled-in defaults used before NVS has valid data. All values are safe

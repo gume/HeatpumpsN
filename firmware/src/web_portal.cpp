@@ -19,7 +19,9 @@
 
 #include "hpn/web_portal.h"
 #include "hpn/config_store.h"
+#include "hpn/crc32.h"
 #include "hpn/l0_io.h"
+#include "hpn/logger.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/wifi_client.h"
 
@@ -36,10 +38,7 @@ namespace {
 // ---------------------------------------------------------------------------
 
 constexpr uint32_t kBroadcastIntervalMs = 250;
-constexpr uint32_t kSlowSampleIntervalMs = 10000;
 constexpr size_t kAccessLogSize = 64;
-constexpr size_t kEventLogSize = 64;
-constexpr size_t kSlowLogSize = 180;
 
 struct AccessEntry {
   uint32_t seq;
@@ -48,24 +47,6 @@ struct AccessEntry {
   char method[8];
   char path[64];
   int status;
-};
-
-struct EventEntry {
-  uint32_t seq;
-  uint32_t ms;
-  uint8_t severity;
-  uint16_t code;
-  char detail[96];
-  bool latched;
-};
-
-struct SlowSample {
-  uint32_t ms;
-  float boiler;
-  float mix;
-  float ret;
-  float pos;
-  bool relays[4];
 };
 
 struct CounterEntry {
@@ -89,13 +70,20 @@ enum CounterId : uint8_t {
 constexpr const char* kCounterNamespace = "hpnctr";
 constexpr const char* kCounterKey = "counters";
 constexpr uint32_t kCounterMagic = 0x48504E54u;  // "HPNT"
-constexpr uint16_t kCounterVersion = 1;
+constexpr uint16_t kCounterVersion = 2;
 constexpr uint32_t kCounterSaveIntervalMs = 3600000u;
+
+struct CounterBlobPrefix {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+};
 
 struct CounterBlob {
   uint32_t magic;
   uint16_t version;
   uint16_t size;
+  uint32_t crc;
   uint32_t cycles[CTR_COUNT];
   uint32_t runtime_s[CTR_COUNT];
 };
@@ -135,18 +123,6 @@ AccessEntry g_access[kAccessLogSize] = {};
 uint32_t g_access_head = 0;
 uint32_t g_access_count = 0;
 uint32_t g_access_seq = 0;
-
-portMUX_TYPE g_event_mux = portMUX_INITIALIZER_UNLOCKED;
-EventEntry g_events[kEventLogSize] = {};
-uint32_t g_event_head = 0;
-uint32_t g_event_count = 0;
-uint32_t g_event_seq = 0;
-
-portMUX_TYPE g_slow_mux = portMUX_INITIALIZER_UNLOCKED;
-SlowSample g_slow[kSlowLogSize] = {};
-uint32_t g_slow_head = 0;
-uint32_t g_slow_count = 0;
-uint32_t g_last_slow_ms = 0;
 
 portMUX_TYPE g_counter_mux = portMUX_INITIALIZER_UNLOCKED;
 CounterEntry g_counters[CTR_COUNT] = {};
@@ -191,19 +167,6 @@ void copy_str(char* dst, size_t n, const char* src) {
     return;
   }
   snprintf(dst, n, "%s", src == nullptr ? "" : src);
-}
-
-const char* severity_name(uint8_t severity) {
-  switch (severity) {
-    case 1:
-      return "warn";
-    case 2:
-      return "error";
-    case 3:
-      return "safety";
-    default:
-      return "info";
-  }
 }
 
 // Reset cause latched by the SoC for the current boot. Reading it does not
@@ -497,6 +460,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   add_alarm_strings(flags, st.active_alarms);
   safety["latched"].to<JsonArray>();
   safety["errorCode"] = st.system_error_code;
+  char error_text[160];
+  format_error_text(st, error_text, sizeof(error_text));
+  safety["errorText"] = error_text;
   safety["alarmCount"] = flags.size();
 
   JsonArray sensors = doc["sensors"].to<JsonArray>();
@@ -516,6 +482,7 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   JsonObject system = doc["system"].to<JsonObject>();
   system["freeHeap"] = ESP.getFreeHeap();
   system["errorCode"] = st.system_error_code;
+  system["errorText"] = error_text;
   system["divergence"] = divergence_name(st.divergence_reason);
   system["flush"] = flush_name(st.flush_state);
   system["rssi"] = s.wifi_rssi;
@@ -562,6 +529,9 @@ void fill_network(JsonObject o, const Config& c, bool include_secrets = false) {
   o["mqtt_port"] = c.mqtt_port;
   o["mqtt_user"] = c.mqtt_user;
   o["mqtt_base_topic"] = c.mqtt_base_topic;
+  o["mqtt_log_enabled"] = c.mqtt_log_enabled;
+  o["mqtt_log_slow_topic"] = c.mqtt_log_slow_topic;
+  o["mqtt_log_event_topic"] = c.mqtt_log_event_topic;
   o["ntp_enabled"] = c.ntp_enabled;
   o["ntp_server"] = c.ntp_server;
   o["timezone"] = c.timezone;
@@ -822,6 +792,13 @@ bool apply_network(JsonObject in, Config& c, String& err) {
   if (!json_password(in, "mqtt_pass", c.mqtt_pass, sizeof(c.mqtt_pass), err)) return false;
   if (!json_string(in, "mqtt_base_topic", c.mqtt_base_topic, sizeof(c.mqtt_base_topic), true, err))
     return false;
+  if (!json_bool(in, "mqtt_log_enabled", c.mqtt_log_enabled, err)) return false;
+  if (!json_string(in, "mqtt_log_slow_topic", c.mqtt_log_slow_topic,
+                   sizeof(c.mqtt_log_slow_topic), true, err))
+    return false;
+  if (!json_string(in, "mqtt_log_event_topic", c.mqtt_log_event_topic,
+                   sizeof(c.mqtt_log_event_topic), true, err))
+    return false;
   if (!json_bool(in, "ntp_enabled", c.ntp_enabled, err)) return false;
   if (!json_string(in, "ntp_server", c.ntp_server, sizeof(c.ntp_server), true, err)) return false;
   if (!json_string(in, "timezone", c.timezone, sizeof(c.timezone), true, err)) return false;
@@ -1013,6 +990,26 @@ void send_error(AsyncWebServerRequest* request, int code, const char* message) {
 // Relay counters, slow log and Test Mode state
 // ---------------------------------------------------------------------------
 
+void flag_nvs_corruption() {
+  if (g_state == nullptr) {
+    return;
+  }
+  g_state->active_alarms |= WARN_NVS_CORRUPTED;
+  if (g_state->system_error_code == ERR_OK) {
+    g_state->system_error_code = ERR_NVS_DATA_CORRUPTED;
+  }
+}
+
+#if !defined(HPN_IO_EMULATION)
+uint32_t counter_blob_crc(CounterBlob& blob) {
+  const uint32_t saved = blob.crc;
+  blob.crc = 0;
+  const uint32_t crc = crc32_ieee(&blob, sizeof(blob));
+  blob.crc = saved;
+  return crc;
+}
+#endif
+
 int counter_index(const char* name) {
   if (strcmp(name, "heater") == 0) return CTR_HEATER;
   if (strcmp(name, "rad1") == 0) return CTR_RAD1;
@@ -1042,18 +1039,35 @@ void counters_load() {
   const size_t stored = prefs.getBytesLength(kCounterKey);
   CounterBlob blob{};
   bool ok = false;
-  if (stored == sizeof(blob) &&
-      prefs.getBytes(kCounterKey, &blob, sizeof(blob)) == sizeof(blob) &&
-      blob.magic == kCounterMagic && blob.version == kCounterVersion &&
-      blob.size == sizeof(blob)) {
-    ok = true;
+  bool stale = false;
+  if (stored != 0) {
+    // Preferences has no partial read; read the whole blob. The current format
+    // is larger than the legacy one, so a larger blob cannot be current.
+    if (stored < sizeof(CounterBlobPrefix)) {
+      // Too short to be any known format.
+    } else if (stored > sizeof(blob)) {
+      // Larger than any recorded format: an old/foreign blob.
+      stale = true;
+    } else if (prefs.getBytes(kCounterKey, &blob, stored) != stored) {
+      // Read failed despite the length check: treat as damage.
+    } else if (blob.magic != kCounterMagic || blob.version != kCounterVersion) {
+      // Old-format counters; discard without migration and without an alarm.
+      stale = true;
+    } else if (stored == sizeof(blob) && blob.size == sizeof(blob) &&
+               blob.crc == counter_blob_crc(blob)) {
+      ok = true;
+    }
   }
   prefs.end();
 
   if (!ok) {
-    if (stored != 0) {
-      Serial.printf("[counters] ignoring invalid NVS blob (%u bytes)\n",
+    if (stale) {
+      Serial.printf("[counters] legacy NVS format (%u bytes); counters reset\n",
                     static_cast<unsigned>(stored));
+    } else if (stored != 0) {
+      Serial.printf("[counters] NVS CRC/format check failed (%u bytes); counters reset\n",
+                    static_cast<unsigned>(stored));
+      flag_nvs_corruption();
     }
     return;
   }
@@ -1087,6 +1101,9 @@ void counters_save() {
   }
   g_counters_dirty = false;
   taskEXIT_CRITICAL(&g_counter_mux);
+
+  blob.crc = 0;
+  blob.crc = counter_blob_crc(blob);
 
   Preferences prefs;
   if (!prefs.begin(kCounterNamespace, false)) {
@@ -1182,27 +1199,6 @@ void update_counters(const SystemState& st, uint32_t now_ms) {
     }
   }
   taskEXIT_CRITICAL(&g_counter_mux);
-}
-
-void sample_slow(const SystemState& st, uint32_t now_ms) {
-  SlowSample sample{};
-  sample.ms = now_ms;
-  sample.boiler = st.T_boiler.value_c;
-  sample.mix = st.T_mix_out.value_c;
-  sample.ret = st.T_return_floor.value_c;
-  sample.pos = st.pos_est_dr;
-  sample.relays[0] = st.heater_phys;
-  sample.relays[1] = st.pump_rad1_phys;
-  sample.relays[2] = st.pump_rad2_phys;
-  sample.relays[3] = st.pump_floor_phys;
-
-  taskENTER_CRITICAL(&g_slow_mux);
-  g_slow[g_slow_head] = sample;
-  g_slow_head = (g_slow_head + 1) % kSlowLogSize;
-  if (g_slow_count < kSlowLogSize) {
-    g_slow_count++;
-  }
-  taskEXIT_CRITICAL(&g_slow_mux);
 }
 
 void activate_test() {
@@ -1352,18 +1348,66 @@ void tick_sequence(uint32_t now_ms) {
 
 constexpr const char* kAntiSeizeNamespace = "hpnanti";
 constexpr const char* kAntiSeizeKey = "next_day";
+constexpr uint32_t kAntiSeizeMagic = 0x48504E41u;  // "HPNA"
 constexpr uint32_t kAntiSeizeWriteIntervalMs = 300000;  // 5 min
+
+struct AntiSeizeBlob {
+  uint32_t magic;
+  uint32_t next_day;
+  uint32_t crc;
+};
 
 uint32_t g_anti_seize_next_day = 0;
 uint32_t g_anti_seize_last_write_ms = 0;
 bool g_anti_seize_dirty = false;
 bool g_anti_seize_loaded = false;
 
+uint32_t anti_seize_blob_crc(AntiSeizeBlob& blob) {
+  const uint32_t saved = blob.crc;
+  blob.crc = 0;
+  const uint32_t crc = crc32_ieee(&blob, sizeof(blob));
+  blob.crc = saved;
+  return crc;
+}
+
 void anti_seize_load() {
   Preferences prefs;
-  if (prefs.begin(kAntiSeizeNamespace, true)) {
-    g_anti_seize_next_day = prefs.getUInt(kAntiSeizeKey, 0);
+  g_anti_seize_next_day = 0;
+  if (prefs.begin(kAntiSeizeNamespace, false)) {
+    // The previous firmware stored this key as a UInt, so check the type rather
+    // than just the key's presence. A scalar is a legacy value and is dropped
+    // without migration; no alarm is raised because the data is not damaged.
+    const PreferenceType type = prefs.getType(kAntiSeizeKey);
+    if (type == PT_INVALID) {
+      prefs.end();
+      g_anti_seize_loaded = true;
+      return;
+    }
+    if (type != PT_BLOB) {
+      // Drop the legacy scalar now so the next boot is clean even if summer
+      // mode never schedules a new value.
+      prefs.remove(kAntiSeizeKey);
+      prefs.end();
+      Serial.println("[anti-seize] legacy NVS scalar discarded; schedule reset");
+      g_anti_seize_loaded = true;
+      return;
+    }
+    const size_t stored = prefs.getBytesLength(kAntiSeizeKey);
+    AntiSeizeBlob blob{};
+    const bool ok = stored == sizeof(blob) &&
+                    prefs.getBytes(kAntiSeizeKey, &blob, sizeof(blob)) == sizeof(blob) &&
+                    blob.magic == kAntiSeizeMagic && blob.crc == anti_seize_blob_crc(blob);
     prefs.end();
+    if (ok) {
+      g_anti_seize_next_day = blob.next_day;
+    } else if (stored == sizeof(blob)) {
+      Serial.printf("[anti-seize] NVS CRC/format check failed (%u bytes); schedule reset\n",
+                    static_cast<unsigned>(stored));
+      flag_nvs_corruption();
+    } else if (stored != 0) {
+      Serial.printf("[anti-seize] legacy NVS format (%u bytes); schedule reset\n",
+                    static_cast<unsigned>(stored));
+    }
   }
   g_anti_seize_loaded = true;
 }
@@ -1375,12 +1419,28 @@ void anti_seize_flush(uint32_t now_ms) {
   if (now_ms - g_anti_seize_last_write_ms < kAntiSeizeWriteIntervalMs) {
     return;
   }
+  AntiSeizeBlob blob{};
+  blob.magic = kAntiSeizeMagic;
+  blob.next_day = g_anti_seize_next_day;
+  blob.crc = 0;
+  blob.crc = anti_seize_blob_crc(blob);
+
   Preferences prefs;
   if (prefs.begin(kAntiSeizeNamespace, false)) {
-    prefs.putUInt(kAntiSeizeKey, g_anti_seize_next_day);
+    // NVS refuses a blob write over a key stored with another type; the
+    // previous firmware used a UInt. Remove that legacy scalar first.
+    const PreferenceType type = prefs.getType(kAntiSeizeKey);
+    if (type != PT_INVALID && type != PT_BLOB) {
+      prefs.remove(kAntiSeizeKey);
+    }
+    const size_t written = prefs.putBytes(kAntiSeizeKey, &blob, sizeof(blob));
     prefs.end();
-    g_anti_seize_dirty = false;
-    g_anti_seize_last_write_ms = now_ms;
+    if (written == sizeof(blob)) {
+      g_anti_seize_dirty = false;
+      g_anti_seize_last_write_ms = now_ms;
+    } else {
+      Serial.println("[anti-seize] NVS write failed; will retry");
+    }
   }
 }
 
@@ -1760,30 +1820,31 @@ void handle_log_access(AsyncWebServerRequest* request) {
 
 void handle_log_events(AsyncWebServerRequest* request) {
   const uint32_t after = static_cast<uint32_t>(request->arg("after").toInt());
-  std::vector<EventEntry> entries;
-  entries.reserve(kEventLogSize);
-  uint32_t seq = 0;
+  std::vector<logger::Event> entries;
+  entries.reserve(logger::kEventCapacity);
 
-  taskENTER_CRITICAL(&g_event_mux);
-  seq = g_event_seq;
-  const uint32_t start = (g_event_head + kEventLogSize - g_event_count) % kEventLogSize;
-  for (uint32_t i = 0; i < g_event_count; ++i) {
-    const EventEntry& entry = g_events[(start + i) % kEventLogSize];
-    if (entry.seq > after) {
-      entries.push_back(entry);
+  uint32_t cursor = after;
+  logger::Event batch[8];
+  for (;;) {
+    const size_t copied = logger::events_after(cursor, batch, 8);
+    for (size_t i = 0; i < copied; ++i) {
+      entries.push_back(batch[i]);
+      cursor = batch[i].seq;
+    }
+    if (copied < 8) {
+      break;
     }
   }
-  taskEXIT_CRITICAL(&g_event_mux);
 
   JsonDocument doc;
-  doc["seq"] = seq;
+  doc["seq"] = logger::event_seq();
   doc["count"] = entries.size();
   JsonArray arr = doc["entries"].to<JsonArray>();
-  for (const EventEntry& entry : entries) {
+  for (const logger::Event& entry : entries) {
     JsonObject o = arr.add<JsonObject>();
     o["seq"] = entry.seq;
     o["ts"] = entry.ms;
-    o["severity"] = severity_name(entry.severity);
+    o["severity"] = logger::severity_name(entry.severity);
     o["code"] = entry.code;
     o["detail"] = entry.detail;
     o["latched"] = entry.latched;
@@ -1798,25 +1859,31 @@ void handle_log_slow(AsyncWebServerRequest* request) {
     to = 0xFFFFFFFFu;
   }
 
-  std::vector<SlowSample> samples;
-  samples.reserve(kSlowLogSize);
+  std::vector<logger::SlowSample> samples;
+  samples.reserve(logger::kSlowCapacity);
 
-  taskENTER_CRITICAL(&g_slow_mux);
-  const uint32_t start = (g_slow_head + kSlowLogSize - g_slow_count) % kSlowLogSize;
-  for (uint32_t i = 0; i < g_slow_count; ++i) {
-    const SlowSample& sample = g_slow[(start + i) % kSlowLogSize];
-    if (sample.ms >= from && sample.ms <= to) {
-      samples.push_back(sample);
+  uint32_t cursor = 0;
+  logger::SlowSample batch[16];
+  for (;;) {
+    const size_t copied = logger::slow_after(cursor, batch, 16);
+    for (size_t i = 0; i < copied; ++i) {
+      cursor = batch[i].seq;
+      if (batch[i].ms >= from && batch[i].ms <= to) {
+        samples.push_back(batch[i]);
+      }
+    }
+    if (copied < 16) {
+      break;
     }
   }
-  taskEXIT_CRITICAL(&g_slow_mux);
 
   JsonDocument doc;
-  doc["cadence_s"] = kSlowSampleIntervalMs / 1000;
+  doc["cadence_s"] = logger::kSlowSampleIntervalMs / 1000;
   doc["count"] = samples.size();
   JsonArray arr = doc["samples"].to<JsonArray>();
-  for (const SlowSample& sample : samples) {
+  for (const logger::SlowSample& sample : samples) {
     JsonObject o = arr.add<JsonObject>();
+    o["seq"] = sample.seq;
     o["ts"] = sample.ms;
     if (isfinite(sample.boiler)) o["boiler"] = sample.boiler; else o["boiler"] = nullptr;
     if (isfinite(sample.mix)) o["mix"] = sample.mix; else o["mix"] = nullptr;
@@ -2600,9 +2667,9 @@ void handle_status(AsyncWebServerRequest* request) {
 
   JsonObject portal = doc["portal"].to<JsonObject>();
   portal["accessLogSize"] = kAccessLogSize;
-  portal["eventLogSize"] = kEventLogSize;
-  portal["slowLogSize"] = kSlowLogSize;
-  portal["slowCadenceS"] = kSlowSampleIntervalMs / 1000;
+  portal["eventLogSize"] = logger::kEventCapacity;
+  portal["slowLogSize"] = logger::kSlowCapacity;
+  portal["slowCadenceS"] = logger::kSlowSampleIntervalMs / 1000;
 #if defined(HPN_IO_EMULATION)
   portal["emulation"] = true;
 #else
@@ -2970,12 +3037,6 @@ void begin(const Config& config, SystemState& state) {
   g_access_head = 0;
   g_access_count = 0;
   g_access_seq = 0;
-  g_event_head = 0;
-  g_event_count = 0;
-  g_event_seq = 0;
-  g_slow_head = 0;
-  g_slow_count = 0;
-  g_last_slow_ms = 0;
   memset(g_counters, 0, sizeof(g_counters));
   g_counter_runtime_ms = 0;
   g_counters_dirty = false;
@@ -3074,11 +3135,6 @@ void tick(const Config& config, SystemState& state) {
     }
   }
 
-  if (now - g_last_slow_ms >= kSlowSampleIntervalMs) {
-    g_last_slow_ms = now;
-    sample_slow(state, now);
-  }
-
   const bool wifi_connected = wifi::status().connected;
   if (wifi_connected != g_last_wifi_connected) {
     g_last_wifi_connected = wifi_connected;
@@ -3112,23 +3168,7 @@ void tick(const Config& config, SystemState& state) {
 }
 
 void log_event(uint8_t severity, uint16_t code, const char* detail) {
-  EventEntry entry{};
-  entry.ms = millis();
-  entry.severity = severity;
-  entry.code = code;
-  entry.latched = severity >= 3;
-  copy_str(entry.detail, sizeof(entry.detail), detail);
-
-  taskENTER_CRITICAL(&g_event_mux);
-  entry.seq = ++g_event_seq;
-  g_events[g_event_head] = entry;
-  g_event_head = (g_event_head + 1) % kEventLogSize;
-  if (g_event_count < kEventLogSize) {
-    g_event_count++;
-  }
-  taskEXIT_CRITICAL(&g_event_mux);
-
-  Serial.printf("[event] %s %u %s\n", severity_name(severity), static_cast<unsigned>(code), entry.detail);
+  logger::log_event(severity, code, detail);
 }
 
 }  // namespace web

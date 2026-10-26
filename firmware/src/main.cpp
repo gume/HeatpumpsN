@@ -58,8 +58,14 @@ void setup() {
   const hpn::BoardConfig& board = hpn::board_config();
   Config& config = config_mutable();
   config = config_defaults();
-  hpn::config_load(config);
+  const hpn::ConfigLoadResult config_result = hpn::config_load(config);
   state_init(g_state);
+  if (config_result == hpn::ConfigLoadResult::Corrupt) {
+    // The saved blob failed its CRC/layout check. Keep running on compiled
+    // defaults, but make the corruption visible to HA and the event log.
+    g_state.active_alarms |= WARN_NVS_CORRUPTED;
+    g_state.system_error_code = ERR_NVS_DATA_CORRUPTED;
+  }
 
   Serial.printf("\n\nHeatpumpsN controller\n");
   Serial.printf("target : %s / %s\n", HPN_TARGET_NAME, HPN_TARGET_FAMILY);

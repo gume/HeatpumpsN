@@ -1,5 +1,6 @@
 #include "hpn/l4_comms.h"
 
+#include "hpn/led_status.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/web_portal.h"
 #include "hpn/wifi_client.h"
@@ -19,6 +20,7 @@ void tick(const Config& config, SystemState& state) {
   wifi::tick(config);
   mqtt::tick(config, state);
   web::tick(config, state);
+  led::tick(config, state);
 }
 
 }  // namespace l4

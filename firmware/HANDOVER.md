@@ -1,328 +1,270 @@
-# Firmware session handover — mixer movement, crash visibility, logging, CPU load
+# Firmware session handover — RAM logs, MQTT streaming, CRC32, HA error sensors, LEDs
 
 **Date:** 2026-10-26
-**Base commit:** `212dd3a` ("Fix MQTT stack overflow and add anti-seize, CPU load and hardware I/O")
-**Working tree:** uncommitted changes (see §5). Nothing has been committed from this session yet.
-**Device:** remote ESP32 (`esp32dev_sim` emulation build), portal `http://localhost:9090`, Wi-Fi `Testing`, controller `192.168.2.14`.
+**Base commit:** `6ed1ff3` ("simulation")
+**Working tree:** clean; all changes are committed (see §6).
+**Device:** remote ESP32-D0WDQ6 bench board flashed with `esp32dev_sim`
+(HHN 1.0 emulation), Wi-Fi `Testing`, controller `http://192.168.2.14`,
+broker `smcl.tmit.bme.hu:31883`. The real HHN 1.0 carrier is `esp32s2`; the
+physical LED order still needs a check on that board.
 
-> **Read this first.** The board was re-flashed in this follow-up session with the
-> current tree (firmware **and** filesystem) over the `EDI` remote agent on
-> `/dev/ttyUSB0`; it boots clean and connects to Wi-Fi/MQTT. The earlier
-> intermediate CPU-load probe build is gone. The functional mixer check still has
-> to be done from a host on the controller's network.
-
----
-
-## 1. Objective of this session
-
-Fix six problems reported after the previous session:
-
-1. A crash occurred but there was no serial monitor attached, so the cause was not visible.
-2. When the mixed temperature is at setpoint, the mixer still opens.
-3. On over-temperature, while the mixer closes, the motor does stop–start–stop–start very frequently, and keeps doing it even when the position value is 0.
-4. Altogether there is an enormous amount of motor movement.
-5. Console logging seems very slow.
-6. CPU load always reads 0 %.
+> **Read this first.** This session changed the NVS layout, the logging
+> ownership and the MQTT entity set. Both `esp32s2` and `esp32dev_sim` build
+> clean, and the `esp32dev_sim` image has been flashed and verified on the bench
+> board (see §4). Upload the filesystem before the application because
+> `data/js/app.js` and its `.gz` sibling changed.
 
 ---
 
-## 2. Root causes and fixes
+## 1. Objective
 
-### 2.1 Mixer opens while at setpoint (issue 2)
-
-`l2::service_mixer_control()` (in `firmware/src/l2_control.cpp`) computed an
-**absolute** target position from the feedforward model:
-
-```
-target = pos_ff + kp * error + integrator
-```
-
-At setpoint `error ≈ 0`, so `target ≈ pos_ff`. Because the model is imperfect,
-`pos_ff` generally differs from the current valve position, so the loop
-commanded a move to an unrelated absolute position every control tick. That is
-the "it still opens when at setpoint" behaviour.
-
-**Fix:** when the predicted error is inside `deadband_temp`, **hold the current
-position** (`mix_target_pos = pos_est_dr`) instead of seeking `pos_ff`. The
-feedforward is now only used when the error is meaningful. Also clamp the target
-change per control tick to `max_step = 0.10` (10 %) so a large feedforward
-correction cannot produce a long motor burst.
-
-The hold is skipped during the warm-up flush (`flush_active`), because then the
-position must still be clamped to `config.flush_max_pos`.
-
-### 2.2 Over-temperature close stop/starts, and keeps going at 0 (issue 3)
-
-Two defects in `l1::tick()` / `l1::service_mixer()` (`firmware/src/l1_safety.cpp`):
-
-* The force-close path re-issued a `max_pulse_ms` (1000 ms) pulse on **every**
-  L1 tick. At the closed soft limit the pulse immediately clamped to 0 and
-  stopped, then restarted on the next tick → ~1 Hz stop/start.
-* Any move longer than one second was chopped into 1 s bursts separated by
-  `pulse_cooldown_ms`, so closing from mid-travel produced dozens of
-  stop/starts.
-
-**Fixes:**
-
-* `service_mixer()` now refuses to start a pulse that would immediately hit a
-  soft limit:
-  `dir < 0 && pos_est_dr <= 0` or `dir > 0 && pos_est_dr >= 1` returns without
-  starting. This stops the "restart at 0" loop.
-* The force-close path now drives **one continuous move** toward the closed end
-  stop (`ms = travel_time_ms`), and `service_mixer()`'s soft limit stops the
-  motor when `pos_est_dr` reaches 0. The worst-case drive time is bounded by
-  `travel_time_ms`.
-* An in-flight **opening** pulse is aborted immediately when force-close
-  engages, so an over-temperature fault never finishes an open move.
-
-Note: continuous close does not increase total motor-on time versus the old
-pulsing scheme — `service_mixer()` integrates `pos_est_dr` and stops at the soft
-limit, so both schemes drive for roughly `pos_est_dr * travel_time_ms`. It only
-removes the stop/start transients.
-
-### 2.3 Mixer redesigned as a pure target-position servo (issue 4, follow-up)
-
-The first fix still kept the L2→L1 pulse-request plumbing (`mix_pulse_ms_req`,
-`max_pulse_ms`, `pulse_cooldown_ms`). Per the follow-up review the mixer is now a
-**pure target-position servo**: every layer only sets `mix_target_pos`, and L1 is
-the single place that energizes the motor.
-
-* **No pulses, no max length, no cooldown.** `min_pulse_ms`, `max_pulse_ms` and
-  `pulse_cooldown_ms` are removed from the configuration (web UI, config JSON and
-  validation). The `Config` struct keeps them as *reserved* fields purely so
-  saved-NVS blobs keep their binary layout (see `config.h`); nothing reads them.
-* **`l1::service_mixer()`** (firmware/src/l1_safety.cpp) drives continuously until
-  the dead-reckoned position reaches the target, a soft end stop (0 %/100 %) or
-  the free-run deadline. State is now `mix_motion` + `mix_dir` instead of
-  `mix_pulse_*`.
-* **Immediate reversal with a tiny physical delay.** When the target jumps to the
-  other side of the current position (e.g. opening toward 40 %, target suddenly
-  20 %), L1 stops, waits `kMixerDirSwitchMs` (50 ms) for the relay contacts to
-  drop, switches direction and starts again. There is no cooldown anywhere.
-* **Manual nudges are targets.** `/api/test` mixer `open`/`close` steps the target
-  by **±2 %** (no pulse length); `stop` freezes the target at the current
-  position and interrupts a move in progress.
-* **Emergency is not a special movement.** Over-temperature / sensor-fault /
-  welded-relay handling simply latches `mix_emergency`, sets the target to the
-  safe position (0 %) and **locks every other writer out** while held: L2's
-  closed loop returns early and the web test commands answer 409. The move itself
-  is the ordinary servo stroke to 0 %.
-* **Free-run (homing/sweep)** became `mix_free_run_dir` + `mix_free_run_until_ms`
-  (direction + deadline) instead of a boolean plus a pulse request; L1
-  self-heals an expired or unbounded free-run request.
-* `l2::service_mixer_target()` and the pulse arbitration in `l1::tick()` are
-  deleted; `mqtt` `mixer_state`, the portal counters and `/api/sim` use
-  `mix_motion`/`mix_dir`.
-
-Total motor-on time is unchanged versus the chopped scheme; only the stop/start
-transients are gone, and direction changes now cost one 50 ms gap.
-
-### 2.3a Emulation & dashboard polish (same session)
-
-* All three emulation temperature inputs now use one scale, **15–85 °C**
-  (`emulation.js` sliders and the `/api/sim/temperature` server-side range).
-* The dashboard Mixer card shows **Target position** and the live **Command**
-  (`idle` / `opening` / `closing` / `emergency close`) next to the estimated
-  position; the Test-mode mixer card got the same rows and ±2 % nudge buttons.
-  New live-state keys: `floor.mixerMotion`, `floor.mixerDir`,
-  `floor.mixerEmergency`.
-
-### 2.4 Crash with no monitor attached (issue 1)
-
-There is no way to retrieve a past panic without a monitor attached in this
-build. What was added:
-
-* `firmware/src/main.cpp` logs `esp_reset_reason()` by name at boot.
-* `firmware/src/web_portal.cpp` adds `reset_reason_name()` and:
-  * publishes `resetReason` in `/api/status`;
-  * appends a boot event to the in-RAM event log (`code 1004`, severity `error`
-    for panic / watchdog / brownout, otherwise `info`).
-* The portal System page shows a new **Last reset** row.
-
-So after the next unexpected reboot the cause is visible in the portal without a
-serial monitor. **Not done:** no core-dump-to-flash capture and no retrieval
-tooling. If richer post-mortem is needed, enable
-`CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` (partition `coredump` already exists at
-`0x3f0000/0x10000`) and read it with `esp-coredump` / `esptool`; that needs
-sdkconfig work because the Arduino framework ships a prebuilt FreeRTOS.
-
-### 2.5 Slow console logging (issue 5)
-
-The emulation page polls `/api/sim` on a timer and every request was written to
-the in-RAM access log **and** echoed to the serial console.
-
-* `log_access_request()` now skips `/api/sim` (kept in the access log? no —
-  skipped entirely).
-* Emulation page poll interval raised 750 ms → 1500 ms
-  (`firmware/data/js/emulation.js`).
-
-The main SPA is not a significant contributor (status every 30 s, events every
-10 s, counters every 30 s, live state over the WebSocket). If the console is
-still noisy, look at `Serial.printf` inside `l1::apply_relay` (fires on every
-relay transition) — with the movement fixes there are far fewer transitions.
-
-### 2.6 CPU load always 0 % (issue 6) — **UNRESOLVED, see §6.4**
-
-The previous code computed load from FreeRTOS run-time counters
-(`uxTaskGetSystemState`, idle-task `ulRunTimeCounter`). It reads 0.00 % because
-the counters report idle ≈ total. A windowed (1 s delta) version behaves the
-same. Raw counter deltas are exported as `cpuTotalDelta` / `cpuIdleDelta` in
-`/api/status` so the next session can tell whether the counters are advancing
-and how `idle` relates to `total`.
-
-A low-priority probe-task alternative was implemented and flashed for one test:
-it reported ~75 % load on Core 1, which contradicts "always 0", but it was
-noisy and is **not** in the tree. See §6.4 for the full experiment notes.
+1. Never store log messages in the MCU flash. Keep them in RAM circular buffers,
+   with optional publishing to MQTT.
+2. Add two Home Assistant text sensors: numeric `system_error_code` (`0` = no
+   error) and the matching human-readable `system_error_text`.
+3. Remove all NVS state migration and migration preparation. Add CRC32 to the
+   NVS stores to detect corruption.
+4. Add the missing status-LED control.
 
 ---
 
-## 3. Files changed in this session
+## 2. What changed
 
-| File | Change |
+### 2.1 RAM-only logging (`hpn::logger`)
+
+`firmware/include/hpn/logger.h`, `firmware/src/logger.cpp` now own both streams:
+
+* event buffer: **96** records, detail up to 95 chars, sequence number, uptime,
+  severity, code, latched flag;
+* slow buffer: **180** samples at a **10 s** cadence (boiler/return/mix
+  temperatures, dead-reckoned position, four physical relay states).
+
+Nothing is written to flash. The web portal reads snapshots through
+`logger::events_after()` / `logger::slow_after()`; its old `EventEntry`,
+`SlowSample` and ring-buffer globals were removed. `web::log_event()` simply
+delegates to `logger::log_event()`.
+
+`T_logger` samples the slow log and emits a diagnostic event whenever
+`system_error_code` or `active_alarms` changes. `logger::begin()` is called
+**before** `l4::begin()` so web/MQTT startup events are not discarded by the
+buffer reset.
+
+Optional MQTT streaming (new config fields):
+
+* `mqtt_log_enabled` (default **false**);
+* `mqtt_log_slow_topic[96]`, `mqtt_log_event_topic[96]` — full-topic overrides;
+  empty means `<base>/log/slow` and `<base>/log/event`.
+
+Records are JSON lines (`seq`, `ts`, optional `wall`, plus the record fields)
+and are published non-retained. Per-stream cursors advance only after a
+successful publish, so a broker outage does not block logging and the retained
+RAM backlog is sent after reconnection. Enabling the feature starts at the
+current cursor, so it streams new records rather than an old backlog.
+
+### 2.2 Home Assistant error sensors
+
+`publish_error_sensors()` adds two diagnostic entities:
+
+* `sensor.system_error_code` → `<base>/state/system_error_code`;
+* `sensor.system_error_text` → `<base>/state/system_error_text`.
+
+`format_error_text()` (in `state.cpp`) returns `No error` for code `0` with no
+flags, otherwise the code name, relevant state detail and active warning/alarm
+names. Both entities are published only when the code or alarm mask changes;
+ordinary relay, pump, mixer and setpoint changes do not touch them. The same
+text is exposed in the portal's live JSON (`safety.errorText`,
+`system.errorText`) and displayed on the dashboard.
+
+### 2.3 CRC32 NVS stores, no migration
+
+`firmware/include/hpn/crc32.h` adds a portable IEEE CRC32. `config_store.*`
+now stores one blob with `{magic, version, size, crc}` and version **1**. All
+v1–v4 migration code and the append-only layout assumptions are gone.
+
+Load result is one of `Loaded`, `Missing`, `Stale`, `Corrupt`:
+
+* **Stale** — old-format blob. Discarded silently and compiled defaults used;
+  no alarm because this is not data corruption.
+* **Corrupt** — current-format blob fails the size/CRC check. Compiled defaults
+  are used and `main.cpp` latches `WARN_NVS_CORRUPTED` +
+  `ERR_NVS_DATA_CORRUPTED` (code `501`).
+
+The relay counters (`hpnctr`, now version **2**) and the anti-seize schedule
+(`hpnanti`, now a `{magic, next_day, crc}` blob) use the same pattern. Legacy
+counter/anti-seize formats are discarded silently; current-format CRC failures
+latch the same warning/error.
+
+### 2.4 Status LEDs
+
+New `firmware/include/hpn/led_status.h` + `firmware/src/led_status.cpp`, called
+from `l4::tick()` after MQTT/web. L0 still owns the NeoPixel write. The animator
+uses the plan 02 §1.2 mapping:
+
+| LED | Meaning |
 | --- | --- |
-| `firmware/src/l2_control.cpp` | Hold-at-setpoint when `|error| <= deadband_temp` (skipped during flush); `max_step = 0.10` per-tick target clamp; `integrator_val` published before the early return. `service_mixer_target()` now issues **one continuous stroke** toward the target (`mix_pulse_ms_req = travel_time_ms`) instead of `max_pulse_ms` bursts, with the cooldown armed on the pulse falling edge. |
-| `firmware/src/l1_safety.cpp` | `service_mixer()` soft-limit pre-check; **stops on arrival at `mix_target_pos`** and refuses to start a move already at/past the target; force-close drives one continuous move (`travel_time_ms`) and aborts an in-flight opening pulse; opening is also aborted when `allow_mixer_open` drops (high-temp / gradient / boiler fault). |
-| `firmware/src/main.cpp` | `#include <esp_system.h>`; `reset_reason_name()`; boot log line `[boot] reset reason: ...`. |
-| `firmware/src/web_portal.cpp` | `#include <esp_system.h>`; `reset_reason_name()`; `resetReason`, `cpuTotalDelta`, `cpuIdleDelta` in `/api/status` (+ raw deltas); boot event with reset reason; skip `/api/sim` in the access log; windowed CPU-load sampler restored; CPU globals initialised in `begin()`. |
-| `firmware/data/js/app.js` | CPU load shown with 2 decimals; new **Last reset** row on the System page. |
-| `firmware/data/js/emulation.js` | Poll interval 750 ms → 1500 ms. |
-| `firmware/data/js/app.js.gz`, `firmware/data/js/emulation.js.gz` | Regenerated. |
+| 0 | green online; yellow breathing when Wi-Fi/MQTT is down; red blink on critical alarm |
+| 1 | orange heater on; cyan DHW priority; purple blink anti-short-cycle hold-off |
+| 2 | green floor pump running; cyan breathing flush; magenta ΔT collapse; red rapid blink hard over-temp |
+| 3–4 | orange radiator pump running; red welded-relay or dry-run fault |
 
-No changes to `state.h`, `config.h`, NVS schema, tasks or partitions in this
-session. The probe-task edits to `tasks.cpp` / `tasks.h` were fully reverted.
+The frame is rebuilt at most every 50 ms and only written when it changes.
+Unassigned LED GPIO remains a no-op.
 
----
+### 2.5 UI and docs
 
-## 4. Verification performed this session
-
-* Both environments build clean: `pio run -e esp32dev_sim` and
-  `pio run -e esp32dev` (app flash ≈ 76 % of 1.6 MiB).
-* `node --check` passes for `app.js` and `emulation.js`; `.gz` siblings
-  regenerated before the filesystem upload.
-* **Mixer hold:** with boiler 65 / return 25 / mix 35 (setpoint 35) and floor +
-  heater intent, after the flush the mixer reported `pos 0, target 0` over
-  several samples — no movement at setpoint.
-* **Over-temperature close:** raising mix to 55 left `motion False`, `dir 0`,
-  `est 0` over repeated samples — no stop/start loop at the end stop.
-* **Reset visibility:** after the flash the portal `/api/status` returned
-  `resetReason: "power-on"` and the boot event appeared in the event log.
-* **CPU probe experiment (since reverted):** the probe task version reported
-  `cpu ≈ 75 %` with occasional `≈ 0.9 %` readings, `taskCount 17`. This was too
-  noisy to ship.
-* **Servo redesign (this follow-up):** both environments build clean again after
-  the redesign; `node --check` passes for `app.js` and `emulation.js`. The
-  earlier continuous-stroke intermediate build was flashed to the remote ESP32
-  (`/dev/ttyUSB0` on agent `EDI`) and booted clean (Wi-Fi + MQTT connected).
-  **The servo redesign still needs a flash + bench check:** drive a target (e.g.
-  45 %) and expect one continuous motor-on period, an immediate stop→reverse
-  when the target crosses the current position, and `mixer_state` showing
-  `opening`/`closing` for the whole stroke.
-* **Not verified:** MQTT (user tested independently; connection was failing
-  during the session), real hardware, and the final-tree device build.
+* Network settings page adds the log enable checkbox and both topic overrides.
+* Dashboard LEDs now mirror the physical animator, and the Safety card shows
+  `Error text`.
+* `app.js.gz` regenerated.
+* Updated `firmware/README.md`, `firmware/docs/hhn-1.0.md`,
+  `plans/controller node/01`, `02`, `06`, `web_interface.md` and
+  `plans/mqtt_messaging_plan.md` to match the implementation.
 
 ---
 
-## 5. Exact working-tree state
+## 3. Design decisions / caveats
 
-Uncommitted (no commit made this session):
-
-```
- M firmware/data/js/app.js
- M firmware/data/js/app.js.gz
- M firmware/data/js/emulation.js
- M firmware/data/js/emulation.js.gz
- M firmware/src/l1_safety.cpp
- M firmware/src/l2_control.cpp
- M firmware/src/main.cpp
- M firmware/src/web_portal.cpp
-```
-
-**Decision needed at the start of the next session:** commit these fixes
-(they are self-contained and build clean) before doing more work.
+* Logs are lost on reboot by design. There is no flash archive and no NVS ring.
+* The error text sensor reflects **diagnostic posture**, not every actuator
+  transition. A warning/alarm mask change or error-code change updates it.
+* Old-format NVS blobs are discarded without an alarm. If the user sees code
+  `501`, the data really failed its current-format CRC/size check.
+* The `501` / `WARN_NVS_CORRUPTED` latch lasts for the current boot. A
+  successful config save rewrites the blob but deliberately does **not** clear
+  the live flag, because the counters or anti-seize blob may still be damaged.
+  The next boot clears it once every persisted blob validates.
+* MQTT log streaming is opt-in to avoid unexpected broker traffic. The web
+  portal always has the RAM buffers.
+* Counter/anti-seize writes keep their previous hourly/5-minute deferred
+  schedules; only the blob format gained a CRC.
+* `resolve_log_topic()` no longer takes an unused `Config` argument.
+* The MQTT log payload buffer is 768 bytes. A record that cannot fit advances
+  the cursor instead of stalling the stream forever.
 
 ---
 
-## 6. Open items / next steps
+## 4. Verification performed
 
-### 6.1 Re-flash the final build — **DONE (this follow-up)**
-Firmware + filesystem were flashed to the remote ESP32 over agent `EDI`. The
-auto-detected port (`/dev/ttyS0`) is wrong/busy; the CP2102 device is on
-`/dev/ttyUSB0`, so the port must be specified explicitly:
+* `pio remote run -e esp32s2` → **SUCCESS**, RAM 28.9 % (94 540 B), flash 75.3 %
+  (1 234 327 B of 1 638 400 B).
+* `pio remote run -e esp32dev_sim` → **SUCCESS**, RAM 25.1 % (82 204 B), flash
+  76.5 % (1 253 676 B).
+* No compiler warnings in either environment.
+* `node --check firmware/data/js/app.js` passes; gzip regenerated.
+* Flashed `esp32dev_sim` and verified on the bench ESP32-D0WDQ6:
+  * boot: saved config loaded, no Preferences errors, no NVS `501`, the legacy
+    anti-seize scalar discarded, MQTT connected and HA discovery published;
+  * `python3 tests/runtime_check.py --serial` → **PASSED: 52 passed, 0 failed,
+    0 skipped**; without `--serial` → **45/45**;
+  * MQTT log streaming verified on the default and override topics;
+  * HA `system_error_code` / `system_error_text` verified `0 → 202 → 0` and
+    `0 → 201 → 0`, including warning text without a double space;
+  * all five LED states verified through the emulation model, including the red
+    critical blink and the purple anti-short-cycle blink.
+* Fixed during verification: a partial 8-byte `Preferences::getBytes()` read
+  misclassified the 1112-byte legacy config blob as corrupt (false `501`); the
+  legacy anti-seize `UInt` key made `getBytesLength()` log an error. Config and
+  counter loads now read the whole blob, and the anti-seize loader checks the
+  stored type and removes legacy scalars before writing a blob.
+
+---
+
+## 5. How to flash and check
+
+From `firmware/` (add `--upload-port /dev/ttyUSB0` if auto-detection picks the
+wrong port). The attached bench board is a plain ESP32, so use
+`esp32dev_sim`; `esp32s2` fails with `This chip is ESP32, not ESP32-S2`.
 
 ```bash
-cd firmware
-cd data && for f in index.html emulation.html favicon.svg css/style.css js/app.js js/emulation.js; do gzip -9 -c "$f" > "$f.gz"; done && cd ..
-pio remote run --force-remote -d . --target uploadfs --upload-port /dev/ttyUSB0
-pio remote run --force-remote -d . --target upload --upload-port /dev/ttyUSB0
-timeout 12s script -qec "pio remote device monitor -b 115200 --port /dev/ttyUSB0" /dev/null || true
+pio remote run --force-remote -d . -e esp32dev_sim --target uploadfs
+pio remote run --force-remote -d . -e esp32dev_sim --target upload
+python3 ../tests/runtime_check.py --base-url http://192.168.2.14 --serial
 ```
 
-`pio remote device monitor` refuses to run without a TTY, so wrap it in
-`script -qec` (still under `timeout`).
+`tests/flash_and_check.sh --serial` (from the repository root) does the build,
+flash and checks in one step.
 
-### 6.2 CPU load (issue 6) — diagnose with the raw deltas
-After re-flashing, read `/api/status` and compare `cpuTotalDelta`,
-`cpuIdleDelta`, and `cpuLoad`.
+After boot, check:
 
-* If `cpuTotalDelta == 0`, the run-time counters are not advancing:
-  `configGENERATE_RUN_TIME_STATS` / trace facility are effectively off in the
-  prebuilt FreeRTOS. Options: (a) show `n/a` instead of a misleading `0.00 %`;
-  (b) enable run-time stats in sdkconfig (needs framework/sdkconfig work);
-  (c) measure per-core idle differently.
-* If `cpuIdleDelta ≈ cpuTotalDelta` always, the counter only reflects idle /
-  one core. Note `uxTaskGetSystemState` **is** linked, so the trace facility is
-  compiled in — verify the counter unit (ESP-IDF uses `esp_timer_get_time()`,
-  microseconds) and whether dual-core totals are being attributed correctly.
-* The probe-task experiment (§4) suggested Core 1 genuinely may be busy
-  (~75 %), which would be a real find worth investigating (look at `T_io` /
-  `l0::tick` duration). The probe approach itself was noisy under
-  `taskYIELD()`-based scheduling and was reverted; if revisited, prefer a
-  monotonic idle counter instead of a yield loop.
+1. `[config] loaded saved configuration from NVS` or
+   `format differs ... using compiled defaults` (no `CRC/format check failed`
+   on a normal first boot after the format change).
+2. Portal → Dashboard shows `Error text: No error` and the five LEDs match the
+   table above.
+3. Settings → Network & MQTT: enable log streaming; watch `<base>/log/event`
+   and `<base>/log/slow` for JSON lines.
+4. HA discovers `System error code` and `System error text`; force a warning
+   (for example a sensor fault on the bench) and confirm both update.
+5. `/api/log/events` and `/api/log/slow` still return records from RAM.
 
-### 6.3 Normal-move granularity
-If the user still sees too many stop/starts during ordinary (non-emergency)
-moves, address the `max_pulse_ms` granularity discussion in §2.3.
-
-### 6.4 Remove the temporary CPU debug fields
-`cpuTotalDelta` / `cpuIdleDelta` are diagnostic only. Once the load is trusted,
-remove them or move them behind a debug flag.
-
-### 6.5 MQTT
-The broker link was failing during this session (Pinggy tunnel likely expired
-again). The user is testing this independently. Broker host used last time:
-`xhryj-152-66-244-175.run.pinggy-free.link:33065`; the tunnel URL changes when
-it expires. The stack-overflow fix from `212dd3a` (4096-byte static payload
-buffer, static parser scratch buffers, `t_comms` stack 8192) is in place.
-
-### 6.6 Previously known, still open (from the prior handover)
-* Hardware-only validation: Dallas temperature reads, AC current calibration,
-  relay polarity (needs the physical HHN 1.0 board).
-* Observer/L3 parameter push, real encoder/endstop, logger persistence, and the
-  heater+pump Test Mode sequence (still returns 501).
-* Confirm the user's retained HA discovery configs for `mixermeter` and
-  `ems-esp` are intact (test retained topics published earlier were cleared).
+Always bound the serial monitor with `timeout`; never run an unbounded
+`pio remote device monitor`. The automated suite performs checks 1–5 and the
+bounded boot capture; use it instead of repeating them by hand.
 
 ---
 
-## 7. Quick reference
+## 6. Working-tree state
 
-* Build/flash:
-  * `pio run -e esp32dev_sim` (default env, emulated HHN 1.0 — what the board runs)
-  * `pio run -e esp32dev` (boardless hardware profile)
-  * `pio remote run --force-remote -d . --target uploadfs`
-  * `pio remote run --force-remote -d . --target upload`
-* Monitor (always bound it):
-  `timeout 15s script -qec 'pio remote device monitor -b 115200' /dev/null`
-* Regenerate tracked gzips before `uploadfs` (see §6.1).
-* Device: `192.168.2.14`, tunnel `http://localhost:9090`, Wi-Fi `Testing` /
-  `testing123`, firmware string `0.2.0-web`.
-* Partitions: nvs `0x9000/0x5000`, otadata `0xe000/0x2000`,
-  app0 `0x10000/0x190000`, app1 `0x1a0000/0x190000`, spiffs `0x330000/0xc0000`,
-  coredump `0x3f0000/0x10000`. Keep `firmware/partitions.csv` and
-  `firmware/src/partitions.csv` identical.
-* Saved mixer config at last check: `mixer_wiring=0`, `travel_time_ms=145000`,
-  `mix_ff_offset=6.75`, `demand_timeout_s=600`, `grad_limit=0.3`,
-  `summer_mode=false`, `anti_seize_interval_s=2592000`.
-* Key tunables for this work: `deadband_temp` (2.0 K hold band),
-  `deadband_pos` (0.02), `max_pulse_ms` (1000), `pulse_cooldown_ms` (200),
-  `travel_time_ms` (145000), `recalc_threshold` (0.12).
+Modified:
+
+```
+firmware/README.md
+firmware/data/js/app.js
+firmware/data/js/app.js.gz
+firmware/docs/hhn-1.0.md
+firmware/include/hpn/config.h
+firmware/include/hpn/config_store.h
+firmware/include/hpn/logger.h
+firmware/include/hpn/state.h
+firmware/src/config.cpp
+firmware/src/config_store.cpp
+firmware/src/l4_comms.cpp
+firmware/src/logger.cpp
+firmware/src/main.cpp
+firmware/src/mqtt_client.cpp
+firmware/src/state.cpp
+firmware/src/tasks.cpp
+firmware/src/web_portal.cpp
+plans/controller node/01_config_and_contracts.md
+plans/controller node/02_hardware_and_l0.md
+plans/controller node/06_interfaces_and_logging.md
+plans/controller node/web_interface.md
+plans/mqtt_messaging_plan.md
+```
+
+New:
+
+```
+firmware/include/hpn/crc32.h
+firmware/include/hpn/led_status.h
+firmware/src/led_status.cpp
+tests/README.md
+tests/flash_and_check.sh
+tests/runtime_check.py
+```
+
+Untracked and unrelated to this work: `reviews/` and the recent
+`simulation/sim_run_hil_*.csv/png` files.
+
+---
+
+## 7. Open items
+
+1. ~~Flash and run the checks in §5~~ — done on 2026-10-26 with
+   `esp32dev_sim`; see §4.
+2. ~~Confirm the HA error sensors appear with the expected names and update
+   only on posture changes~~ — done; both entities update on code/alarm-mask
+   changes, never on relay transitions.
+3. Verify the physical LED order on a real HHN 1.0 board (the new mapping
+   differs from the legacy ESPHome firmware). The bench run used the emulated
+   carrier, so only the logical mapping is proven.
+4. Decide whether the event log should also capture every `*_intended` vs
+   `*_phys` divergence transition with more context; today the logger emits
+   diagnostic-posture transitions and the existing lifecycle/sequence events
+   from the portal/MQTT.
+5. Consider a future explicit flash archive if logs must survive reboot; this
+   was deliberately not implemented.
+6. Resolved this session: a successful config save does not clear the NVS
+   corruption latch early; the flag is held until the next valid boot so
+   counter/anti-seize damage is not masked. Revisit only if a manual
+   acknowledge/clear action is added to the portal.

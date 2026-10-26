@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // Shared runtime contract.
@@ -119,3 +120,11 @@ struct SystemState {
 
 // Boot-safe zero state: everything off, no valid sensors, no alarms.
 void state_init(SystemState& state);
+
+// Human-readable names for the standardized error code, one alarm bit and the
+// current diagnostic posture. format_error_text() returns "No error" when the
+// code is ERR_OK and no warning/alarm flags are set; otherwise it combines the
+// code name with active flags and any state detail worth including.
+const char* error_code_name(uint16_t code);
+const char* alarm_name(uint32_t bit);
+void format_error_text(const SystemState& state, char* out, size_t out_size);

@@ -96,6 +96,8 @@ Discovery topics follow the format: `homeassistant/<component>/<node_id>/<object
 | `sensor` | `temp_return` | Floor return temperature | `<base>/state/temp_return` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `sensor` | `temp_mix` | Mixer forward temperature | `<base>/state/temp_mix` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `number` | `floor_setpoint` | Floor setpoint | `<base>/state/floor_setpoint` | `<base>/cmd/floor_setpoint`| Range: 5.0–80.0 °C, step: 0.5 °C, mode: `box`, unit: `°C`. |
+| `sensor` | `system_error_code` | System error code | `<base>/state/system_error_code` | — | Diagnostic text sensor. Numeric standardized code; `0` means no error. Published only when the diagnostic posture changes. |
+| `sensor` | `system_error_text` | System error text | `<base>/state/system_error_text` | — | Diagnostic text sensor. Human-readable code name plus active warning/alarm flags; `No error` when healthy. |
 
 ---
 
@@ -207,7 +209,16 @@ To handle boiler Domestic Hot Water time-sharing without tripping false stagnati
   {"uptime": 14205, "ip": "192.168.2.14"}
   ```
 
-### 6.2 Planned Future Evolution
+### 6.2 Telemetry Log Streaming (Implemented)
+
+Event and slow logs are kept only in **RAM circular buffers** and are never written to flash. When `mqtt_log_enabled` is set, new records are published as JSON lines:
+
+* `<base>/log/slow` — periodic telemetry samples (default every 10 s); override the full topic with `mqtt_log_slow_topic`.
+* `<base>/log/event` — event records; override the full topic with `mqtt_log_event_topic`.
+
+Each stream carries a `seq` field and an uptime timestamp (`ts`); a wall-clock field (`wall`) is added when NTP is synchronized. Non-retained publishes keep the broker history clean. If the broker is unavailable, logging continues in RAM and the retained backlog is sent after reconnection. With streaming disabled, the same buffers remain available through the web portal (`/api/log/events`, `/api/log/slow`).
+
+### 6.3 Planned Future Evolution
 
 The following topics are reserved for implementation in Phase 2 and Phase 3:
 
@@ -215,9 +226,6 @@ The following topics are reserved for implementation in Phase 2 and Phase 3:
    * *Target Topic:* `<base>/cmd/mode`
    * *Payloads:* `"heat"`, `"summer"`
    * *Behavior:* Toggles `config.summer_mode` directly from Home Assistant.
-2. **Continuous Telemetry Streaming:**
-   * *Target Topic:* `<base>/log/slow` (Periodic 15 s CSV snapshot of all plant variables).
-   * *Target Topic:* `<base>/log/event` (Immediate JSON notification of safety trips and mode changes).
-3. **Observer Layer 3 Tuning Ingestion:**
+2. **Observer Layer 3 Tuning Ingestion:**
    * *Target Topic:* `<base>/config/tuning/set`
    * *Payload:* JSON object containing validated loop coefficients (`delay_s`, `gain`, `kp`, `ki`, `ff_boiler`, `ff_return`, etc.).

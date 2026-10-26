@@ -10,6 +10,7 @@
 
 #include "hpn/board.h"
 #include "hpn/build_target.h"
+#include "hpn/logger.h"
 #include "hpn/web_portal.h"
 #include "hpn/wifi_client.h"
 
@@ -49,6 +50,8 @@ char g_client_id[32] = "hpn-000000000000";
 uint32_t g_last_connect_attempt_ms = 0;
 uint32_t g_last_publish_ms = 0;
 uint32_t g_last_error_log_ms = 0;
+uint32_t g_log_event_cursor = 0;
+uint32_t g_log_slow_cursor = 0;
 volatile bool g_test_requested = false;
 
 struct StateCache {
@@ -93,6 +96,12 @@ struct StateCache {
 
   bool have_setpoint = false;
   float setpoint = 0.0f;
+
+  bool have_error_status = false;
+  uint16_t error_code = 0;
+  uint32_t error_alarms = 0;
+  char error_code_text[8] = {};
+  char error_text[160] = {};
 };
 
 StateCache g_cache{};
@@ -180,15 +189,17 @@ void publish_float(const char* suffix, float value, bool& have, float& last) {
   }
 }
 
-void publish_text(const char* suffix, const char* payload, char* last, size_t last_size) {
+bool publish_text(const char* suffix, const char* payload, char* last, size_t last_size) {
   if (last[0] != '\0' && strcmp(last, payload) == 0) {
-    return;
+    return true;
   }
   char topic[96];
   make_topic(topic, sizeof(topic), suffix);
   if (g_client.publish(topic, payload, true)) {
     copy_string(last, last_size, payload);
+    return true;
   }
+  return false;
 }
 
 void format_temperature(const SensorReading& reading, char* out, size_t out_size) {
@@ -196,6 +207,32 @@ void format_temperature(const SensorReading& reading, char* out, size_t out_size
     snprintf(out, out_size, "%.2f", reading.value_c);
   } else {
     copy_string(out, out_size, "unknown");
+  }
+}
+
+// Publish the numeric error code and its text only when the diagnostic posture
+// changes. Relay and pump transitions do not touch these entities; warnings,
+// alarms and error codes do.
+void publish_error_status(const SystemState& st) {
+  if (g_cache.have_error_status && g_cache.error_code == st.system_error_code &&
+      g_cache.error_alarms == st.active_alarms) {
+    return;
+  }
+
+  char code_payload[8];
+  snprintf(code_payload, sizeof(code_payload), "%u", static_cast<unsigned>(st.system_error_code));
+  char text_payload[160];
+  format_error_text(st, text_payload, sizeof(text_payload));
+
+  const bool code_ok = publish_text("state/system_error_code", code_payload,
+                                    g_cache.error_code_text,
+                                    sizeof(g_cache.error_code_text));
+  const bool text_ok = publish_text("state/system_error_text", text_payload,
+                                    g_cache.error_text, sizeof(g_cache.error_text));
+  if (code_ok && text_ok) {
+    g_cache.have_error_status = true;
+    g_cache.error_code = st.system_error_code;
+    g_cache.error_alarms = st.active_alarms;
   }
 }
 
@@ -266,6 +303,8 @@ void publish_states() {
 
   publish_float("state/floor_setpoint", g_config->floor_setpoint_shadow,
                 g_cache.have_setpoint, g_cache.setpoint);
+
+  publish_error_status(st);
 }
 
 void publish_config(const char* component, const char* object_id,
@@ -394,6 +433,27 @@ void publish_setpoint_number() {
   publish_config("number", "floor_setpoint", doc);
 }
 
+void publish_error_sensors() {
+  {
+    JsonDocument doc;
+    JsonObject entity = doc.to<JsonObject>();
+    add_entity(entity, "System error code", "system_error_code");
+    entity["state_topic"] = String(g_base_topic) + "/state/system_error_code";
+    entity["icon"] = "mdi:alert-circle-outline";
+    entity["entity_category"] = "diagnostic";
+    publish_config("sensor", "system_error_code", doc);
+  }
+  {
+    JsonDocument doc;
+    JsonObject entity = doc.to<JsonObject>();
+    add_entity(entity, "System error text", "system_error_text");
+    entity["state_topic"] = String(g_base_topic) + "/state/system_error_text";
+    entity["icon"] = "mdi:message-alert-outline";
+    entity["entity_category"] = "diagnostic";
+    publish_config("sensor", "system_error_text", doc);
+  }
+}
+
 void publish_discovery() {
   publish_switch("heater", "Heater", "state/heater", "cmd/heater", "mdi:fire");
   publish_switch("pump_floor", "Pump floor", "state/pump_floor", "cmd/pump_floor",
@@ -431,6 +491,7 @@ void publish_discovery() {
                              "state/temp_mix");
 
   publish_setpoint_number();
+  publish_error_sensors();
 
   web::log_event(0, 1806, "MQTT Home Assistant discovery published");
 }
@@ -448,6 +509,103 @@ void publish_test() {
   const bool ok = g_client.publish(topic, payload, false);
   web::log_event(0, 1805, ok ? "MQTT test message published"
                               : "MQTT test message publish failed");
+}
+
+void resolve_log_topic(const char* override_topic, const char* suffix, char* out,
+                       size_t out_size) {
+  if (override_topic != nullptr && override_topic[0] != '\0') {
+    copy_string(out, out_size, override_topic);
+  } else {
+    make_topic(out, out_size, suffix);
+  }
+}
+
+// Streams new RAM log records to MQTT. The ring buffers remain the owner; this
+// only advances a per-stream cursor so a broker outage never blocks a task.
+void publish_logs(const Config& config) {
+  if (!config.mqtt_log_enabled) {
+    g_log_event_cursor = logger::event_seq();
+    g_log_slow_cursor = logger::slow_seq();
+    return;
+  }
+  if (g_state == nullptr || !g_client.connected()) {
+    return;
+  }
+
+  char topic[128];
+  char payload[768];
+
+  logger::Event events[8];
+  for (;;) {
+    const size_t count = logger::events_after(g_log_event_cursor, events, 8);
+    for (size_t i = 0; i < count; ++i) {
+      JsonDocument doc;
+      doc["seq"] = events[i].seq;
+      doc["ts"] = events[i].ms;
+      if (g_state->wall_time_epoch_s > 1600000000ULL) {
+        doc["wall"] = static_cast<uint32_t>(g_state->wall_time_epoch_s);
+      }
+      doc["severity"] = logger::severity_name(events[i].severity);
+      doc["code"] = events[i].code;
+      doc["detail"] = events[i].detail;
+      doc["latched"] = events[i].latched;
+
+      const size_t len = serializeJson(doc, payload, sizeof(payload));
+      resolve_log_topic(config.mqtt_log_event_topic, "log/event", topic,
+                        sizeof(topic));
+      if (len == 0) {
+        // A record that cannot fit must not stall the stream forever.
+        g_log_event_cursor = events[i].seq;
+        continue;
+      }
+      if (!g_client.publish(topic, payload, false)) {
+        return;
+      }
+      g_log_event_cursor = events[i].seq;
+    }
+    if (count < 8) {
+      break;
+    }
+  }
+
+  logger::SlowSample samples[8];
+  for (;;) {
+    const size_t count = logger::slow_after(g_log_slow_cursor, samples, 8);
+    for (size_t i = 0; i < count; ++i) {
+      JsonDocument doc;
+      doc["seq"] = samples[i].seq;
+      doc["ts"] = samples[i].ms;
+      if (g_state->wall_time_epoch_s > 1600000000ULL) {
+        doc["wall"] = static_cast<uint32_t>(g_state->wall_time_epoch_s);
+      }
+      if (isfinite(samples[i].boiler)) doc["boiler"] = samples[i].boiler;
+      else doc["boiler"] = nullptr;
+      if (isfinite(samples[i].mix)) doc["mix"] = samples[i].mix;
+      else doc["mix"] = nullptr;
+      if (isfinite(samples[i].ret)) doc["ret"] = samples[i].ret;
+      else doc["ret"] = nullptr;
+      doc["pos"] = samples[i].pos;
+      JsonArray relays = doc["relays"].to<JsonArray>();
+      for (uint8_t r = 0; r < 4; ++r) {
+        relays.add(samples[i].relays[r]);
+      }
+
+      const size_t len = serializeJson(doc, payload, sizeof(payload));
+      resolve_log_topic(config.mqtt_log_slow_topic, "log/slow", topic,
+                        sizeof(topic));
+      if (len == 0) {
+        g_log_slow_cursor = samples[i].seq;
+        continue;
+      }
+      if (!g_client.publish(topic, payload, false)) {
+        return;
+      }
+      g_log_slow_cursor = samples[i].seq;
+    }
+    if (count < 8) {
+      break;
+    }
+  }
 }
 
 bool parse_on_off(const char* value, bool& out) {
@@ -837,6 +995,8 @@ void attempt_connect() {
   g_status.last_connect_ms = millis();
   g_status.last_error_code = 0;
   set_state("connected");
+  // Keep the log cursors where they are so records produced while the broker
+  // was down are published from the RAM ring buffer after reconnection.
   Serial.printf("[mqtt] connected to %s:%u\n", g_config->mqtt_host,
                 static_cast<unsigned>(g_config->mqtt_port));
   web::log_event(0, 1800, "MQTT connected");
@@ -921,6 +1081,8 @@ void begin(const Config& config, SystemState& state) {
   g_last_connect_attempt_ms = 0;
   g_last_publish_ms = 0;
   g_last_error_log_ms = 0;
+  g_log_event_cursor = logger::event_seq();
+  g_log_slow_cursor = logger::slow_seq();
   g_test_requested = false;
   g_meter_signature[0] = '\0';
   g_mixer_config_topic[0] = '\0';
@@ -993,6 +1155,8 @@ void tick(const Config& config, SystemState& state) {
     g_test_requested = false;
     publish_test();
   }
+
+  publish_logs(config);
 }
 
 const Status& status() { return g_status; }

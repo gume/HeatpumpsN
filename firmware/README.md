@@ -56,7 +56,7 @@ The emulation model, its API and the bench web page are described in
 | `T_io` | 20 ms | high | Core 1 | L0 hardware access, watchdog feeder |
 | `T_control` | `config.tick_ms` (default 2000 ms) | medium | Core 1 | L2 control and coordination |
 | `T_comms` | 50 ms | low | Core 0 | L4 MQTT / HTTP / commands |
-| `T_logger` | 1000 ms | lowest | Core 0 | Logger task (portal owns event/slow logs) |
+| `T_logger` | 1000 ms | lowest | Core 0 | RAM event/slow circular buffers and diagnostic events |
 
 Notes:
 
@@ -139,6 +139,8 @@ derived from the Wi-Fi MAC address.
 | `sensor` | Floor return temperature | `state/temp_return` | — |
 | `sensor` | Mixer forward temperature | `state/temp_mix` | — |
 | `number` | Floor setpoint | `state/floor_setpoint` | `cmd/floor_setpoint` |
+| `sensor` | System error code (`0` = no error) | `state/system_error_code` | — |
+| `sensor` | System error text | `state/system_error_text` | — |
 
 The explicit request named “5 binary sensors” but listed heater virtual,
 heater physical, pump 1 physical, pump 2 physical, and pump floor virtual and
@@ -160,12 +162,35 @@ counts and error count through `/api/status` and the live WebSocket snapshot.
 `POST /api/mqtt/test` queues a non-retained test publication; it returns `202`
 when the broker is not connected yet and `409` when no broker host is set.
 
+The two diagnostic sensors are published only when `system_error_code` or
+`active_alarms` changes. `system_error_code` carries the standardized numeric
+code (`0` when there is no error) and `system_error_text` carries the readable
+message plus active warning/alarm flags (`No error` when healthy). Ordinary
+relay, pump, mixer and setpoint transitions do not update them.
+
+### Telemetry log streaming
+
+`hpn::logger` owns the event and slow logs in RAM: 96 event records and 180 slow
+samples at a 10 s cadence. Nothing is written to flash. The same buffers feed
+the portal's `/api/log/events` and `/api/log/slow` endpoints.
+
+Streaming to MQTT is opt-in via `mqtt_log_enabled` on **Settings → Network &
+MQTT**. New records are published as JSON lines to `<base>/log/event` and
+`<base>/log/slow`; empty topic fields use those base-derived defaults, while a
+non-empty `mqtt_log_event_topic` / `mqtt_log_slow_topic` replaces the full topic.
+Publishes are non-retained. If the broker is unreachable, logging continues in
+RAM and the retained backlog is sent after reconnection.
+
 ## Relay counter persistence
 
 Relay cycles and runtime live in the portal's RAM cache. In hardware builds
 (`!HPN_IO_EMULATION`) they are also stored in the separate `hpnctr` NVS
 namespace:
 
+- the blob carries a magic value, format version, exact struct size and a
+  CRC32 checksum; a CRC failure in the current format resets the counters and
+  latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED`, while an older format
+  is discarded silently;
 - counters are loaded at boot;
 - a dirty flag is set by a cycle change or by the one-second runtime
   accumulation;
@@ -174,6 +199,8 @@ namespace:
   resurrect the old values;
 - emulation builds never load or save counters, so the bench model cannot wear
   the NVS or leak test data into a hardware configuration.
+
+The anti-seize schedule (`hpnanti`) uses the same CRC32-protected blob pattern.
 
 ## Web portal
 
@@ -196,7 +223,8 @@ task and never blocks the real-time tasks.
 ### Pages
 
 - **Dashboard** — mode, uptime, heap, Wi-Fi, Test Mode, circuits, temperatures,
-  heater/safety state, the five carrier status LEDs and recent events.
+  heater/safety state (including the error code and readable error text), the
+  five carrier status LEDs and recent events.
 - **Plant** — read-only circuits, pumps, after-run timers and mixer feedback.
 - **Diagnostics** — Event Log, Slow Log (10 s samples), Sensor Health and Relay
   Counters.
@@ -205,15 +233,36 @@ task and never blocks the real-time tasks.
   is commanded ON. Activation/deactivation and every command are logged.
 - **Settings** — Safety & Timeouts, Hardware & Pins, Network & MQTT, Firmware
   Update and System. Saves are validated server-side and written to NVS only
-  when the form is submitted. The Network page shows the live MQTT state and
-  can queue a test publication.
+  when the form is submitted. The Network page shows the live MQTT state, can
+  queue a test publication, and configures optional log streaming.
 - **Runtime Parameters** — read-only HA/observer values.
 
 The event, access and slow logs are RAM-only in this build; they reset on
-reboot. Relay counters are persisted hourly in hardware builds and stay in RAM
-under emulation (see above). Configuration is persisted in a versioned NVS
-blob. The access log records every portal request plus WebSocket
-connect/disconnect events.
+reboot. Event and slow records can optionally be mirrored to MQTT (see above).
+Relay counters are persisted hourly in hardware builds and stay in RAM under
+emulation (see above). Configuration, counters and the anti-seize schedule are
+persisted as CRC32-protected NVS blobs. There is no NVS migration path: a blob
+from another format version is rejected and compiled defaults are used. The
+`WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` latch is held for the current
+boot: saving settings rewrites the config blob, but the live flag clears only
+on the next boot once every persisted blob validates. This keeps unrelated
+counter or anti-seize damage visible instead of hiding it behind a config save.
+The access log records every portal request plus WebSocket connect/disconnect
+events.
+
+### Status LEDs
+
+L4's `hpn::led::tick` (`src/led_status.cpp`) animates the five addressable
+LEDs through L0's `set_leds`:
+
+- **LED 0** system/comms: green when online, yellow breathing while Wi-Fi or
+  MQTT is down, red flashing on a critical alarm;
+- **LED 1** boiler: orange while the heater is on, cyan for DHW priority,
+  purple blinking during anti-short-cycle hold-off;
+- **LED 2** floor: green while the floor pump runs, cyan breathing during a
+  warm-up flush, magenta on ΔT collapse, red rapid blink on over-temperature;
+- **LEDs 3–4** radiators: orange while the pump runs, red on a welded-relay or
+  dry-run fault.
 
 ### Test Mode and the bench loopback
 
@@ -303,6 +352,26 @@ device that has never been flashed (no bootloader or partition table) needs one
 local `pio run -t upload` first. Keep the helper inside `src/` and keep the
 `.json` extension unless PlatformIO Remote's sync rules change.
 
+## Runtime verification
+
+`tests/runtime_check.py` is a repeatable integration check against a running
+controller. It prints `PASSED` on success and covers the HTTP API, the RAM log
+rings, MQTT discovery/state topics and log streaming, HA error-sensor
+transitions, the five-LED mapping, and (with `--serial`) the boot log.
+
+```bash
+python3 tests/runtime_check.py --base-url http://192.168.2.14
+tests/flash_and_check.sh --serial        # build + flash esp32dev_sim + checks
+```
+
+Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-26):
+`PASSED: 52 passed, 0 failed, 0 skipped` with `--serial`, and `45/45` without
+the reboot. The boot log showed the saved config loading, no Preferences
+errors, no `501` latch and no crash markers.
+
+Requirements, the full check list and the state the suite restores are in
+[`../tests/README.md`](../tests/README.md). `--serial` reboots the board.
+
 ## Layout
 
 ```
@@ -318,35 +387,38 @@ firmware/
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
-│   ├── config_store.h    # active/mutable config + NVS persistence
+│   ├── config_store.h    # NVS-backed config load/save (CRC32, no migration)
+│   ├── crc32.h           # portable CRC32 helper
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
 │   ├── l0_io.h           # L0 interface
 │   ├── l1_safety.h       # L1 interface (bench loopback; production TODO)
 │   ├── l2_control.h      # L2 interface (bench loopback; production TODO)
-│   ├── l4_comms.h        # L4 interface (Wi-Fi + MQTT + portal)
+│   ├── l4_comms.h        # L4 interface (Wi-Fi + MQTT + portal + LEDs)
+│   ├── led_status.h      # five-LED status animator
 │   ├── mqtt_client.h     # MQTT/HA discovery and command intake
 │   ├── web_portal.h      # portal begin/tick/event-log interface
 │   ├── wifi_client.h     # station-mode Wi-Fi client
-│   └── logger.h          # logger interface (stub)
+│   └── logger.h          # RAM event/slow buffers + MQTT stream API
 ├── src/
 │   ├── main.cpp          # boot sequence, carrier selection, RTOS start
 │   ├── board.cpp         # HomeNet Heatpumps 1.0 and boardless definitions
 │   ├── io_backend.cpp    # hardware or emulated I/O implementation
 │   ├── sim.cpp           # emulation model (only under HPN_IO_EMULATION)
 │   ├── config.cpp        # compiled-in safe defaults
-│   ├── config_store.cpp  # NVS-backed configuration blob
+│   ├── config_store.cpp  # CRC32-protected NVS configuration blob
 │   ├── tasks.cpp         # task creation, priorities, core placement, WDT
-│   ├── state.cpp         # boot-safe SystemState initialization
+│   ├── state.cpp         # boot-safe SystemState and diagnostic text helpers
 │   ├── l0_io.cpp         # carrier logic, the only layer that drives I/O
 │   ├── l1_safety.cpp     # L1 bench loopback + heater interlock; TODO(L1)
 │   ├── l2_control.cpp    # L2 bench pass-through; TODO(L2)
-│   ├── l4_comms.cpp      # L4 integration (Wi-Fi + MQTT + portal)
+│   ├── l4_comms.cpp      # L4 integration (Wi-Fi + MQTT + portal + LEDs)
+│   ├── led_status.cpp    # status animation mapped to the five LEDs
 │   ├── mqtt_client.cpp   # MQTT transport, HA discovery, command intake
 │   ├── web_portal.cpp    # HTTP/WS server, API, logs, Test Mode, OTA
 │   ├── remote_upload.json # remote upload SConscript (see above)
 │   ├── wifi_client.cpp   # station-mode Wi-Fi client
-│   └── logger.cpp        # logger stub
+│   └── logger.cpp        # RAM ring buffers and diagnostic event generation
 ├── lib/                  # project-local libraries
 ├── test/                 # unit/native tests
 └── data/                 # LittleFS portal assets

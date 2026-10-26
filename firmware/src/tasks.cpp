@@ -224,8 +224,10 @@ bool start(const Config& config, const BoardConfig& board, SystemState& state) {
 
   l1::begin(config, state);
   l2::begin(config, state);
-  l4::begin(config, state);
+  // Start the logger before L4 so startup events from the web portal and MQTT
+  // are captured instead of being discarded by the buffer reset.
   logger::begin(config, state);
+  l4::begin(config, state);
 
   const uint32_t watchdog_timeout_ms =
       (g_control_period_ms * 4) + 1000 > 5000 ? (g_control_period_ms * 4) + 1000 : 5000;

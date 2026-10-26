@@ -111,16 +111,18 @@ Each temperature shows: value, sensor ID, staleness (e.g. "2 s ago"), and health
 ### 3.3 Diagnostics
 
 **3.3.1 Event Log**
-- Append-only, NVS-backed ring buffer (target ~50–100 entries).
+- RAM-only circular buffer (96 entries in the current firmware), never written to flash; it resets on reboot.
 - Columns: timestamp, severity (info/warn/error/safety), event code, detail string.
 - **Safety events are latching** (§6): shown with red badge and "latched" tag until manually acknowledged.
 - Filter by severity; download as text file (browser-side blob — no server work).
+- Diagnostic posture changes (error code or warning/alarm mask) generate an event, so the same information is mirrored by the HA `system_error_text` sensor.
 
 **3.3.2 Slow Log**
-- Long-interval time series (per plan: slow trend log, e.g. 1 sample/min).
+- Long-interval time series sampled every 10 s from the same RAM-only logger (180 samples retained).
 - Columns/graph: boiler supply, mixer forward, mixer inlets, return, outdoor (if present), mixer position, pump states.
 - Rendered as inline SVG/canvas chart (no external CDN — must work offline on the LAN).
-- Retention: limited by flash budget; show used/total and an export + clear button.
+- Retention is the in-RAM buffer size, lost on reboot; no flash budget is consumed. A future flash-backed archive would be a separate, explicit feature.
+- Optionally stream the same records to MQTT as JSON lines (`<base>/log/slow`, `<base>/log/event`); see §3.5.3.
 
 **3.3.3 Sensor Health**
 - One row per sensor: ID, type, current value, last valid value, last-seen age, error state (ok / stale / disconnected / CRC error / out-of-range).
@@ -188,6 +190,7 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 - HA discovery prefix is fixed to `homeassistant`; discovery is published retained with a MAC-derived node ID.
 - Availability/LWT uses `<base>/status` with `online`/`offline`.
 - "Test MQTT" button queues a non-retained test publication through `/api/mqtt/test`; it reports `202` while the broker is still connecting and `409` when MQTT is disabled.
+- Telemetry log streaming: `mqtt_log_enabled` checkbox, plus optional full-topic overrides `mqtt_log_slow_topic` and `mqtt_log_event_topic`. Empty overrides use `<base>/log/slow` and `<base>/log/event`. The logs stay in RAM regardless of this setting.
 - Live status chip shows connected broker, connecting state or disabled.
 
 **3.5.4 Firmware Update**
@@ -200,6 +203,10 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 - **Summer mode selector** (Heat / Summer): written to NVS as the node's local setting. HA remains primary authority; if HA overrides, the Runtime Parameters page shows which source is currently authoritative. A change here is logged as an event.
 - UI theme (light/dark/auto — CSS custom properties)
 - Save & reboot, factory reset (double confirmation, logged).
+
+### 3.5a Status LEDs
+
+The main dashboard mirrors the physical animation: LED 0 system/comms, LED 1 boiler/heater/DHW, LED 2 floor circuit/mixer, LEDs 3–4 radiator circuits. Critical alarms flash red; ordinary Wi-Fi/MQTT loss pulses yellow; relay transitions never change the diagnostic error sensors.
 
 ### 3.6 Runtime Parameters (read-only)
 
@@ -433,12 +440,13 @@ Test UI  ──┼──▶ command intake ──▶ Layer 1 arbitration ──�
 
 | Data | Storage | Wear strategy |
 |---|---|---|
-| Settings sections | NVS namespaces per section | written only on explicit Save |
-| Event log | NVS ring buffer | append-batched |
-| Relay counters | NVS (`hpnctr`), hardware builds only | hourly flush when dirty; immediate after explicit reset |
-| Slow log | LittleFS file(s), ring | periodic flush |
+| Settings | one CRC32-protected NVS blob (`hpncfg`) | written only on explicit Save; older formats discarded, no migration |
+| Event log | RAM circular buffer only | never written to flash; optional MQTT stream |
+| Relay counters | NVS (`hpnctr`), hardware builds only | CRC32 blob; hourly flush when dirty; immediate after explicit reset |
+| Anti-seize schedule | NVS (`hpnanti`), hardware builds only | CRC32 blob; deferred 5-min flush |
+| Slow log | RAM circular buffer only | never written to flash; optional MQTT stream |
 
-Factory reset clears settings + counters (logged before clearing if possible), keeps logs optionally.
+Factory reset clears settings, counters and the anti-seize schedule; the RAM logs disappear on the next reboot.
 
 ### 6.4 OTA
 
@@ -500,7 +508,7 @@ This means the entire UI can be clicked through, themed, and reviewed before any
 ## 9. Open Items
 
 1. **Mixer control type** — 3-point (open/close/stop) wires vs. travel-to-percentage only; affects Test Mode manual controls and Hardware & Pins page.
-2. **Slow log retention budget** — depends on flash allocation; needs a decision before implementing §3.3.2.
+2. **Slow log retention** — resolved: logs are RAM-only (96 events, 180 slow samples) and never consume flash; optional MQTT streaming provides external retention.
 3. **After-run timeout granularity** — global vs. per-pump (plan §9.1 open question); the Safety settings page should be built to accommodate both.
 4. **Summer mode authority** — currently local NVS setting with HA override; confirm HA integration treats this the same way.
 

@@ -20,6 +20,11 @@ struct Config {
   char     mqtt_host[64]; uint16_t mqtt_port;
   char     mqtt_user[33], mqtt_pass[65];
   char     mqtt_base_topic[48];
+  // Optional streaming of the RAM log buffers. Empty topics use the
+  // base-derived defaults <base>/log/slow and <base>/log/event.
+  bool     mqtt_log_enabled;       // false = keep logs in RAM only
+  char     mqtt_log_slow_topic[96];
+  char     mqtt_log_event_topic[96];
 
   // --- Safety & Supervision Bounds ---
   float    t_max_hard;             // absolute floor cutoff, e.g. 50.0 degC
@@ -39,9 +44,8 @@ struct Config {
   float    setpoint_default;       // fallback floor setpoint if none in NVS/HA
   float    deadband_pos, deadband_temp;
   uint32_t travel_time_ms, tick_ms; // full-stroke time (dead reckoning) and control tick
-  // (min_pulse_ms / max_pulse_ms / pulse_cooldown_ms were removed: the mixer is a
-  // continuous target-position servo, not a pulse train. The struct keeps them as
-  // reserved fields for NVS layout only -- see config.h.)
+  // The mixer is a continuous target-position servo, not a pulse train, so
+  // there are no pulse-width or cooldown parameters.
   uint32_t temp_poll_interval_ms;  // steady 1-wire polling interval (e.g. 1000 ms)
   float    recalc_threshold;       // enc/DR divergence threshold for warning/re-sync
   uint32_t encoder_check_interval_s; // interval for periodic encoder check (e.g. 3600 s)
@@ -89,6 +93,8 @@ struct Config {
 1. **Category 1 — Long-Term Configuration:** Editable *only* by a human on the local Web Dashboard (and WiFi manager portal); persisted in NVS.
 2. **Category 2 — Dynamic Heating Parameters:** Commanded dynamically by **Home Assistant** (`floor_setpoint`, `summer_mode`). The controller persists the last valid value in NVS as a shadow/fallback (`setpoint_default` is used only before the first valid HA setpoint ever arrives or if NVS is blank).
 3. **Category 3 — Control Loop Tuning:** Computed and pushed *only* by the **Observer** into L3. L3 validates every parameter against hard compiled-in safety/plausibility bounds before adoption and NVS persistence. Not exposed for manual editing on human UIs.
+
+**NVS format and integrity:** the whole `Config` is stored as one blob with a magic value, format version, exact struct size, and a CRC32 checksum. Any blob that fails validation is discarded and compiled defaults are used; there is deliberately **no migration** between firmware versions while the hardware is still being tested on separate boards. A CRC/size failure in a current-format blob latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` so the condition is visible in Home Assistant and the event log; an older-format blob is discarded silently. The latch is held for the current boot and clears on the next boot once all persisted blobs validate; saving settings rewrites the config blob but does not clear the live flag, so unrelated counter or anti-seize damage cannot be hidden by a config save. Relay counters and the anti-seize schedule use the same CRC32-protected blob pattern.
 
 ---
 

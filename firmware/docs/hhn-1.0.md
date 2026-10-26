@@ -189,11 +189,12 @@ Five WS2812 LEDs on GPIO16 in GRB order. Legacy mapping:
 | 3 | `led3` | Legacy Pump 3 (`pump_floor`) | Same red/blue rule |
 | 4 | `ledm` | Mixer | Legacy used this LED only for the status pulse effect; no pump linkage |
 
-`Config::num_leds` is 5 for this profile. Plan 02 §1.2 defines a richer
-per-subsystem colour scheme for the new board; that scheme is **not** the legacy
-behaviour above and is not implemented yet.
-
-`l0::begin()` initializes the strip and clears it; animation belongs to L4.
+`Config::num_leds` is 5 for this profile. The current firmware uses the plan 02
+§1.2 semantics, **not** the legacy mapping above: LED 0 is system/comms, LED 1
+boiler/heater, LED 2 floor/mixer, LED 3 radiator 1 and LED 4 radiator 2. The
+animator lives in `hpn::led::tick` (`firmware/src/led_status.cpp`); L0 only
+writes the frame with `set_leds`. If the carrier's physical LED order matters,
+verify it on the strip before relying on the mapping.
 
 ## 7. Legacy safety behaviour worth keeping in mind
 
@@ -224,11 +225,12 @@ behaviour above and is not implemented yet.
 | Task set and core placement | `firmware/src/tasks.cpp` |
 
 Implemented: output safe state, relay control, mixer direction/motion, MUX
-channel selection, LED chain output, RTOS task set, emulation of this carrier.
+channel selection, LED chain output and the five-LED status animation, RTOS task
+set, emulation of this carrier.
 
-Not implemented yet: 1-Wire sampling, hardware current sampling and power
-plausibility, LED status animation, mixer pulse state machine and dead
-reckoning, all of L1/L2/L4. `l0::tick()` is a stub.
+Partially implemented: 1-Wire sampling, hardware current sampling and power
+plausibility, dead-reckoned mixer movement, and L1/L2/L4. `l0::tick()` schedules
+the polling; the production control/safety loops are still being completed.
 
 ## 9. Bring-up checklist before connecting the plant
 

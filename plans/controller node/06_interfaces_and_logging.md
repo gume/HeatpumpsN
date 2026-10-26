@@ -20,25 +20,26 @@
   * `302` (`ERR_AFTER_HEAT_TIMEOUT`): Pump after-heating run expired without heat demand (`pump_stop_after_heating_s`).
   * `401` (`ERR_RELAY_FAULT_WELDED`): Welded relay contact detected by pump power sensor.
   * `501` (`ERR_NVS_DATA_CORRUPTED`): Configuration CRC check failed in NVS; compiled-in safety defaults loaded.
+* The NVS warning/error is latched for the current boot. Saving settings rewrites the config blob but does not clear the live flag; a reboot clears it once every persisted blob validates. This keeps counter or anti-seize corruption visible instead of masking it behind a config save.
+* A companion **`system_error_text`** text sensor publishes the human-readable meaning of the current code, for example `501: NVS checksum mismatch (saved NVS data rejected; defaults loaded)`. With `ERR_OK` and no flags the payload is `No error`; active warning/alarm bits are appended, so the text also changes when the diagnostic posture changes.
+* Both entities are published only when `system_error_code` or `active_alarms` changes. Ordinary relay, pump, mixer and setpoint transitions do not update them.
 
 ### 1.2 Telemetry Log Streams
 
-Two distinct log streams are buffered in `T_logger` and published via MQTT (`uptime_ms` is the authoritative clock; `wall_time_epoch_s` from NTP is attached as a best-effort annotation):
+Log records are **never written to the MCU flash**. `T_logger` owns two fixed-size circular buffers in RAM, which are lost on reboot:
 
-1. **Slow Log (Periodic — every $10$–$30\text{ s}$):**
-   ```text
-   uptime_ms, wall_time, mode, T_boiler, T_return_floor, T_mix_out, sensor_health_flags,
-   pos_est_dr, pos_encoder, pos_source, pump_floor_intended/phys, pump_rad1_intended/phys,
-   pump_rad2_intended/phys, pump_power[3], heater_intended/phys, divergence_reason_code,
-   dhw_active, system_error_code, flush_state, active_alarms, integrator_val,
-   keepalive_age_s, after_heating_timer_s
-   ```
-2. **Event Log (Immediate on Occurrence):**
-   * **Mixer Moves:** Start timestamp, direction (`OPEN`/`CLOSE`), energized duration ($\text{ms}$), $T_{\text{boiler}}$, $T_{\text{return\_floor}}$, $T_{\text{mix\_out}}$ before/after, and encoder delta.
-   * **Safety & Sensor Events:** Every L1 safety trip/recovery and L0 sensor glitch (`-127 degC`, `+85 degC`, CRC, slew jump) or persistent fault with full state context.
-   * **Configuration Changes:** Parameter name, old value, new value, ownership category (Cat 1 / Cat 2 / Cat 3), and config version counter.
-   * **Command vs. Physical Divergence Transitions:** Every transition where `heater_intended != heater_phys` or `pump_*_intended != pump_*_phys`, recording the new `divergence_reason` and `system_error_code`.
-   * **Lifecycle & Mode Transitions:** Warm-up flush start/end, Anti-seize start/end, and Test Mode / identification routine start/end.
+* event buffer: 96 records (severity, code, detail, sequence, uptime, latched flag);
+* slow buffer: 180 samples at a 10 s cadence (three temperatures, dead-reckoned mixer position, four relay states).
+
+The panels are exposed through the web portal (`/api/log/events`, `/api/log/slow`) and can optionally be streamed to MQTT. Streaming is opt-in via `mqtt_log_enabled`. When a topic override is empty, records are published as JSON lines to `<mqtt_base_topic>/log/event` and `<mqtt_base_topic>/log/slow`; a non-empty `mqtt_log_event_topic` / `mqtt_log_slow_topic` replaces the full topic. The controller tracks a per-stream sequence cursor, so a broker outage does not block logging and the retained RAM backlog is sent once the connection returns. Disabling streaming leaves the buffers available to the web portal only.
+
+`uptime_ms` is the authoritative clock; `wall_time_epoch_s` from NTP is attached as a best-effort annotation when available. The event log includes:
+
+* **Mixer Moves:** start timestamp, direction (`OPEN`/`CLOSE`), energized duration ($\text{ms}$), and surrounding temperatures/encoder delta.
+* **Safety & Sensor Events:** every L1 safety trip/recovery and L0 sensor glitch or persistent fault with state context.
+* **Configuration Changes:** parameter name, old value, new value, ownership category (Cat 1 / Cat 2 / Cat 3), and config version counter.
+* **Command vs. Physical Divergence Transitions:** every transition where `heater_intended != heater_phys` or `pump_*_intended != pump_*_phys`, recording the new `divergence_reason` and `system_error_code`.
+* **Lifecycle & Mode Transitions:** warm-up flush start/end, Anti-seize start/end, and Test Mode / identification routine start/end.
 
 ---
 
@@ -76,17 +77,20 @@ can bind directly. Implemented today:
 * `<mqtt_base_topic>/state/mixer_state` (`idle`, `opening`, `closing`)
 * `<mqtt_base_topic>/state/temp_boiler`, `temp_return`, `temp_mix` ($^{\circ}\text{C}$ or `unknown`)
 * `<mqtt_base_topic>/state/floor_setpoint` ($^{\circ}\text{C}$)
+* `<mqtt_base_topic>/state/system_error_code` ($0 = \text{normal}$)
+* `<mqtt_base_topic>/state/system_error_text` (human-readable diagnostic text)
+
+Optional telemetry log streams (enabled by `mqtt_log_enabled`, JSON lines):
+* `<mqtt_base_topic>/log/slow` (periodic telemetry log stream; override with `mqtt_log_slow_topic`)
+* `<mqtt_base_topic>/log/event` (event log stream; override with `mqtt_log_event_topic`)
 
 Reserved aggregate/observer topics:
 * `<mqtt_base_topic>/state/temperatures` (`T_boiler`, `T_return_floor`, `T_mix_out`, health flags)
 * `<mqtt_base_topic>/state/mixer` (`pos_est_dr`, `pos_encoder`, `pos_source`)
 * `<mqtt_base_topic>/state/relays` (Intended and physical states for all 3 pumps and heater)
-* `<mqtt_base_topic>/state/system_error_code` ($0 = \text{normal}$)
 * `<mqtt_base_topic>/state/divergence_reason` (`none`, `floor_delta_t_collapsed`, `overtemp_pause`, `long_pause`, `anti_short_cycle`, `demand_loss`, `after_heating_timeout`, `dhw_priority_active`)
 * `<mqtt_base_topic>/state/mode` (`heat`, `summer`, `anti_seize`, `test_override`) + `test_mode_rem_s` countdown
 * `<mqtt_base_topic>/state/alarms` (Active alarm/warning bitmask, flush state, config version)
-* `<mqtt_base_topic>/log/slow` (Periodic telemetry log stream)
-* `<mqtt_base_topic>/log/event` (Immediate event log stream)
 
 #### Home Assistant Discovery
 Discovery is published retained to
@@ -98,7 +102,9 @@ derived from the Wi-Fi MAC. The current entity set is:
 * 4 power sensors: floor pump, radiator 1 pump, radiator 2 pump, mixer motor;
 * 1 mixer-state enum sensor (`idle`/`opening`/`closing`);
 * 3 temperature sensors: boiler supply, floor return, mixer forward;
-* 1 `number` entity for the floor setpoint.
+* 1 `number` entity for the floor setpoint;
+* 2 diagnostic text sensors: `system_error_code` (numeric code, `0` = normal)
+  and `system_error_text` (message and active warning/alarm flags).
 
 The request said “5 binary sensors” but listed floor virtual and floor
 physical separately, so the implementation exposes six. Drop one discovery
@@ -106,7 +112,8 @@ call if five was intended.
 
 ### 2.2 Local Web Dashboard + WiFi Manager
 
-* **Current state:** the station-mode Wi-Fi client (`hpn::wifi`), MQTT/HA client (`hpn::mqtt`) and LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a versioned NVS blob; the portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. Relay counters are persisted hourly in hardware builds and stay RAM-only under emulation. The captive-portal provisioning flow and fallback AP are still TODO.
+* **Current state:** the station-mode Wi-Fi client (`hpn::wifi`), MQTT/HA client (`hpn::mqtt`) and LittleFS web portal are implemented. Configuration sections (including Wi-Fi/MQTT parameters) persist in a CRC32-protected NVS blob; blobs from another format version are discarded and compiled defaults are used, with no migration path. The portal provides live state over `/ws`, REST config/log/counter/Test Mode/system/OTA routes, and a bench-only emulation page. Event and slow logs live only in RAM and are served from there; they can optionally be mirrored to MQTT. Relay counters are persisted hourly in hardware builds and stay RAM-only under emulation; counters and the anti-seize schedule also carry CRC32 checksums. The captive-portal provisioning flow and fallback AP are still TODO.
+* **Status LEDs:** L4 maps live state to the five addressable LEDs described in `02_hardware_and_l0.md` §1.2. LED 0 shows system/comms health, LED 1 boiler/heater/DHW, LED 2 floor circuit and mixer, and LEDs 3–4 the radiator circuits. L0 owns the NeoPixel write; the animator only supplies RGB frames.
 * **Provisioning:** Captive portal and web UI for WiFi credentials, fallback AP settings, and MQTT broker parameters.
 * **Configuration Editor:** Full read/write access to **Category 1 (Long-Term Configuration)** parameters; read-only display of **Category 2 (HA)** and **Category 3 (Observer)** parameters.
 * **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close $\pm 2\%$ nudges and stop), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).

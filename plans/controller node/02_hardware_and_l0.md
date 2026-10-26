@@ -61,10 +61,7 @@ Using addressable RGB LEDs (WS2812B or SK6812) requires only **one single GPIO p
 
 *(Note: If fewer LEDs are preferred, LEDs 3 and 4 can be omitted, leaving 3 LEDs for System, Boiler, and Floor).*
 
-*(On HomeNet Heatpumps 1.0 the chain has 5 LEDs but the old firmware mapped them
-differently — LED 1–3 to the three pumps, LED 4 to the mixer — see
-[`hhn-1.0.md`](../../firmware/docs/hhn-1.0.md) §6. The table above is the target
-semantics for the new carrier; L4 owns the animation.)*
+*(L4 implements this table in `hpn::led::tick` (`firmware/src/led_status.cpp`); L0 owns the `set_leds` write. LED 0's blue boot/captive-portal state is reserved until the Wi-Fi manager provides an AP/portal mode. On HomeNet Heatpumps 1.0 the chain has 5 LEDs but the old firmware mapped them differently — LED 1–3 to the three pumps, LED 4 to the mixer — see [`hhn-1.0.md`](../../firmware/docs/hhn-1.0.md) §6. The table above is the implemented semantics for the new carrier.)*
 
 ---
 
