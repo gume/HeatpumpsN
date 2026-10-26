@@ -1,165 +1,287 @@
-# Firmware session handover — configurable mixer opening ceiling
+# Firmware session handover — real-heating readiness
 
 **Date:** 2026-10-26
-**Base commit:** `7e079f7` ("firmware: RAM-only logs, MQTT streaming, CRC32 NVS, HA error sensors, status LEDs")
+**Base commit:** `36f756d` ("firmware: add configurable mixer opening ceiling (85% default)")
 **Device:** remote ESP32-D0WDQ6 bench board flashed with `esp32dev_sim`
 (HHN 1.0 emulation), Wi-Fi `Testing`, controller `http://192.168.2.14`,
 broker `smcl.tmit.bme.hu:31883`.
 
-> **Read this first.** The mixer can no longer be commanded above a configurable
-> ceiling. L1 is the authoritative enforcement point; L2, the portal and the UI
-> know the same value. Both firmware environments build clean, the
-> `esp32dev_sim` image and LittleFS assets are flashed, and the bench run passes
-> every runtime check (see §4). Upload the filesystem as well as the application
-> because `data/js/app.js` and its `.gz` sibling changed.
+> **Read this first.** This session adds the remaining bench-verifiable pieces
+> for real-heating operation: shared pump-current calibration with a protection
+> switch, a configurable mixer minimum/dynamic maximum, a soft setpoint+Δ
+> reaction, warning-only mixer anomaly indications, sensor-role verification and
+> an optional inferred-DHW fallback. The configuration blob moved to **v2**; a
+> v1 blob is migrated by preserving its 1288-byte prefix, so the bench settings
+> survived unchanged. Both firmware environments build; the emulation image and
+> filesystem are flashed and the runtime suite passes. Upload the filesystem as
+> well as the application because `data/js/app.js` and its `.gz` sibling changed.
 
 ---
 
 ## 1. Objective
 
-The old controller never opened the heating mixer past **85 %**. A fully open
-mixer closes too slowly when the boiler temperature rises suddenly, so the
-extra range was a safety liability rather than useful headroom. This session
-adds a configurable maximum opening:
+The controller was functionally complete on the bench but several parameters
+were hard-coded or unverified for the real plant:
 
-1. New parameter `mix_max_open_pct`, default **85 %**, range 10–100 %.
-2. L1 refuses to drive the mixer above it on **every** opening move.
-3. L2 and the portal clamp their targets to the same value.
-4. Configurable from the device (Settings → Safety & timeouts).
-5. Existing NVS configurations keep working without losing settings.
+1. The pump-current calibration was a fixed legacy fit, and there was no way to
+   run without current-based protection while the shunt is uncalibrated.
+2. Mixer stall detection based on supply temperature was unreliable and could
+   stop a healthy valve.
+3. There was no check that the three 1-Wire sensors were assigned to the right
+   hydraulic roles.
+4. The old controller used a 40 % minimum and a temperature-dependent ceiling;
+   neither was configurable.
+5. A configurable setpoint+Δ reaction and an optional DHW inference were
+   needed for plants without a DHW meter.
+
+This session implements those without changing heater control, anti-seize or the
+existing safety hierarchy.
 
 ---
 
 ## 2. What changed
 
-### 2.1 Config and NVS layout
+### 2.1 Config v2 and NVS migration
 
-`firmware/include/hpn/config.h`
+`firmware/include/hpn/config.h` — new fields appended after
+`mix_max_open_pct`; `sizeof(Config)` is now **1348** bytes (v1 was 1288):
 
-* `uint8_t mix_max_open_pct` is the final `Config` member.
-* `mixer_ceiling(config)` returns the ceiling as a `float` (0.01–1.0), clamped
-  defensively, and is the single source of truth for every layer.
-* The field reuses the former tail padding of the v1 blob, so
-  `sizeof(Config)` stays **1288 bytes**. `config_store.cpp` now asserts this
-  statically; a future layout change must bump the blob version instead of
-  silently invalidating stored settings.
+* pump calibration: `pump_current_w_per_v`, `pump_current_offset_v`,
+  `pump_power_check_enabled`;
+* mixer window: `mix_min_open_pct`, `mix_max_dynamic`, `mix_max_below_pct`,
+  `mix_max_above_pct`, `mix_max_switch_c`, `mix_max_hysteresis_c`;
+* overshoot: `mix_overshoot_delta_c`, `mix_overshoot_recovery_c`,
+  `mix_overshoot_target_pct`;
+* sensor roles: `sensor_role_check_enabled`, `sensor_role_tolerance_c`;
+* inferred DHW: `dhw_infer_enabled`, `dhw_infer_drop_c`, `dhw_infer_window_s`,
+  `dhw_infer_recovery_c`, `dhw_infer_max_s`.
 
-`firmware/src/config.cpp` sets the compiled default to **85**.
+Helpers `mixer_ceiling()`, `mixer_minimum()` and
+`mixer_effective_ceiling(config, above)` are the single source of truth for the
+limits. The effective ceiling is `min(absolute, dynamic)`.
 
-`firmware/src/config_store.cpp` upgrades a loaded blob whose value is outside
-10–100 (including `0`, the old padding byte) to 85 and logs
-`[config] mixer opening limit defaulted to 85%`.
+`firmware/src/config_store.cpp`:
 
-### 2.2 L1 enforcement (`firmware/src/l1_safety.cpp`)
+* `kVersion = 2`, `kV1ConfigSize = 1288`;
+* a v1 blob is CRC-checked, copied over current defaults and sanitized, then
+  returned as `ConfigLoadResult::Migrated`;
+* `main.cpp` immediately saves the migrated blob, so the upgrade is one-time;
+* every new field is range-checked in `sanitize_config()`, and a minimum above
+  the usable ceiling is clamped instead of rejecting the stored settings;
+* `sizeof(Config)` is statically asserted so a future field addition must bump
+  the version and extend the migration path.
 
-`service_mixer()` is the only code that energizes the motor, so it owns the
-hard limit:
+The bench v1 blob migrated on the first boot after flashing; subsequent boots
+load v2. No NVS corruption (`501`) was reported.
 
-* the requested target is normalized and clamped to the ceiling before any
-  comparison;
-* a normal opening move stops at the ceiling and the dead-reckoned position is
-  clamped to it;
-* a free-run request (maintenance sweep / homing) opening upward stops at the
-  ceiling and clears `mix_free_run_dir` / `mix_free_run_until_ms`, so it cannot
-  pulse against the cap on the following ticks;
-* a backstop clamps `pos_est_dr` after every opening tick, covering any path
-  that bypassed the earlier checks;
-* closing moves, emergency close and end-stop homing to 0 % are unaffected.
+### 2.2 Pump current calibration and protection switch
 
-Boot log: `[l1] mixer opening limit 85%` (actual configured value).
+`firmware/src/l0_io.cpp` now samples the selected channel and computes
 
-Lowering the ceiling while the valve is open drives it back down to the new
-limit; raising it does not move the valve by itself.
+```
+watts = (rms_volts - pump_current_offset_v) * pump_current_w_per_v
+```
 
-### 2.3 L2 and portal
+with the shared calibration. The legacy values remain the defaults
+(`0.004 V`, `588.2 W/V`) but are editable under **Settings → Hardware → Pump
+current calibration**. When `pump_power_check_enabled` is false, L1 still
+publishes the measurements but clears the dry-run/welded counters and never
+trips on them. The unverified-polarity TODO on the output extender was replaced
+with the confirmed carrier description (see §2.6).
 
-`firmware/src/l2_control.cpp`
+### 2.3 Mixer window: minimum, dynamic maximum, overshoot
 
-* `service_mixer_control()` clamps `mix_target_pos` at the top of the function,
-  so early returns (DHW hold, no floor demand, deadband hold) cannot report a
-  target above the cap either;
-* every computed and held target is clamped with `mixer_ceiling()`.
+`firmware/src/l1_safety.cpp`:
 
-`firmware/src/web_portal.cpp`
+* maintains the hysteresis side of the two-point maximum from the boiler-side
+  temperature and publishes the effective ceiling in `state.mix_ceiling`;
+* uses that ceiling for every opening move, including free-run sweeps, and
+  updates it live when the config changes;
+* adds warning-only motion supervision: `WARN_MIX_MOTION_OVERRUN` after
+  `travel_time_ms + 15 s`, and `WARN_MIX_NO_RESPONSE` when a valid external
+  encoder does not move within 3 s of a commanded move. Neither stops the
+  motor.
 
-* `/api/config/safety` exposes and validates `mix_max_open_pct` (10–100);
-* `/api/state` adds `circuits.floor.mixerMaxPct`;
-* Test Mode nudges are clamped to the ceiling; an explicit
-  `{"mixer":"target","position":>cap}` is rejected with **HTTP 400** and
-  responses include the active `max`;
-* the mixer sweep sequence opens only to the configured ceiling and logs
-  `Mixer sweep: opening to the configured limit`.
+`firmware/src/l2_control.cpp`:
 
-### 2.4 UI and docs
+* enforces `mix_min_open_pct` only during normal floor-demand control; the
+  no-demand path always closes to 0, and DHW/flush/safety/homing/overshoot are
+  exempt;
+* implements the soft setpoint+Δ reaction: at `setpoint + mix_overshoot_delta_c`
+  it drives to `mix_overshoot_target_pct` and holds until
+  `setpoint - mix_overshoot_recovery_c`, raising `WARN_MIX_OVERSHOOT`;
+* exposes `state.mix_overshoot` to the portal.
+
+### 2.4 Sensor-role verification
+
+New `firmware/include/hpn/sensor_roles.h` / `firmware/src/sensor_roles.cpp`.
+The check is **only measurable while `heater_phys && pump_floor_phys`** and all
+three readings are valid. It verifies:
+
+```
+boiler >= forward >= return   (within sensor_role_tolerance_c)
+```
+
+`/api/sensors/roles` returns the raw temperatures, the three comparisons,
+`measurable`, `plausible` and a human-readable summary. L1 raises
+`WARN_SENSOR_ROLE_SUSPECT` (error code 603) after 60 s of a persistent
+inversion and clears it after 30 s of a plausible order. Outside the
+measurable condition it reports “not measurable” and clears the warning.
+
+### 2.5 Optional inferred DHW
+
+When `dhw_infer_enabled` is true and there is no meter, a boiler-temperature
+drop of `dhw_infer_drop_c` within `dhw_infer_window_s` while the heater is on
+sets `dhw_inferred`. Recovery within `dhw_infer_recovery_c` of the pre-drop peak
+ends it. If it lasts longer than `dhw_infer_max_s`, the floor is released and
+`WARN_DHW_INFER_TIMEOUT` / error 604 is raised; the warning stays latched until
+recovery or a new heater cycle, so it cannot clear and re-latch on the same
+drop. `dhw_active` is the combination
+`dhw_meter_active || dhw_inferred`, so a configured meter always wins.
+
+### 2.6 IO-extender facts and documentation
+
+The HomeNet Heatpumps 1.0 carrier does not use a bare 74HC595. Its serial output
+extender pulls the selected outputs to **GND** at power-on/reset; the relay board
+is **active-high**, so `0x00` is the correct safe byte and
+`kActuatorOnLevel = HIGH`. This is now documented in
+`firmware/docs/hhn-1.0.md` and the firmware comments; the old “polarity assumed,
+confirm” TODO was removed. The boot log line now says `output extender` instead
+of `74HC595`.
+
+### 2.7 Portal and UI
+
+`firmware/src/web_portal.cpp`:
+
+* `/api/config/safety` and `/api/config/hardware` expose and validate all new
+  fields, including cross-field checks;
+* `/api/state` reports the effective/absolute ceiling, minimum, dynamic flag,
+  overshoot latch, pump-protection switch, meter/inferred DHW and role data;
+* `/api/sensors/roles` is registered;
+* new alarm bits/error codes are added to the state JSON and error text;
+* Test Mode target clamping uses the live effective ceiling.
 
 `firmware/data/js/app.js` (+ regenerated `.gz`):
 
-* Settings → Safety & timeouts: **Maximum mixer opening** (10–100 %, step 1)
-  with an explanation of the slow-close risk;
-* Dashboard and Test page show **Maximum opening** next to the estimated and
-  target positions;
-* the Test page target slider is bounded by the live ceiling and the help text
-  names it.
+* Settings → Safety: mixer operating window, overshoot, sensor-role and inferred
+  DHW sections;
+* Settings → Hardware: pump current calibration and protection switch;
+* Hardware → Sensor identities: **Verify roles** button and a comparison table;
+* Dashboard/Test page: minimum, effective and absolute maximum, and the
+  overshoot reaction state.
 
-Updated `firmware/README.md`, `plans/controller node/01`, `03` and `04`.
+### 2.8 Watchdog and HTTP response hardening
+
+The first bench run after flashing ended in a `task-watchdog` reset, and two
+follow-up runs failed with an HTTP timeout and with a truncated
+`/api/log/events` body. Both had the same origin:
+
+* **AsyncTCP was feeding the plant watchdog.** `AsyncTCP` compiles its
+  `esp_task_wdt_add()`/`esp_task_wdt_reset()` calls unless
+  `CONFIG_ASYNC_TCP_USE_WDT` is 0, so the `async_tcp` service task was a second
+  watchdog entry. The ESP task watchdog only restarts the timer when *every*
+  entry has been reset, so a long HTTP callback (or a stalled TCP stream) made
+  the controller panic even though `T_safety`/`T_io`/`T_control` were healthy.
+  The task watchdog is now fed only by `T_io`, matching the design rule that the
+  network stack must never be able to reset the plant.
+* **Large JSON responses grew one byte at a time.** `AsyncResponseStream`
+  starts with a 1460-byte `cbuf` and `resizeAdd()`s a whole new ring buffer for
+  every byte past the end, so the ~10 KB event-log and slow-log responses
+  performed thousands of reallocations inside the network task. That blocked
+  the HTTP server long enough to time out the test client, and when the heap
+  could not grow the payload mid-serialisation the response was silently
+  truncated (the observed invalid JSON at byte 8713). `send_json()` now uses
+  `measureJson()` to size the response buffer exactly, so it is allocated once.
+
+`T_io` also logs a rate-limited `1900`/`1901` event with the safety/io/control
+ages whenever it withholds a watchdog feed, so a future reset is diagnosable
+from the captured boot log instead of only showing `reset reason:
+task-watchdog`.
+
+### 2.9 Docs and plans
+
+Updated `firmware/README.md`, `firmware/docs/hhn-1.0.md`,
+`firmware/docs/io-emulation.md`, `tests/README.md`,
+`plans/controller node/01_config_and_contracts.md`, `03_safety_layer_l1.md` and
+`04_control_and_coordination_l2.md`.
 
 ---
 
 ## 3. Design decisions / caveats
 
-* **L1 is authoritative.** Higher layers clamp for a coherent UI and to reject
-  bad requests early, but a stale L2 target or a direct writer still cannot
-  open the valve past the ceiling.
-* **The ceiling is not a position.** It limits the commanded opening only.
-  Position estimation, encoder resync, homing and closing remain unchanged.
-* **Old NVS blobs stay valid.** The new byte was previously tail padding, so no
-  version bump or migration is needed. A stored `0` is treated as "unset" and
-  upgraded to 85.
-* **No automatic return to the cap on boot.** If the valve is physically above
-  the cap, L1 only refuses further opening; it does not force a close on boot.
-  Normal control or a lower target will bring it down.
-* **Emergency close wins.** `mix_emergency` still forces `0.0` and is exempt
-  from the ceiling logic.
+* **L1 remains authoritative.** L2 and the portal clamp for coherent targets and
+  early rejection, but L1 never opens past the effective ceiling.
+* **The plant watchdog is fed only by `T_io`.** Network code (including
+  AsyncTCP's own service task) is excluded, so HTTP/MQTT activity cannot reset
+  the outputs. A withheld feed is logged with the task ages.
+* **JSON responses are sized before serialisation.** `AsyncResponseStream`
+  grows one byte at a time; pre-sizing with `measureJson()` keeps the large log
+  endpoints to a single allocation and prevents truncated bodies.
+* **Minimum is an L2 normal-control rule.** Closing, safety close, homing, DHW,
+  the flush cap and the no-demand close are all allowed to reach 0 %.
+* **Dynamic maximum is opt-in.** Defaults are 90 % below / 70 % above a 50 °C
+  switch with 2 K hysteresis, but `mix_max_dynamic` is false until enabled.
+* **Overshoot is soft.** It raises a warning and reduces the opening; the hard
+  over-temperature rule in L1 is unchanged.
+* **Mixer anomaly indications are warning-only.** A seized valve, a frozen
+  encoder and a wiring fault are indistinguishable from this data, so the
+  controller does not stop the motor on these warnings.
+* **Sensor roles only while heating.** An idle plant cannot prove the order, so
+  the check reports “not measurable” rather than a false result.
+* **Inferred DHW is opt-in.** Meter-based DHW remains the default and is never
+  overridden.
+* **Migration preserves old settings.** The v1 prefix is copied verbatim over
+  current defaults; only the appended fields get defaults.
 
 ---
 
 ## 4. Verification performed
 
-* `pio remote run -e esp32dev_sim` → **SUCCESS**, RAM 25.1 % (82 204 B),
-  flash 76.6 % (1 254 440 B of 1 638 400 B).
-* `pio remote run -e esp32s2` → **SUCCESS**, RAM 28.9 % (94 540 B), flash
-  75.4 % (1 235 055 B).
+Builds (PlatformIO, release):
+
+* `esp32dev_sim` → **SUCCESS**, RAM 25.2 % (82 436 B), flash 77.1 %
+  (1 263 552 B of 1 638 400 B).
+* `esp32s2` → **SUCCESS**, RAM 28.9 % (94 740 B), flash 76.0 %
+  (1 245 467 B).
 * Only the pre-existing `wifi_client.cpp` `-Wformat` warning is present.
 * `node --check firmware/data/js/app.js` passes; `app.js.gz` regenerated with
   `gzip -9 -n`.
-* Flashed `esp32dev_sim` plus the LittleFS image on the bench ESP32-D0WDQ6.
-* `python3 tests/runtime_check.py --serial` → **PASSED: 59 passed, 0 failed,
-  0 skipped**; without `--serial` → **52/52**.
-* New runtime checks:
-  * `mix_max_open_pct` present in `/api/config/safety` (85 % on the bench) and
-    `mixerMaxPct` matches it in `/api/state`;
-  * temporary Test Mode, `travel_time_ms=4000`, target `0 %`, then target
-    `100 %`; after the valve passed 15 % the ceiling was lowered to **40 %**
-    mid-move. L1 stopped at **40.0 %, motion off**;
-  * `/api/state` reported the new 40 % ceiling immediately;
-  * `POST /api/test/command {"mixer":"target","position":0.8}` returned
-    **HTTP 400**;
-  * the test restores `mix_max_open_pct`, `travel_time_ms` and Test Mode;
-    `/api/config/*` confirmed 85 % and 145 000 ms afterwards.
-* Boot log contains `[l1] mixer opening limit 85%`; the existing config blob
-  loaded with no NVS corruption and no Preferences read errors.
+* `xtensa-esp32-elf-nm` confirms the AsyncTCP object no longer references
+  `esp_task_wdt_add`/`esp_task_wdt_reset`.
 
-Fixed during verification: `check_ram_logs()` now waits up to 12 s for the first
-slow-log sample, because a freshly flashed board may still be inside the 10 s
-cadence window when the checks start.
+Bench (`esp32dev_sim` application + LittleFS):
+
+* `python3 tests/runtime_check.py --serial` → **PASSED: 65 passed, 0 failed,
+  0 skipped**.
+* Without `--serial` → **PASSED: 58 passed, 0 failed, 0 skipped**, five times
+  back-to-back with an attached serial monitor and no reset; uptime grew
+  monotonically and `minFreeHeap` stayed above 97 KB.
+* `/api/log/events` with a full 96-entry ring (10 657 B) was fetched 20 times:
+  every body parsed, worst latency 0.22 s, and no `Failed to allocate` was
+  logged.
+* The boot log no longer contains `task_wdt: ... task not found`; the only
+  watchdog line is `[rtos] task WDT armed at 9000ms`.
+* The bench v1 config was migrated and preserved: the saved broker, Wi-Fi,
+  ceiling and timing values were still in effect after flashing and rebooting.
+* New checks:
+  * config contract exposes all mixer-window, overshoot, role, inferred-DHW and
+    pump-calibration fields;
+  * `/api/sensors/roles` reports measurable+plausible with safe temperatures
+    and measurable+suspect after inverting boiler/return;
+  * Test Mode target above the ceiling returns HTTP 400; a mid-move ceiling
+    change stops the valve at the new limit;
+  * the boot log shows the saved config loading, no NVS corruption, no
+    Preferences errors and no crash markers.
+* Boot log lines include `[l1] mixer opening limit 85% (absolute)`,
+  `[l1] dynamic maximum disabled` (default) and
+  `[l1] normal floor opening minimum 40%`.
 
 ---
 
 ## 5. How to flash and check
 
-From `firmware/` (add `--upload-port /dev/ttyUSB0` if auto-detection picks the
-wrong port). The attached bench board is a plain ESP32, so use
-`esp32dev_sim`; `esp32s2` fails with `This chip is ESP32, not ESP32-S2`.
+From `firmware/` (the attached bench board is a plain ESP32, so use
+`esp32dev_sim`; `esp32s2` is compile-only for now):
 
 ```bash
 pio remote run --force-remote -d . -e esp32dev_sim --target uploadfs
@@ -170,20 +292,8 @@ python3 ../tests/runtime_check.py --base-url http://192.168.2.14 --serial
 `tests/flash_and_check.sh --serial` (from the repository root) does the build,
 flash and checks in one step; set `HPN_UPLOAD_FS=1` to include the UI assets.
 
-After boot, check:
-
-1. `[config] loaded saved configuration from NVS` (no CRC/format failure) and
-   `[l1] mixer opening limit 85%`.
-2. Portal → Settings → Safety & timeouts shows **Maximum mixer opening** at
-   85; saving 40 makes the Dashboard/Test page display 40 and the Test slider
-   stop at 40.
-3. Test Mode: commanding 80 % while the cap is 40 returns an error; a nudge
-   upward past 40 stops at the cap.
-4. Closing and end-stop homing still reach 0 %.
-
 Always bound the serial monitor with `timeout`; never run an unbounded
-`pio remote device monitor`. The automated suite covers checks 1–4 and the
-bounded boot capture.
+`pio remote device monitor`. The suite's `--serial` check does this for you.
 
 ---
 
@@ -192,36 +302,51 @@ bounded boot capture.
 Modified for this change:
 
 ```
-firmware/README.md
 firmware/HANDOVER.md
+firmware/README.md
 firmware/data/js/app.js
 firmware/data/js/app.js.gz
+firmware/docs/hhn-1.0.md
+firmware/docs/io-emulation.md
 firmware/include/hpn/config.h
+firmware/include/hpn/config_store.h
+firmware/include/hpn/l0_io.h
+firmware/include/hpn/sensor_roles.h      (new)
+firmware/include/hpn/state.h
+firmware/platformio.ini
 firmware/src/config.cpp
 firmware/src/config_store.cpp
+firmware/src/l0_io.cpp
 firmware/src/l1_safety.cpp
 firmware/src/l2_control.cpp
+firmware/src/main.cpp
+firmware/src/mqtt_client.cpp
+firmware/src/sensor_roles.cpp            (new)
+firmware/src/state.cpp
+firmware/src/tasks.cpp
 firmware/src/web_portal.cpp
 plans/controller node/01_config_and_contracts.md
 plans/controller node/03_safety_layer_l1.md
 plans/controller node/04_control_and_coordination_l2.md
-tests/runtime_check.py
 tests/README.md
+tests/runtime_check.py
 ```
 
 Untracked / unrelated and deliberately not part of this commit: `reviews/`,
-the `simulation/sim_run_hil_*.csv/png` files, the `simulation/test_run_*`
-artefacts, and the existing local edits under `simulation/`.
+the `simulation/` edits and the `simulation/sim_run_hil_*`, `test_run_*` and
+`phys_sysid*` artefacts.
 
 ---
 
 ## 7. Open items
 
-1. Confirm on a real HHN 1.0 carrier (`esp32s2`) that lowering the cap while
-   the valve is open produces the expected close and that 85 % is mechanically
-   identical to the old controller's ceiling.
-2. Decide whether the dashboard should raise a visible warning when the
-   estimated position is above the configured cap (for example after a config
-   change or an encoder resync).
-3. The simulator/HIL tooling in `simulation/` has local, unrelated edits that
-   were not reviewed or committed in this session.
+1. **ESP32-S2 hardware test is deferred** — the user will test the real HHN 1.0
+   carrier later. The `esp32s2` environment builds but has not been flashed.
+2. Calibrate `pump_current_offset_v` / `pump_current_w_per_v` with a clamp meter
+   on the real plant before enabling `pump_power_check_enabled`.
+3. Review the default dynamic-maximum switch point and the 40 % minimum against
+   the real hydraulic behaviour.
+4. Decide whether the warning-only mixer indications should ever escalate to a
+   stop once the plant has a reliable encoder.
+5. The simulator/HIL tooling has local, unrelated edits that were not reviewed
+   or committed in this session.

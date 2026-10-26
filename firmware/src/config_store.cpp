@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -13,7 +14,13 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersion = 2;
+
+// v1 blobs contain the unchanged 1288-byte Config prefix (the first version
+// already used the former tail padding for mix_max_open_pct). v2 appends the
+// pump-calibration, operating-window, overshoot, sensor-role and inferred-DHW
+// fields, so a v1 blob can be migrated by copying its prefix over defaults.
+constexpr size_t kV1ConfigSize = 1288;
 
 struct ConfigBlobHeader {
   uint32_t magic;
@@ -35,22 +42,90 @@ struct ConfigBlob {
 
 static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
-// mix_max_open_pct occupies the former tail padding of Config, so the v1 blob
-// size is unchanged and existing NVS data stays valid. If this fails, bump
-// kVersion and add an explicit upgrade path instead of silently changing the
-// layout.
-static_assert(sizeof(Config) == 1288, "Config layout changed; review the NVS format");
+static_assert(sizeof(Config) > kV1ConfigSize,
+              "v2 fields must be appended after the v1 Config prefix");
+// Any future field addition must bump kVersion and extend the migration path
+// instead of silently invalidating stored settings.
+static_assert(sizeof(Config) == 1348, "Config layout changed; review the NVS format");
 
 Preferences g_prefs;
 
 bool open_store() { return g_prefs.begin(kNamespace, false); }
 
-uint32_t blob_crc(ConfigBlob& blob) {
-  const uint32_t saved = blob.header.crc;
-  blob.header.crc = 0;
-  const uint32_t crc = crc32_ieee(&blob, sizeof(blob));
-  blob.header.crc = saved;
+uint32_t blob_crc_bytes(uint8_t* bytes, size_t size) {
+  ConfigBlobHeader* header = reinterpret_cast<ConfigBlobHeader*>(bytes);
+  const uint32_t saved = header->crc;
+  header->crc = 0;
+  const uint32_t crc = crc32_ieee(bytes, size);
+  header->crc = saved;
   return crc;
+}
+
+void sanitize_config(Config& config) {
+  // Blobs written before the opening cap existed have 0 in that byte (it was
+  // tail padding). Any out-of-range value is equally invalid.
+  if (config.mix_max_open_pct < 10 || config.mix_max_open_pct > 100) {
+    config.mix_max_open_pct = 85;
+  }
+  if (config.mix_min_open_pct > 100) config.mix_min_open_pct = 40;
+  if (config.mix_max_below_pct < 10 || config.mix_max_below_pct > 100) {
+    config.mix_max_below_pct = 90;
+  }
+  if (config.mix_max_above_pct < 10 || config.mix_max_above_pct > 100) {
+    config.mix_max_above_pct = 70;
+  }
+  if (!isfinite(config.mix_max_switch_c) || config.mix_max_switch_c < 0.0f ||
+      config.mix_max_switch_c > 90.0f) {
+    config.mix_max_switch_c = 50.0f;
+  }
+  if (!isfinite(config.mix_max_hysteresis_c) || config.mix_max_hysteresis_c < 0.5f ||
+      config.mix_max_hysteresis_c > 10.0f) {
+    config.mix_max_hysteresis_c = 2.0f;
+  }
+  if (!isfinite(config.mix_overshoot_delta_c) || config.mix_overshoot_delta_c < 0.5f ||
+      config.mix_overshoot_delta_c > 10.0f) {
+    config.mix_overshoot_delta_c = 3.0f;
+  }
+  if (!isfinite(config.mix_overshoot_recovery_c) || config.mix_overshoot_recovery_c < 0.0f ||
+      config.mix_overshoot_recovery_c > 10.0f) {
+    config.mix_overshoot_recovery_c = 1.0f;
+  }
+  if (config.mix_overshoot_target_pct > 100) config.mix_overshoot_target_pct = 40;
+  if (!isfinite(config.pump_current_w_per_v) || config.pump_current_w_per_v < 1.0f ||
+      config.pump_current_w_per_v > 5000.0f) {
+    config.pump_current_w_per_v = 588.2f;
+  }
+  if (!isfinite(config.pump_current_offset_v) || config.pump_current_offset_v < 0.0f ||
+      config.pump_current_offset_v > 1.0f) {
+    config.pump_current_offset_v = 0.004f;
+  }
+  if (!isfinite(config.sensor_role_tolerance_c) || config.sensor_role_tolerance_c < 0.5f ||
+      config.sensor_role_tolerance_c > 20.0f) {
+    config.sensor_role_tolerance_c = 3.0f;
+  }
+  if (!isfinite(config.dhw_infer_drop_c) || config.dhw_infer_drop_c < 1.0f ||
+      config.dhw_infer_drop_c > 20.0f) {
+    config.dhw_infer_drop_c = 5.0f;
+  }
+  if (config.dhw_infer_window_s < 10 || config.dhw_infer_window_s > 3600) {
+    config.dhw_infer_window_s = 120;
+  }
+  if (!isfinite(config.dhw_infer_recovery_c) || config.dhw_infer_recovery_c < 0.0f ||
+      config.dhw_infer_recovery_c > 20.0f) {
+    config.dhw_infer_recovery_c = 3.0f;
+  }
+  if (config.dhw_infer_max_s < 60 || config.dhw_infer_max_s > 86400) {
+    config.dhw_infer_max_s = 1800;
+  }
+
+  // A minimum above the usable ceiling is contradictory. Clamp it rather than
+  // rejecting stored settings; normal API writes validate the combination.
+  uint8_t ceiling = config.mix_max_open_pct;
+  if (config.mix_max_dynamic) {
+    if (config.mix_max_below_pct < ceiling) ceiling = config.mix_max_below_pct;
+    if (config.mix_max_above_pct < ceiling) ceiling = config.mix_max_above_pct;
+  }
+  if (config.mix_min_open_pct > ceiling) config.mix_min_open_pct = ceiling;
 }
 
 }  // namespace
@@ -66,34 +141,51 @@ ConfigLoadResult config_load(Config& config) {
 
   if (stored != 0) {
     // Preferences::getBytes() requires a buffer large enough for the whole
-    // blob, so a short prefix read cannot be used to sniff the format. The
-    // current format is the largest one (fields were only ever removed from
-    // older versions), so anything that still fits is read in full.
+    // blob. v2 is the largest recorded format, so anything that still fits is
+    // read in full and the header decides how to interpret it.
     if (stored < sizeof(ConfigBlobPrefix)) {
       result = ConfigLoadResult::Corrupt;
     } else if (stored > sizeof(ConfigBlob)) {
       // Larger than any recorded format: an old/foreign blob, not damage.
       result = ConfigLoadResult::Stale;
     } else {
-      ConfigBlob blob{};
-      if (g_prefs.getBytes(kKey, &blob, stored) != stored) {
+      uint8_t bytes[sizeof(ConfigBlob)] = {};
+      if (g_prefs.getBytes(kKey, bytes, stored) != stored) {
         result = ConfigLoadResult::Corrupt;
-      } else if (blob.header.magic != kMagic || blob.header.version != kVersion) {
-        // Old-format or foreign blob. No migration: discard it and use defaults.
-        result = ConfigLoadResult::Stale;
-      } else if (stored != sizeof(ConfigBlob) || blob.header.size != sizeof(Config)) {
-        result = ConfigLoadResult::Corrupt;
-      } else if (blob.header.crc == blob_crc(blob)) {
-        config = blob.config;
-        // Blobs written before the opening cap existed have 0 in this byte
-        // (it was tail padding). Any out-of-range value is equally invalid.
-        if (config.mix_max_open_pct < 10 || config.mix_max_open_pct > 100) {
-          config.mix_max_open_pct = 85;
-          Serial.println("[config] mixer opening limit defaulted to 85%");
-        }
-        result = ConfigLoadResult::Loaded;
       } else {
-        result = ConfigLoadResult::Corrupt;
+        const ConfigBlobHeader* header = reinterpret_cast<const ConfigBlobHeader*>(bytes);
+        if (header->magic != kMagic) {
+          // Old-format or foreign blob. No migration target: use defaults.
+          result = ConfigLoadResult::Stale;
+        } else if (header->version == kVersion) {
+          if (stored != sizeof(ConfigBlob) || header->size != sizeof(Config)) {
+            result = ConfigLoadResult::Corrupt;
+          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
+            memcpy(&config, bytes + sizeof(ConfigBlobHeader), sizeof(Config));
+            sanitize_config(config);
+            result = ConfigLoadResult::Loaded;
+          } else {
+            result = ConfigLoadResult::Corrupt;
+          }
+        } else if (header->version == 1) {
+          const size_t v1_blob_size = sizeof(ConfigBlobHeader) + kV1ConfigSize;
+          if (stored != v1_blob_size || header->size != kV1ConfigSize) {
+            result = ConfigLoadResult::Corrupt;
+          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
+            // Start from current defaults so every appended field has a valid
+            // value, then overwrite the unchanged v1 prefix.
+            Config migrated = config_defaults();
+            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV1ConfigSize);
+            sanitize_config(migrated);
+            config = migrated;
+            result = ConfigLoadResult::Migrated;
+          } else {
+            result = ConfigLoadResult::Corrupt;
+          }
+        } else {
+          // A newer format written by a different firmware build.
+          result = ConfigLoadResult::Stale;
+        }
       }
     }
   }
@@ -103,6 +195,10 @@ ConfigLoadResult config_load(Config& config) {
   switch (result) {
     case ConfigLoadResult::Loaded:
       Serial.println("[config] loaded saved configuration from NVS");
+      break;
+    case ConfigLoadResult::Migrated:
+      Serial.printf("[config] migrated v1 configuration to v%u (%u bytes preserved)\n",
+                    static_cast<unsigned>(kVersion), static_cast<unsigned>(kV1ConfigSize));
       break;
     case ConfigLoadResult::Stale:
       Serial.printf("[config] saved configuration format differs (%u bytes); using compiled defaults\n",
@@ -133,11 +229,12 @@ bool config_save(const Config& config) {
   blob.header.size = sizeof(Config);
   blob.config = config;
   blob.header.crc = 0;
-  blob.header.crc = blob_crc(blob);
+  uint8_t* bytes = reinterpret_cast<uint8_t*>(&blob);
+  blob.header.crc = blob_crc_bytes(bytes, sizeof(blob));
 
   // A second pass verifies that the checksum helper is deterministic before
   // the blob is committed.
-  if (blob.header.crc != blob_crc(blob)) {
+  if (blob.header.crc != blob_crc_bytes(bytes, sizeof(blob))) {
     g_prefs.end();
     Serial.println("[config] internal CRC error; settings not saved");
     return false;

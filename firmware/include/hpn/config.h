@@ -137,10 +137,59 @@ struct Config {
   // --- Output limits -------------------------------------------------------
   // Absolute upper bound for the mixer opening, in percent (10-100). L1 never
   // drives the valve above this value; L2 and the portal clamp their targets
-  // to it. This field reuses the former tail padding of the v1 NVS layout, so
-  // sizeof(Config) is unchanged and existing blobs remain valid. A stored 0
-  // (the old padding value) is upgraded to the 85 % default on load.
+  // to it. In the v1 layout this field reused the former tail padding; it is
+  // part of the unchanged 1288-byte prefix that v2 migration preserves.
   uint8_t mix_max_open_pct;
+
+  // --- Pump current measurement -------------------------------------------
+  // All current channels use the same ACS712/CT front end and are therefore
+  // calibrated together. watts = (rms_volts - offset_v) * w_per_v. Set
+  // pump_power_check_enabled=false to run without dry-run/welded protection
+  // (for example before the shunt has been calibrated on the plant).
+  float pump_current_w_per_v;
+  float pump_current_offset_v;
+  bool pump_power_check_enabled;
+
+  // --- Mixer operating window ---------------------------------------------
+  // Minimum opening while the floor circuit is in normal demand control. It
+  // is never applied to closing moves, safety closes, homing or a no-demand
+  // close, all of which must be able to reach 0 %.
+  uint8_t mix_min_open_pct;
+
+  // Two-point dynamic maximum. When enabled, the effective ceiling is the
+  // lower of the absolute ceiling and one of the two limits, selected by the
+  // boiler-side temperature around mix_max_switch_c with hysteresis.
+  bool mix_max_dynamic;
+  uint8_t mix_max_below_pct;
+  uint8_t mix_max_above_pct;
+  float mix_max_switch_c;
+  float mix_max_hysteresis_c;
+
+  // Soft over-temperature reaction. When the forward temperature reaches
+  // setpoint + delta, L2 drives to mix_overshoot_target_pct and holds it until
+  // the temperature falls below setpoint - recovery. This is warning-only; the
+  // hard over-temperature rule remains in L1.
+  float mix_overshoot_delta_c;
+  float mix_overshoot_recovery_c;
+  uint8_t mix_overshoot_target_pct;
+
+  // --- Sensor role verification -------------------------------------------
+  // Optional plausibility supervision: while heating is active, the boiler
+  // sensor should read no colder than the mixed flow, which should read no
+  // colder than the floor return (within the tolerance). Warning-only.
+  bool sensor_role_check_enabled;
+  float sensor_role_tolerance_c;
+
+  // --- Inferred DHW --------------------------------------------------------
+  // Optional fallback when no DHW meter is configured. A boiler-temperature
+  // drop while the heater is energised is treated as DHW charging. The
+  // inference ends when the temperature recovers; an over-long charge raises a
+  // warning so the assumption can be reviewed.
+  bool dhw_infer_enabled;
+  float dhw_infer_drop_c;
+  uint32_t dhw_infer_window_s;
+  float dhw_infer_recovery_c;
+  uint32_t dhw_infer_max_s;
 };
 
 // Mixer opening ceiling as a fraction (0.01-1.0). Single source of truth for
@@ -150,6 +199,29 @@ inline float mixer_ceiling(const Config& config) {
   if (pct < 1) pct = 1;
   if (pct > 100) pct = 100;
   return static_cast<float>(pct) / 100.0f;
+}
+
+// Normal floor-demand minimum opening as a fraction (0-1). Zero means the
+// valve may close fully during normal control; safety closes always use 0.
+inline float mixer_minimum(const Config& config) {
+  uint8_t pct = config.mix_min_open_pct;
+  if (pct > 100) pct = 100;
+  return static_cast<float>(pct) / 100.0f;
+}
+
+// Effective ceiling for the current boiler-side temperature side. `above` is
+// the hysteresis state maintained by L1. The absolute mix_max_open_pct always
+// wins when it is lower.
+inline float mixer_effective_ceiling(const Config& config, bool above) {
+  const float absolute = mixer_ceiling(config);
+  if (!config.mix_max_dynamic) {
+    return absolute;
+  }
+  uint8_t pct = above ? config.mix_max_above_pct : config.mix_max_below_pct;
+  if (pct < 1) pct = 1;
+  if (pct > 100) pct = 100;
+  const float dynamic = static_cast<float>(pct) / 100.0f;
+  return dynamic < absolute ? dynamic : absolute;
 }
 
 // Compiled-in defaults used before NVS has valid data. All values are safe

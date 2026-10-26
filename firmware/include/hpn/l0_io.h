@@ -32,7 +32,10 @@ void set_leds(const uint8_t* rgb, uint16_t count);
 // Sensor access. On hardware these are not implemented yet and report "no
 // data"; under emulation they return the values mocked in hpn::sim.
 bool read_temperature(TempRole role, float& celsius);
-float read_power_w(CurrentChannel channel);
+
+// Sample one current channel using the shared ACS712/CT calibration in
+// `config` (pump_current_w_per_v, pump_current_offset_v).
+float read_power_w(const Config& config, CurrentChannel channel);
 
 // Discover the sensors physically present on the temperature bus. The hardware
 // backend blocks for one conversion cycle; use it only for explicit discovery.

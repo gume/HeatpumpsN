@@ -56,11 +56,19 @@ drive GPIO15.
 > labels of the S2 Mini. The comments in the old YAML (e.g. `temp_pin: GPIO18`)
 > already refer to raw GPIOs.
 
-## 3. Output expansion: 74HC595
+## 3. Output expansion: serial output extender
 
-The old carrier has no direct relay GPIOs. A single 74HC595 drives the relay
-board and the analogue-MUX select lines. All logical outputs therefore share
-one 8-bit shift register and one latch.
+The old carrier has no direct relay GPIOs. One serial output extender drives the
+relay board and the analogue-MUX select lines. All logical outputs therefore
+share one 8-bit shift register and one latch.
+
+The part is **not a bare 74HC595**. It is a 74HC595-compatible serial output
+extender whose selected outputs pull to **GND** at power-on/reset. The relay
+board inputs are active-high, so a pulled-down (GND) output means the relay is
+**off**. That is why the `0x00` safe byte is correct for this carrier and why
+the firmware keeps `kActuatorOnLevel = HIGH`. Do not change the on/off levels
+based on a 595 datasheet alone; the polarity depends on the extender and the
+relay board together.
 
 Shift order is `MSBFIRST` with **bit 0 on Q0 (QA)**, matching the legacy
 ESPHome `sn74hc595` component.
@@ -85,9 +93,11 @@ floor pump.**
 
 ### 3.1 Safe output state
 
-`0x00` on the shift register means: all pumps off, heater off, mixer motion
-off (direction low), MUX channel 0 selected. That is the defined-safe state
-applied at boot and on any task-startup failure.
+`0x00` on the output extender means: all pumps off, heater off, mixer motion
+off (direction low), MUX channel 0 selected. Because the extender outputs pull
+to GND at reset and the relays are active-high, this is also the state the
+hardware itself presents before the first firmware write. It is applied again
+explicitly at boot and on any task-startup failure.
 
 `OE` is active low. The old ESPHome driver asserted it `HIGH` (disabled) while
 configuring pins, shifted `0x00`, pulsed the latch, and only then pulled it
@@ -152,11 +162,24 @@ Legacy ESPHome behaviour, for reference:
   ADC value is multiplied by 0.19".
 
 That calibration is empirical and tied to the legacy carrier's divider and
-burden resistor. **Re-derive it with a clamp meter before trusting power
-values**, and re-derive it again for the new board. The firmware keeps
-`has_pump_power[i]` flags so a channel that is not populated can be disabled.
+burden resistor. The firmware now samples current and computes power in
+`l0::read_power_w(const Config&, CurrentChannel)`:
 
-The firmware does not sample current yet; `l0::tick()` is intentionally idle.
+```
+watts = (rms_volts - pump_current_offset_v) * pump_current_w_per_v
+```
+
+Both parameters are editable under **Settings → Hardware → Pump current
+calibration** and are shared by every channel. The defaults reproduce the
+legacy fit (offset `0.004 V`, slope `588.2 W/V`), so **re-derive them with a
+clamp meter before trusting the values**, and re-derive again for the new
+board. The firmware keeps `has_pump_power[i]` flags so a channel that is not
+populated can be disabled.
+
+Current-based dry-run and welded-relay protection can be switched off with
+`pump_power_check_enabled` while the shunt is uncalibrated. Measurements remain
+visible in the UI and MQTT; only the protection logic is skipped. Turn it back
+on once the calibration is verified.
 
 ## 5. 1-Wire temperature sensors
 
@@ -207,8 +230,12 @@ verify it on the strip before relying on the mapping.
   real and must remain covered.
 - **Summer mode:** blocks all heating and pump switching and the mixer.
 - **Safety override:** a manual override that auto-expires after one minute.
-- **Mixer stall check:** counts stalled strokes and stops driving the mixer
-  after repeated failures.
+- **Mixer stall check:** the legacy firmware counted stalled strokes and
+  stopped driving the mixer after repeated failures. The new firmware does not
+  repeat that: the old detector relied on the supply temperature and was
+  unreliable. It instead raises warning-only indications for a move longer
+  than a full stroke and for a valid external encoder that does not respond
+  during a commanded move.
 - **Sequence on pump-off:** turning off the floor pump also closed the mixer in
   the old firmware.
 
@@ -218,7 +245,7 @@ verify it on the strip before relying on the mapping.
 | --- | --- |
 | Carrier profile selection | `firmware/platformio.ini` (`HPN_CARRIER_HHN1`) |
 | Pin/bit description | `firmware/include/hpn/board.h`, `firmware/src/board.cpp` |
-| Safe boot, 74HC595 init, direct-GPIO fallback | `firmware/src/l0_io.cpp` |
+| Safe boot, output-extender init, direct-GPIO fallback | `firmware/src/l0_io.cpp` |
 | Real pins vs emulation | `firmware/src/io_backend.cpp`, `firmware/src/sim.cpp` |
 | Config defaults (sensor IDs, LED count, travel time) | `hpn::board_apply_defaults()` |
 | MUX channel selection | `l0::select_current_channel()` |
@@ -226,20 +253,26 @@ verify it on the strip before relying on the mapping.
 
 Implemented: output safe state, relay control, mixer direction/motion, MUX
 channel selection, LED chain output and the five-LED status animation, RTOS task
-set, emulation of this carrier.
+set, emulation of this carrier, 1-Wire sampling, current sampling with a shared
+calibration, pump dry-run/welded protection with a disable switch, the L1
+opening ceiling/minimum/dynamic maximum, warning-only mixer motion indications,
+sensor-role plausibility supervision and the optional inferred-DHW fallback.
 
-Partially implemented: 1-Wire sampling, hardware current sampling and power
-plausibility, dead-reckoned mixer movement, and L1/L2/L4. `l0::tick()` schedules
-the polling; the production control/safety loops are still being completed.
+Partially implemented: the remaining L1/L2/L4 coordination and observer-owned
+control tuning. `l0::tick()` schedules the polling; the production control and
+safety loops are still being completed.
 
 ## 9. Bring-up checklist before connecting the plant
 
 1. Verify `OE` polarity and add the pull-up if missing.
-2. Confirm the relay board is active-high at the 74HC595 outputs.
+2. Confirm the relay board is still active-high at the output-extender pins
+   (the polarity is confirmed for the current carrier, but re-check after any
+   board swap).
 3. Confirm which legacy pump (Q5/Q6/Q7) is the floor circuit.
-4. Test outputs with lamps/relays only, never with pumps, until L1 exists.
-5. Verify the 74HC595 bit map with a logic probe: set one bit at a time.
-6. Verify MUX channel mapping against a known load per current sensor.
-7. Re-calibrate the current sensors with a clamp meter.
+4. Verify the output-extender bit map with a logic probe: set one bit at a time.
+5. Verify MUX channel mapping against a known load per current sensor.
+6. Calibrate the current channels with a clamp meter.
+7. Test outputs with lamps/relays only, never with pumps, until L1 has been
+   verified on the emulated carrier.
 8. Confirm the external over-temperature cutout and manual pump-cut switch are
    fitted; firmware is not a substitute for them.

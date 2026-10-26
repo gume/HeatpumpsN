@@ -842,12 +842,14 @@ void handle_meter_message(const char* topic, const char* payload) {
     char value[32];
     if (extract_payload_field(payload, g_config->dhw_meter_field, value, sizeof(value))) {
       if (parse_on_off(value, active)) {
+        g_state->dhw_meter_active = active;
         g_state->dhw_active = active;
         return;
       }
       char* end = nullptr;
       const long numeric = strtol(value, &end, 10);
       if (end != value) {
+        g_state->dhw_meter_active = numeric != 0;
         g_state->dhw_active = numeric != 0;
         return;
       }
@@ -855,6 +857,7 @@ void handle_meter_message(const char* topic, const char* payload) {
     // Some HA discovery entries use a value_template that already extracts the
     // boolean, so the state payload is just ON/OFF.
     if (parse_on_off(payload, active)) {
+      g_state->dhw_meter_active = active;
       g_state->dhw_active = active;
     }
   }

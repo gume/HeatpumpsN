@@ -8,9 +8,9 @@ FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
 HomeNet Heatpumps 1.0 and 2.0, a compile-time **I/O emulation** backend so the
 controller can be developed on a boardless devkit, a station-mode **Wi-Fi
 client**, a **MQTT/Home Assistant** integration, and a LittleFS-backed **web
-portal** in L4. Production L1 safety arbitration, L2 control and L3 adaptation
-are still TODO; the bench-only loopback used by Test Mode is described below.
-The next implementation steps are described in
+portal** in L4. L1 safety arbitration and L2 floor control are implemented;
+L3 adaptation and the observer-owned tuning remain TODO. The next implementation
+steps are described in
 [`../plans/controller node/`](../plans/controller%20node/).
 
 ## Targets, carriers and backends
@@ -19,14 +19,14 @@ The next implementation steps are described in
 | --- | --- | --- | --- | --- |
 | `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — default env |
 | `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
-| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, 74HC595 + MUX |
+| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, output extender + MUX |
 | `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, 2.0 target |
 | `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, 2.0 target |
 
 Carriers describe wiring; the backend describes whether writes reach pins. They
 are independent compile-time choices:
 
-- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: 74HC595 outputs, analogue
+- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: serial output extender, analogue
   current MUX, 5 LEDs, 1-Wire. ESP32-S2 in the field.
 - `-DHPN_CARRIER_BOARDLESS` — bare devkit, pins unassigned
   (`HPN_GPIO_UNASSIGNED`) until the 2.0 layout exists.
@@ -34,9 +34,9 @@ are independent compile-time choices:
   instead of pins.
 
 The HomeNet Heatpumps 1.0 carrier is documented in
-[`docs/hhn-1.0.md`](docs/hhn-1.0.md): pin map, 74HC595 bit map, MUX channels,
-ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety caveats of that
-wiring. The 2.0 carrier is still under planning and has no profile yet;
+[`docs/hhn-1.0.md`](docs/hhn-1.0.md): pin map, serial output extender bit map,
+MUX channels, ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety
+caveats of that wiring. The 2.0 carrier is still under planning and has no profile yet;
 ESP32-C3 and ESP32-S3 are its primary targets.
 
 The emulation model, its API and the bench web page are described in
@@ -64,13 +64,19 @@ Notes:
   are created with `xTaskCreate`; none is pinned to a non-existent Core 1.
 - Health supervision covers `T_safety`, `T_io` and `T_control` only. `T_comms`
   and `T_logger` are deliberately excluded so a network stall cannot trip the
-  watchdog.
+  watchdog. AsyncTCP subscribes its own service task to the ESP task watchdog
+  by default; the build sets `-DCONFIG_ASYNC_TCP_USE_WDT=0` to keep that
+  guarantee, otherwise one slow HTTP handler (a large JSON response, OTA, weak
+  Wi-Fi) leaves the shared watchdog entry stale and resets the controller.
 - `T_io` subscribes to the task watchdog and feeds it only while the real-time
   tasks are within their deadlines. A hung safety or control task therefore
-  resets the controller instead of leaving outputs latched.
+  resets the controller instead of leaving outputs latched. Each withheld feed
+  is logged once per second with the supervised task ages, so a reset can be
+  diagnosed from the captured boot log.
 - Task bodies call the corresponding layer `tick()`. L0, the Wi-Fi client,
-  MQTT/HA and the portal are implemented; L1/L2 currently contain only the
-  bench loopback used by Test Mode.
+  MQTT/HA and the portal are implemented. L1 owns the safety supervision
+  (limits, mixer window, pump/relay plausibility, role and DHW warnings) and L2
+  owns floor/mixer coordination; L3 adaptation is still pending.
 
 ## Wi-Fi client
 
@@ -153,8 +159,8 @@ carry the accepted `*_intended` command, while the physical binary sensors
 carry the L1/L0 output state. The floor setpoint command updates
 `Config::floor_setpoint_shadow`; it is an HA-owned runtime shadow, not a
 Category 1 configuration value. MQTT commands set `*_intended`, so on the bench
-they flow through `HPN_BENCH_LOOPBACK` to the emulated carrier; the production
-L2/L1 path is still TODO.
+they flow through L2 (Test Mode passes them through directly) and L1's safety
+arbitration before reaching the carrier.
 
 State and discovery are retained. The client reconnects every 5 s while the
 broker is unreachable, and the portal reports `mqtt.state`, broker, connect
@@ -241,8 +247,12 @@ The event, access and slow logs are RAM-only in this build; they reset on
 reboot. Event and slow records can optionally be mirrored to MQTT (see above).
 Relay counters are persisted hourly in hardware builds and stay in RAM under
 emulation (see above). Configuration, counters and the anti-seize schedule are
-persisted as CRC32-protected NVS blobs. There is no NVS migration path: a blob
-from another format version is rejected and compiled defaults are used. The
+persisted as CRC32-protected NVS blobs. The config blob is versioned: a v1 blob
+is migrated to v2 by copying its unchanged 1288-byte prefix over current
+defaults, preserving every existing setting while initialising the appended
+fields, and the upgraded blob is saved immediately. Counters and the anti-seize
+schedule still have no migration path; an old-format blob of those is
+discarded. The
 `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` latch is held for the current
 boot: saving settings rewrites the config blob, but the live flag clears only
 on the next boot once every persisted blob validates. This keeps unrelated
@@ -266,12 +276,12 @@ LEDs through L0's `set_leds`:
 
 ### Test Mode and the bench loopback
 
-`HPN_BENCH_LOOPBACK` is compiled only into `esp32dev_sim`. L2 copies
-`*_intended` to `*_requested`, and L1 applies those requests to the emulated
-carrier. The only L1 interlock in this path is "heater requires an active
-pump"; over-temperature, gradient, sensor-posture and demand/after-heating
-rules remain TODO(L1). The loopback is a bench aid, **not** safety
-arbitration, and never appears in a hardware build.
+`HPN_BENCH_LOOPBACK` is compiled only into `esp32dev_sim`. In Test Mode L2
+copies `*_intended` to `*_requested`; L1 still applies the complete safety set
+(over-temperature, gradient, anti-short-cycle, pump/relay plausibility, mixer
+window and sensor supervision) and drives the relays. The loopback is a bench
+aid for exercising the portal and the output path, **not** a bypass of safety
+arbitration, and it never appears in a hardware build.
 
 Test Mode expires after `safety.test_mode_max_s` (default 7200 s).
 Deactivation clears manual outputs and returns the controller to its configured
@@ -356,9 +366,9 @@ local `pio run -t upload` first. Keep the helper inside `src/` and keep the
 
 `tests/runtime_check.py` is a repeatable integration check against a running
 controller. It prints `PASSED` on success and covers the HTTP API, the RAM log
-rings, MQTT discovery/state topics and log streaming, HA error-sensor
-transitions, the five-LED mapping, the L1 mixer opening ceiling, and (with
-`--serial`) the boot log.
+rings, the versioned config contract, MQTT discovery/state topics and log
+streaming, HA error-sensor transitions, the five-LED mapping, the L1 mixer
+opening ceiling, sensor-role verification and (with `--serial`) the boot log.
 
 ```bash
 python3 tests/runtime_check.py --base-url http://192.168.2.14
@@ -366,10 +376,10 @@ tests/flash_and_check.sh --serial        # build + flash esp32dev_sim + checks
 ```
 
 Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-26):
-`PASSED: 59 passed, 0 failed, 0 skipped` with `--serial`, and `52/52` without
+`PASSED: 65 passed, 0 failed, 0 skipped` with `--serial`, and `58/58` without
 the reboot. The boot log showed the saved config loading, no Preferences
-errors, no `501` latch, no crash markers and the `[l1] mixer opening limit`
-line.
+errors, no `501` latch, no crash markers, the `[l1] mixer opening limit` line
+and the new dynamic-maximum/minimum lines.
 
 Requirements, the full check list and the state the suite restores are in
 [`../tests/README.md`](../tests/README.md). `--serial` reboots the board.
@@ -380,7 +390,7 @@ Requirements, the full check list and the state the suite restores are in
 firmware/
 ├── platformio.ini
 ├── docs/
-│   ├── hhn-1.0.md            # HomeNet Heatpumps 1.0 carrier: pins, 74HC595, MUX
+│   ├── hhn-1.0.md            # HomeNet Heatpumps 1.0 carrier: pins, output extender, MUX
 │   └── io-emulation.md       # emulation model, API, web integration
 ├── include/hpn/          # public contracts shared by all layers
 │   ├── build_target.h    # compile-time MCU / core count
@@ -441,18 +451,33 @@ is a Python SConscript despite its extension; see the remote upload section.
 - The mixer opening is capped by `safety.mix_max_open_pct` (default **85 %**).
   L1 refuses to open past it on every move, including maintenance sweeps; L2
   and the portal clamp their targets to it. Closing and end-stop homing are
-  unaffected.
+  unaffected. An optional two-point dynamic maximum can lower the ceiling above
+  a boiler-temperature switch point, and the effective ceiling is always the
+  minimum of the absolute and dynamic limits.
+- `safety.mix_min_open_pct` (default **40 %**) is a normal floor-demand minimum
+  only. It never blocks closing, safety close, homing, DHW or a no-demand close.
+- `pump_power_check_enabled` gates dry-run and welded-relay detection. Leave it
+  off until the shared current calibration (`pump_current_w_per_v`,
+  `pump_current_offset_v`) has been checked with a clamp meter; measurements
+  stay visible either way.
+- Mixer anomalies (motion longer than a full stroke, or no encoder response
+  during a commanded move) and sensor-role/DHW inference problems are
+  **warning-only**. They do not stop the plant; L1's hard over-temperature rule
+  remains authoritative.
 - `HPN_BENCH_LOOPBACK` is enabled only for `esp32dev_sim`. It is a wiring aid
   for the portal, not L1 safety arbitration. Never add it to a hardware build.
 - The portal's Test Mode and configuration editor are not safety-rated. The
   external hardware over-temperature cutout and pump-cut switch remain
   mandatory and independent of this firmware.
 - On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX select lines
-  share one 74HC595. Keep a single writer (`T_io`); the safe byte is `0x00`.
-  See [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
+  share one serial output extender (not a bare 74HC595). Keep a single writer
+  (`T_io`); the safe byte is `0x00`. See
+  [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
 - Unassigned pins use `HPN_GPIO_UNASSIGNED` and are never driven.
-- Relay-driver polarity at the 74HC595 outputs is assumed **active-high**;
-  confirm it before connecting pumps or the boiler contact.
+- The carrier's output extender pulls its selected outputs to GND at
+  power-on/reset and the relay board is active-high, so `0x00` is the safe
+  state. This polarity is confirmed for the 1.0 carrier; re-check it after any
+  board swap.
 - The external hardware over-temperature cutout and pump-cut switch (Layer 0)
   are mandatory and independent of this firmware.
 - `HPN_HAS_DUAL_CORE` is 0 for ESP32-S2 and ESP32-C3. Do not call

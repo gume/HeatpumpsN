@@ -23,6 +23,7 @@
 #include "hpn/l0_io.h"
 #include "hpn/logger.h"
 #include "hpn/mqtt_client.h"
+#include "hpn/sensor_roles.h"
 #include "hpn/wifi_client.h"
 
 #if defined(HPN_IO_EMULATION)
@@ -264,6 +265,11 @@ void add_alarm_strings(JsonArray out, uint32_t alarms) {
   if (alarms & WARN_PUMP_DRY_RUN) out.add("pump_dry_run");
   if (alarms & ALARM_WELDED_RELAY) out.add("welded_relay");
   if (alarms & WARN_NVS_CORRUPTED) out.add("nvs_corrupted");
+  if (alarms & WARN_MIX_MOTION_OVERRUN) out.add("mix_motion_overrun");
+  if (alarms & WARN_MIX_NO_RESPONSE) out.add("mix_no_response");
+  if (alarms & WARN_MIX_OVERSHOOT) out.add("mix_overshoot");
+  if (alarms & WARN_SENSOR_ROLE_SUSPECT) out.add("sensor_role_suspect");
+  if (alarms & WARN_DHW_INFER_TIMEOUT) out.add("dhw_infer_timeout");
 }
 
 void add_temp_json(JsonObject temps, JsonObject health, const char* key, const SensorReading& reading,
@@ -426,7 +432,11 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
       add_circuit_json(circuits, "floor", st.pump_floor_intended, st.pump_floor_phys, st.after_heating_timer_s);
   floor["mixerPos"] = st.pos_est_dr * 100.0f;
   floor["mixerTarget"] = st.mix_target_pos * 100.0f;
-  floor["mixerMaxPct"] = cfg.mix_max_open_pct;
+  floor["mixerMaxPct"] = (isfinite(st.mix_ceiling) ? st.mix_ceiling : mixer_ceiling(cfg)) * 100.0f;
+  floor["mixerMaxAbsPct"] = cfg.mix_max_open_pct;
+  floor["mixerMinPct"] = cfg.mix_min_open_pct;
+  floor["mixerMaxDynamic"] = cfg.mix_max_dynamic;
+  floor["mixerOvershoot"] = st.mix_overshoot;
   floor["mixerMotion"] = st.mix_motion;
   floor["mixerDir"] = st.mix_dir;
   floor["mixerEmergency"] = st.mix_emergency;
@@ -491,6 +501,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   system["epoch"] = st.wall_time_epoch_s;
   system["ntpSynced"] = st.wall_time_epoch_s > 1600000000ULL;
   system["dhwActive"] = st.dhw_active;
+  system["dhwInferred"] = st.dhw_inferred;
+  system["dhwMeterActive"] = st.dhw_meter_active;
+  system["pumpPowerCheck"] = cfg.pump_power_check_enabled;
   system["mixerIntegrator"] = st.integrator_val;
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();
@@ -564,6 +577,22 @@ void fill_safety(JsonObject o, const Config& c) {
   o["grad_limit"] = c.grad_limit;
   o["mix_safe_pos"] = c.mix_safe_pos;
   o["mix_max_open_pct"] = c.mix_max_open_pct;
+  o["mix_min_open_pct"] = c.mix_min_open_pct;
+  o["mix_max_dynamic"] = c.mix_max_dynamic;
+  o["mix_max_below_pct"] = c.mix_max_below_pct;
+  o["mix_max_above_pct"] = c.mix_max_above_pct;
+  o["mix_max_switch_c"] = c.mix_max_switch_c;
+  o["mix_max_hysteresis_c"] = c.mix_max_hysteresis_c;
+  o["mix_overshoot_delta_c"] = c.mix_overshoot_delta_c;
+  o["mix_overshoot_recovery_c"] = c.mix_overshoot_recovery_c;
+  o["mix_overshoot_target_pct"] = c.mix_overshoot_target_pct;
+  o["sensor_role_check_enabled"] = c.sensor_role_check_enabled;
+  o["sensor_role_tolerance_c"] = c.sensor_role_tolerance_c;
+  o["dhw_infer_enabled"] = c.dhw_infer_enabled;
+  o["dhw_infer_drop_c"] = c.dhw_infer_drop_c;
+  o["dhw_infer_window_s"] = c.dhw_infer_window_s;
+  o["dhw_infer_recovery_c"] = c.dhw_infer_recovery_c;
+  o["dhw_infer_max_s"] = c.dhw_infer_max_s;
   o["boiler_min_off_ms"] = c.boiler_min_off_ms;
   o["demand_timeout_s"] = c.demand_timeout_s;
   o["pump_stop_after_heating_s"] = c.pump_stop_after_heating_s;
@@ -585,6 +614,9 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["encoder_check_pulses"] = c.encoder_check_pulses;
   o["encoder_staleness_s"] = c.encoder_staleness_s;
   o["pos_source"] = c.pos_source;
+  o["pump_current_w_per_v"] = c.pump_current_w_per_v;
+  o["pump_current_offset_v"] = c.pump_current_offset_v;
+  o["pump_power_check_enabled"] = c.pump_power_check_enabled;
 
   o["gpio_pump_floor"] = c.gpio_pump_floor;
   o["gpio_pump_rad1"] = c.gpio_pump_rad1;
@@ -839,6 +871,28 @@ bool apply_safety(JsonObject in, Config& c, String& err) {
   if (!json_float(in, "grad_limit", c.grad_limit, 0.05f, 5.0f, err)) return false;
   if (!json_float(in, "mix_safe_pos", c.mix_safe_pos, 0.0f, 1.0f, err)) return false;
   if (!json_uint8(in, "mix_max_open_pct", c.mix_max_open_pct, 10, 100, err)) return false;
+  if (!json_uint8(in, "mix_min_open_pct", c.mix_min_open_pct, 0, 100, err)) return false;
+  if (!json_bool(in, "mix_max_dynamic", c.mix_max_dynamic, err)) return false;
+  if (!json_uint8(in, "mix_max_below_pct", c.mix_max_below_pct, 10, 100, err)) return false;
+  if (!json_uint8(in, "mix_max_above_pct", c.mix_max_above_pct, 10, 100, err)) return false;
+  if (!json_float(in, "mix_max_switch_c", c.mix_max_switch_c, 0.0f, 90.0f, err)) return false;
+  if (!json_float(in, "mix_max_hysteresis_c", c.mix_max_hysteresis_c, 0.5f, 10.0f, err))
+    return false;
+  if (!json_float(in, "mix_overshoot_delta_c", c.mix_overshoot_delta_c, 0.5f, 10.0f, err))
+    return false;
+  if (!json_float(in, "mix_overshoot_recovery_c", c.mix_overshoot_recovery_c, 0.0f, 10.0f, err))
+    return false;
+  if (!json_uint8(in, "mix_overshoot_target_pct", c.mix_overshoot_target_pct, 0, 100, err))
+    return false;
+  if (!json_bool(in, "sensor_role_check_enabled", c.sensor_role_check_enabled, err)) return false;
+  if (!json_float(in, "sensor_role_tolerance_c", c.sensor_role_tolerance_c, 0.5f, 20.0f, err))
+    return false;
+  if (!json_bool(in, "dhw_infer_enabled", c.dhw_infer_enabled, err)) return false;
+  if (!json_float(in, "dhw_infer_drop_c", c.dhw_infer_drop_c, 1.0f, 20.0f, err)) return false;
+  if (!json_uint(in, "dhw_infer_window_s", c.dhw_infer_window_s, 10, 3600, err)) return false;
+  if (!json_float(in, "dhw_infer_recovery_c", c.dhw_infer_recovery_c, 0.0f, 20.0f, err))
+    return false;
+  if (!json_uint(in, "dhw_infer_max_s", c.dhw_infer_max_s, 60, 86400, err)) return false;
   if (!json_uint(in, "boiler_min_off_ms", c.boiler_min_off_ms, 0, 3600000, err)) return false;
   if (!json_uint(in, "demand_timeout_s", c.demand_timeout_s, 10, 3600, err)) return false;
   if (!json_uint(in, "pump_stop_after_heating_s", c.pump_stop_after_heating_s, 0, 3600, err))
@@ -851,6 +905,20 @@ bool apply_safety(JsonObject in, Config& c, String& err) {
 
   if (c.t_max_warn >= c.t_max_hard) {
     err = "t_max_warn must be below t_max_hard";
+    return false;
+  }
+  if (c.mix_min_open_pct > c.mix_max_open_pct) {
+    err = "mix_min_open_pct must not exceed mix_max_open_pct";
+    return false;
+  }
+  if (c.mix_max_dynamic) {
+    if (c.mix_min_open_pct > c.mix_max_below_pct || c.mix_min_open_pct > c.mix_max_above_pct) {
+      err = "mix_min_open_pct must not exceed either dynamic maximum";
+      return false;
+    }
+  }
+  if (c.dhw_infer_max_s < c.dhw_infer_window_s) {
+    err = "dhw_infer_max_s must be at least dhw_infer_window_s";
     return false;
   }
   return true;
@@ -870,6 +938,11 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_uint(in, "encoder_check_pulses", c.encoder_check_pulses, 1, 10000, err)) return false;
   if (!json_uint(in, "encoder_staleness_s", c.encoder_staleness_s, 10, 86400, err)) return false;
   if (!json_uint8(in, "pos_source", c.pos_source, 0, 1, err)) return false;
+  if (!json_float(in, "pump_current_w_per_v", c.pump_current_w_per_v, 1.0f, 5000.0f, err))
+    return false;
+  if (!json_float(in, "pump_current_offset_v", c.pump_current_offset_v, 0.0f, 1.0f, err))
+    return false;
+  if (!json_bool(in, "pump_power_check_enabled", c.pump_power_check_enabled, err)) return false;
 
   if (!json_pin(in, "gpio_pump_floor", c.gpio_pump_floor, err)) return false;
   if (!json_pin(in, "gpio_pump_rad1", c.gpio_pump_rad1, err)) return false;
@@ -974,7 +1047,18 @@ bool apply_system(JsonObject in, Config& c, String& err) {
 // ---------------------------------------------------------------------------
 
 void send_json(AsyncWebServerRequest* request, int code, const JsonDocument& doc) {
-  AsyncResponseStream* response = request->beginResponseStream("application/json");
+  // Size the response buffer up front. AsyncResponseStream grows by one byte at
+  // a time past its initial 1460-byte ring buffer (each growth reallocates and
+  // copies the whole payload), so serialising the 10 KB event/slow-log
+  // responses took thousands of allocations inside the network task. That
+  // throttled the HTTP server and could run the heap out mid-payload, leaving a
+  // truncated body on the wire. measureJson() is a cheap, allocation-free pass
+  // and lets the stream allocate exactly once.
+  size_t size = measureJson(doc);
+  if (size == 0) {
+    size = 1;
+  }
+  AsyncResponseStream* response = request->beginResponseStream("application/json", size);
   response->setCode(code);
   response->addHeader("Cache-Control", "no-store");
   serializeJson(doc, *response);
@@ -1926,6 +2010,41 @@ void handle_sensors_discover(AsyncWebServerRequest* request) {
   send_json(request, 200, doc);
 }
 
+void handle_sensor_roles(AsyncWebServerRequest* request) {
+  if (g_config == nullptr || g_state == nullptr) {
+    send_error(request, 503, "controller state not ready");
+    return;
+  }
+
+  const SensorRoleResult roles = verify_sensor_roles(*g_config, *g_state);
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["summary"] = sensor_role_summary(roles);
+  doc["measurable"] = roles.measurable;
+  doc["plausible"] = roles.plausible;
+  doc["heating_active"] = roles.heating_active;
+  doc["all_valid"] = roles.all_valid;
+  doc["tolerance_c"] = roles.tolerance_c;
+
+  JsonObject temps = doc["temperatures"].to<JsonObject>();
+  if (roles.all_valid) {
+    temps["boiler"] = roles.boiler_c;
+    temps["mix"] = roles.mix_c;
+    temps["return"] = roles.return_c;
+  } else {
+    temps["boiler"] = nullptr;
+    temps["mix"] = nullptr;
+    temps["return"] = nullptr;
+  }
+
+  JsonObject checks = doc["checks"].to<JsonObject>();
+  checks["boiler_ge_mix"] = roles.boiler_ge_mix;
+  checks["mix_ge_return"] = roles.mix_ge_return;
+  checks["boiler_ge_return"] = roles.boiler_ge_return;
+
+  send_json(request, 200, doc);
+}
+
 void handle_counters_get(AsyncWebServerRequest* request) {
   CounterEntry copy[CTR_COUNT] = {};
   taskENTER_CRITICAL(&g_counter_mux);
@@ -2096,7 +2215,10 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
       send_error(request, 409, "mixer is locked by an emergency close");
       return;
     }
-    const float ceiling = g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f;
+    const float ceiling =
+        g_state != nullptr && isfinite(g_state->mix_ceiling) && g_state->mix_ceiling > 0.0f
+            ? g_state->mix_ceiling
+            : (g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f);
 
     if (strcmp(mixer, "stop") == 0) {
       // Freeze the servo where the valve is now so it does not chase the old
@@ -2522,7 +2644,10 @@ void handle_sim_intent(AsyncWebServerRequest* request, JsonVariant& json) {
   if (in["pump_floor"].is<bool>()) g_state->pump_floor_intended = in["pump_floor"].as<bool>();
   if (in["pump_rad1"].is<bool>()) g_state->pump_rad1_intended = in["pump_rad1"].as<bool>();
   if (in["pump_rad2"].is<bool>()) g_state->pump_rad2_intended = in["pump_rad2"].as<bool>();
-  if (in["dhw_active"].is<bool>()) g_state->dhw_active = in["dhw_active"].as<bool>();
+  if (in["dhw_active"].is<bool>()) {
+    g_state->dhw_meter_active = in["dhw_active"].as<bool>();
+    g_state->dhw_active = g_state->dhw_meter_active;
+  }
   if (in["keepalive"].is<bool>() && in["keepalive"].as<bool>()) {
     g_state->keepalive_age_s = 0;
   }
@@ -2964,6 +3089,7 @@ void register_routes() {
   g_server.on(AsyncURIMatcher::exact("/api/log/access"), HTTP_GET, handle_log_access);
   g_server.on(AsyncURIMatcher::exact("/api/log/slow"), HTTP_GET, handle_log_slow);
   g_server.on(AsyncURIMatcher::exact("/api/sensors/discover"), HTTP_GET, handle_sensors_discover);
+  g_server.on(AsyncURIMatcher::exact("/api/sensors/roles"), HTTP_GET, handle_sensor_roles);
   g_server.on(AsyncURIMatcher::exact("/api/counters"), HTTP_GET, handle_counters_get);
   g_server.on(AsyncURIMatcher::exact("/api/counters/reset"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {

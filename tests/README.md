@@ -1,8 +1,10 @@
 # Runtime checks
 
 End-to-end checks against a **running** controller. They complement the native
-unit tests in `firmware/test/`: these exercise the real HTTP API, the RAM log
-rings, MQTT discovery/state publishing and the emulation build's LED mapping.
+unit tests in `firmware/test/`: these exercise the real HTTP API, the versioned
+config contract, the RAM log rings, MQTT discovery/state publishing, the
+emulation build's LED mapping, the mixer opening window and sensor-role
+verification.
 
 `runtime_check.py` prints one line per check and finishes with either
 `PASSED: ...` (exit code 0) or `FAILED: ...` (exit code 1).
@@ -20,8 +22,8 @@ tests/flash_and_check.sh --serial
 A successful run ends with:
 
 ```
-PASSED: 59 passed, 0 failed, 0 skipped   # with --serial
-PASSED: 52 passed, 0 failed, 0 skipped   # without --serial
+PASSED: 65 passed, 0 failed, 0 skipped   # with --serial
+PASSED: 58 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.
@@ -73,10 +75,13 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    uptime advances, RAM log capacities are 96 events / 180 slow samples at a
    10 s cadence, and MQTT is connected when enabled.
 2. **Portal assets** — `/` and `/js/app.js` are served and contain the
-   dashboard LED mirror and the error-text row.
-3. **Config contract** — the MQTT log fields exist on `/api/config/network`,
-   `mix_max_open_pct` exists on `/api/config/safety`, and the obsolete
-   pulse-width fields are gone.
+   dashboard LED mirror, the error-text row, the role-verification action, the
+   pump-current calibration section and the minimum-opening field.
+3. **Config contract** — the MQTT log fields exist on `/api/config/network`;
+   the mixer window, overshoot, sensor-role and inferred-DHW fields exist on
+   `/api/config/safety`; the pump calibration fields and protection switch
+   exist on `/api/config/hardware`; `/api/sensors/roles` exposes the documented
+   shape; and the obsolete pulse-width fields are gone.
 4. **RAM logs** — `/api/log/events` and `/api/log/slow` are populated, stay
    within capacity, have the documented record shape, and no NVS-corruption
    event (501) was latched.
@@ -90,7 +95,9 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    `system_error_text` while the numeric code stays `0`; warning recovery,
    a floor return sensor fault (`202`) and a critical mixer sensor fault
    (`201`) each update both topics, and recovery returns to `0` / `No error`.
-   The warning text must not contain a double space.
+   The warning text must not contain a double space. The critical fault is held
+   for 2.5 s so the 1 s RAM-logger tick records the `201` transition, which is
+   then asserted through `/api/log/events`.
 8. **LED mapping** — idle, radiator pumps (LED 3/4 orange), DHW (LED 1 cyan),
    heater (LED 1 orange) and floor flush (LED 2 cyan) states. A critical
    alarm must make LED 0 blink red.
@@ -103,7 +110,13 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
     to 40 % mid-move; L1 must stop at 40 % with the motor off, the live value
     must follow, and the portal must reject a target above the ceiling with
     HTTP 400.
-11. **Serial boot (optional)** — the board boots with the saved config, logs
+11. **Sensor role verification** (emulation build) — with Test Mode heating
+    active and valid safe temperatures, `/api/sensors/roles` must report
+    `measurable` and `plausible`. Inverting boiler and return temperatures must
+    keep the check measurable but report `plausible=false` with the
+    boiler ≥ forward comparison false. The check is only possible while the
+    heater and floor pump are physically running.
+12. **Serial boot (optional)** — the board boots with the saved config, logs
     no Preferences errors, no NVS corruption and no crash markers, then
     reconnects Wi-Fi and MQTT.
 
@@ -125,6 +138,11 @@ The script is written to be re-runnable on a shared bench:
 - The mixer-ceiling check temporarily sets `mix_max_open_pct=100` and
   `travel_time_ms=4000`, activates Test Mode, moves the valve, then restores
   both values and the previous Test Mode state.
+- The sensor-role check temporarily enables `sensor_role_check_enabled`, pauses
+  `boiler_min_off_ms`, activates Test Mode, drives the heater + floor pump with
+  safe temperatures, inverts the boiler/return simulator answers, then restores
+  the flag, the window, the temperatures, the intents and the previous Test
+  Mode state.
 - `--broker` changes `mqtt_host`/`mqtt_port` only for the duration of the run.
 - `--serial` **reboots the controller**; run it last.
 
@@ -133,7 +151,7 @@ save performed by the normal config PUT endpoint.
 
 ## Notes and limitations
 
-- Error-sensor, LED and mixer-ceiling enforcement checks require
+- Error-sensor, LED, mixer-ceiling and sensor-role checks require
   `HPN_IO_EMULATION` (the `esp32dev_sim` environment); they are reported as
   skipped otherwise.
 - Counter persistence and anti-seize CRC writes are not exercised on the

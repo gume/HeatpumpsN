@@ -21,6 +21,15 @@ bool g_floor_flush_active = false;
 bool g_floor_pause_active = false;
 bool g_floor_was_on = false;
 float g_integrator = 0.0f;
+bool g_overshoot_latched = false;
+
+// Inferred-DHW state. The peak is the most recent boiler-side temperature
+// before the drop that starts an inference.
+bool g_dhw_inferred = false;
+bool g_dhw_timeout = false;
+uint32_t g_dhw_infer_start_ms = 0;
+uint32_t g_dhw_peak_ms = 0;
+float g_dhw_peak_c = NAN;
 
 float clampf(float value, float low, float high) {
   if (value < low) return low;
@@ -41,6 +50,142 @@ bool radiator_active(const SystemState& state) {
          state.pump_rad2_phys;
 }
 
+float mixer_ceiling_or_state(const Config& config, const SystemState& state) {
+  const float ceiling =
+      isfinite(state.mix_ceiling) && state.mix_ceiling > 0.0f ? state.mix_ceiling
+                                                             : mixer_ceiling(config);
+  return clampf(ceiling, 0.01f, 1.0f);
+}
+
+// Soft overshoot reaction. This is separate from the L1 hard over-temperature
+// rule: it is a control response with a warning, not a safety latch.
+void service_overshoot(const Config& config, SystemState& state) {
+  const float setpoint = config.floor_setpoint_shadow;
+  const bool valid = reading_valid(state.T_mix_out);
+  const float measured = valid ? state.T_mix_out.value_c : NAN;
+
+  if (!g_overshoot_latched) {
+    if (valid && isfinite(setpoint) && measured >= setpoint + config.mix_overshoot_delta_c) {
+      g_overshoot_latched = true;
+      state.mix_overshoot = true;
+      state.active_alarms |= WARN_MIX_OVERSHOOT;
+      web::log_event(1, 1310, "Mixer forward temperature above setpoint + delta; reducing opening");
+    }
+  } else if (valid && isfinite(setpoint) &&
+             measured <= setpoint - config.mix_overshoot_recovery_c) {
+    g_overshoot_latched = false;
+    state.mix_overshoot = false;
+    state.active_alarms &= ~WARN_MIX_OVERSHOOT;
+    web::log_event(0, 1311, "Mixer forward temperature recovered; normal control resumed");
+  }
+
+  if (!valid) {
+    // A lost sensor is handled by L1; do not keep a stale reaction latched.
+    g_overshoot_latched = false;
+    state.mix_overshoot = false;
+    state.active_alarms &= ~WARN_MIX_OVERSHOOT;
+  }
+}
+
+// Optional inferred DHW. A drop of the boiler-side temperature while the
+// heater is physically on is treated as DHW charging. It ends on recovery or,
+// after the configured maximum, with a warning so the assumption can be
+// reviewed. The meter signal, when configured, always remains authoritative.
+void service_dhw_inference(const Config& config, SystemState& state, uint32_t now) {
+  if (!config.dhw_infer_enabled) {
+    g_dhw_inferred = false;
+    g_dhw_timeout = false;
+    g_dhw_peak_c = NAN;
+    g_dhw_peak_ms = 0;
+    state.dhw_inferred = false;
+    state.active_alarms &= ~WARN_DHW_INFER_TIMEOUT;
+    if (state.system_error_code == ERR_DHW_INFER_TIMEOUT) state.system_error_code = ERR_OK;
+    return;
+  }
+
+  const bool boiler_valid = reading_valid(state.T_boiler);
+  const bool heater_on = state.heater_phys;
+  if (!heater_on || !boiler_valid) {
+    g_dhw_inferred = false;
+    state.dhw_inferred = false;
+    g_dhw_peak_c = NAN;
+    g_dhw_peak_ms = 0;
+    g_dhw_timeout = false;
+    state.active_alarms &= ~WARN_DHW_INFER_TIMEOUT;
+    if (state.system_error_code == ERR_DHW_INFER_TIMEOUT) state.system_error_code = ERR_OK;
+    return;
+  }
+
+  const float temp = state.T_boiler.value_c;
+  if (!g_dhw_inferred) {
+    if (g_dhw_timeout) {
+      // A timeout must not restart the inference on the same temperature drop,
+      // otherwise the warning would clear and re-latch every cycle. Hold it
+      // until the boiler recovers or the heater turns off (which resets the
+      // whole inference above).
+      const bool recovered =
+          isfinite(g_dhw_peak_c) && temp >= g_dhw_peak_c - config.dhw_infer_recovery_c;
+      if (!recovered) {
+        return;
+      }
+      g_dhw_timeout = false;
+      state.active_alarms &= ~WARN_DHW_INFER_TIMEOUT;
+      if (state.system_error_code == ERR_DHW_INFER_TIMEOUT) state.system_error_code = ERR_OK;
+      g_dhw_peak_c = temp;
+      g_dhw_peak_ms = now;
+      web::log_event(0, 1323, "Inferred DHW timeout cleared after boiler recovery");
+      return;
+    }
+
+    const uint32_t window_ms = config.dhw_infer_window_s * 1000u;
+    if (!isfinite(g_dhw_peak_c) || (window_ms > 0 && now - g_dhw_peak_ms > window_ms)) {
+      g_dhw_peak_c = temp;
+      g_dhw_peak_ms = now;
+    } else if (temp > g_dhw_peak_c) {
+      g_dhw_peak_c = temp;
+      g_dhw_peak_ms = now;
+    }
+
+    if (isfinite(g_dhw_peak_c) && temp <= g_dhw_peak_c - config.dhw_infer_drop_c) {
+      g_dhw_inferred = true;
+      g_dhw_timeout = false;
+      g_dhw_infer_start_ms = now;
+      state.dhw_inferred = true;
+      state.active_alarms &= ~WARN_DHW_INFER_TIMEOUT;
+      if (state.system_error_code == ERR_DHW_INFER_TIMEOUT) state.system_error_code = ERR_OK;
+      web::log_event(0, 1320, "Inferred DHW charging start (boiler temperature drop)");
+    }
+    return;
+  }
+
+  const bool recovered = temp >= g_dhw_peak_c - config.dhw_infer_recovery_c;
+  if (recovered) {
+    g_dhw_inferred = false;
+    state.dhw_inferred = false;
+    g_dhw_timeout = false;
+    g_dhw_peak_c = temp;
+    g_dhw_peak_ms = now;
+    state.active_alarms &= ~WARN_DHW_INFER_TIMEOUT;
+    if (state.system_error_code == ERR_DHW_INFER_TIMEOUT) state.system_error_code = ERR_OK;
+    web::log_event(0, 1321, "Inferred DHW charging ended (boiler temperature recovered)");
+    return;
+  }
+
+  if (!g_dhw_timeout && config.dhw_infer_max_s > 0 &&
+      now - g_dhw_infer_start_ms >= config.dhw_infer_max_s * 1000u) {
+    g_dhw_timeout = true;
+    // Stop blocking the floor indefinitely, but keep the warning latched until
+    // a recovery or a new heater cycle confirms the assumption.
+    g_dhw_inferred = false;
+    state.dhw_inferred = false;
+    state.active_alarms |= WARN_DHW_INFER_TIMEOUT;
+    if (state.system_error_code == ERR_OK) {
+      state.system_error_code = ERR_DHW_INFER_TIMEOUT;
+    }
+    web::log_event(2, 1322, "Inferred DHW charging exceeded the configured maximum");
+  }
+}
+
 // Simple proportional + feedforward mixer loop around the dead-reckoned
 // position. The Smith predictor term uses the measured gradient and the
 // configured transport delay. Full PI coordination and observer-owned tuning
@@ -55,16 +200,17 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     return;
   }
 
-  const float ceiling = mixer_ceiling(config);
-  // Never report or chase a target above the configured opening limit.
+  const float ceiling = mixer_ceiling_or_state(config, state);
+  const float minimum = fminf(mixer_minimum(config), ceiling);
+  // Never report or chase a target above the effective opening limit.
   if (state.mix_target_pos > ceiling) {
     state.mix_target_pos = ceiling;
   }
 
   if (!floor_demand) {
-    if (state.heater_requested || state.pump_rad1_requested || state.pump_rad2_requested) {
-      state.mix_target_pos = 0.0f;
-    }
+    // No floor demand: close fully regardless of what other circuits do. The
+    // minimum opening is a normal-control limit only and never blocks a close.
+    state.mix_target_pos = 0.0f;
     state.integrator_val = g_integrator;
     return;
   }
@@ -77,6 +223,19 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     if (boiler < setpoint + config.deadband_temp) {
       state.mix_target_pos = 0.0f;
     }
+    state.integrator_val = g_integrator;
+    return;
+  }
+
+  if (state.mix_overshoot) {
+    // Soft setpoint + delta reaction: drive to the configured reduced opening
+    // and hold until L2 observes recovery. This intentionally bypasses the
+    // normal minimum so a zero-percent reaction is possible.
+    uint8_t target_pct = config.mix_overshoot_target_pct;
+    if (target_pct > 100) target_pct = 100;
+    float reaction = static_cast<float>(target_pct) / 100.0f;
+    if (reaction > ceiling) reaction = ceiling;
+    state.mix_target_pos = reaction;
     state.integrator_val = g_integrator;
     return;
   }
@@ -115,7 +274,9 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   // During the warm-up flush the position is still clamped (below), so the
   // hold is skipped there.
   if (!flush_active && fabsf(error) <= config.deadband_temp) {
-    state.mix_target_pos = fminf(state.pos_est_dr, ceiling);
+    float hold = fminf(state.pos_est_dr, ceiling);
+    if (hold < minimum) hold = minimum;
+    state.mix_target_pos = hold;
     return;
   }
 
@@ -131,6 +292,12 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     target = state.pos_est_dr + max_step;
   } else if (target < state.pos_est_dr - max_step) {
     target = state.pos_est_dr - max_step;
+  }
+
+  // Minimum opening applies only to normal floor-demand control. The flush
+  // cap, DHW handling and every close path above are deliberately excluded.
+  if (!flush_active && target < minimum) {
+    target = minimum;
   }
   state.mix_target_pos = clampf(target, 0.0f, ceiling);
 }
@@ -169,6 +336,12 @@ void begin(const Config& config, SystemState& state) {
   g_floor_pause_active = false;
   g_floor_was_on = false;
   g_integrator = 0.0f;
+  g_overshoot_latched = false;
+  g_dhw_inferred = false;
+  g_dhw_timeout = false;
+  g_dhw_infer_start_ms = 0;
+  g_dhw_peak_ms = 0;
+  g_dhw_peak_c = NAN;
 }
 
 void tick(const Config& config, SystemState& state) {
@@ -191,6 +364,11 @@ void tick(const Config& config, SystemState& state) {
     g_floor_was_on = state.pump_floor_requested;
     return;
   }
+
+  // --- Optional inferred DHW and combined priority ------------------------
+  service_dhw_inference(config, state, now);
+  state.dhw_active = state.dhw_meter_active || state.dhw_inferred;
+  service_overshoot(config, state);
 
   // --- Command keep-alive and after-heating timers ------------------------
   if (state.heater_intended) {

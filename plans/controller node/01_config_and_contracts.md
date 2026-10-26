@@ -33,6 +33,36 @@ struct Config {
   float    grad_limit;             // max dT/dt (K/s), e.g. 0.5
   float    mix_safe_pos;           // 0.0 = closed (confirmed safe position)
   uint8_t  mix_max_open_pct;       // L1-enforced opening ceiling, 10-100 %, default 85 %
+
+  // --- Pump current measurement (shared ACS712/CT calibration) ---
+  float    pump_current_w_per_v;   // slope, W per Vrms above the offset
+  float    pump_current_offset_v;  // RMS voltage at zero current
+  bool     pump_power_check_enabled; // false = measure only, no dry-run/welded trip
+
+  // --- Mixer operating window ---
+  uint8_t  mix_min_open_pct;       // normal floor-demand minimum, 0-100 %, default 40 %
+  bool     mix_max_dynamic;        // enable the two-point maximum
+  uint8_t  mix_max_below_pct;      // dynamic ceiling below the switch point, default 90 %
+  uint8_t  mix_max_above_pct;      // dynamic ceiling above the switch point, default 70 %
+  float    mix_max_switch_c;       // boiler-side switching temperature, default 50 degC
+  float    mix_max_hysteresis_c;   // hysteresis around the switch point, default 2 K
+
+  // Soft setpoint+delta reaction (warning-only; L1 hard limit stays authoritative)
+  float    mix_overshoot_delta_c;     // react at setpoint + delta, default 3 K
+  float    mix_overshoot_recovery_c;  // release below setpoint - recovery, default 1 K
+  uint8_t  mix_overshoot_target_pct;  // opening held during the reaction, default 40 %
+
+  // --- Sensor role plausibility (heating only, warning-only) ---
+  bool     sensor_role_check_enabled; // default true
+  float    sensor_role_tolerance_c;   // allowed inversion, default 3 K
+
+  // --- Optional inferred DHW ---
+  bool     dhw_infer_enabled;      // default false; meter-based DHW is preferred
+  float    dhw_infer_drop_c;       // boiler drop that starts an inference, default 5 K
+  uint32_t dhw_infer_window_s;     // how long a peak stays a valid baseline, default 120 s
+  float    dhw_infer_recovery_c;   // recovery band that ends the inference, default 3 K
+  uint32_t dhw_infer_max_s;        // maximum plausible charge, default 1800 s
+
   uint32_t boiler_min_off_ms;      // anti-short-cycle backstop
   uint32_t demand_timeout_s;       // heater keep-alive timeout (e.g., refresh_time + 1m or 2x + 1m)
   uint32_t pump_stop_after_heating_s; // max pump run time after heating / when heater is off
@@ -185,7 +215,9 @@ struct SystemState {
 
   // --- Mode & External Status ---
   OperationalMode mode;
-  bool     dhw_active;         // true when boiler is prioritizing DHW (from HA)
+  bool     dhw_active;         // combined priority: meter OR inference
+  bool     dhw_meter_active;   // raw HA/MQTT DHW signal
+  bool     dhw_inferred;       // inferred from a boiler-temperature drop
   uint32_t test_mode_rem_s;    // remaining seconds in Test Override mode
 
   // --- Temperatures (L0 -> L1/L2) ---
@@ -201,6 +233,8 @@ struct SystemState {
   bool     pos_encoder_valid;
   float    integrator_val;     // L2 mixer PI integrator state
   float    mix_target_pos;     // desired position; the only mixer command
+  float    mix_ceiling;        // effective L1 ceiling (absolute vs dynamic minimum)
+  bool     mix_overshoot;      // soft setpoint+delta reaction latched
   bool     mix_motion;         // L1 -> L0: motor energized right now
   int8_t   mix_dir;            // L1 -> L0: +1 opening, -1 closing, 0 idle
   bool     mix_emergency;      // emergency close latched; other writers locked out

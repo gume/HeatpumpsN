@@ -50,6 +50,11 @@ typedef enum {
 #define WARN_PUMP_DRY_RUN (1u << 9)
 #define ALARM_WELDED_RELAY (1u << 10)
 #define WARN_NVS_CORRUPTED (1u << 11)
+#define WARN_MIX_MOTION_OVERRUN (1u << 12)
+#define WARN_MIX_NO_RESPONSE (1u << 13)
+#define WARN_MIX_OVERSHOOT (1u << 14)
+#define WARN_SENSOR_ROLE_SUSPECT (1u << 15)
+#define WARN_DHW_INFER_TIMEOUT (1u << 16)
 
 // Standard system error codes (SystemState.system_error_code)
 #define ERR_OK 0
@@ -61,6 +66,8 @@ typedef enum {
 #define ERR_AFTER_HEAT_TIMEOUT 302
 #define ERR_RELAY_FAULT_WELDED 401
 #define ERR_NVS_DATA_CORRUPTED 501
+#define ERR_SENSOR_ROLE_SUSPECT 603
+#define ERR_DHW_INFER_TIMEOUT 604
 
 struct SensorReading {
   float value_c;
@@ -77,7 +84,9 @@ struct SystemState {
 
   // --- Mode & external status ----------------------------------------------
   OperationalMode mode;
-  bool dhw_active;
+  bool dhw_active;        // combined priority signal used by control
+  bool dhw_meter_active;  // raw signal from the configured MQTT DHW meter
+  bool dhw_inferred;      // inferred from a boiler-temperature drop
   uint32_t test_mode_rem_s;
 
   // --- Temperatures (L0 -> L1/L2) ------------------------------------------
@@ -93,6 +102,8 @@ struct SystemState {
   bool pos_encoder_valid;
   float integrator_val;
   float mix_target_pos;            // desired position; the only mixer command
+  float mix_ceiling;               // effective L1 opening ceiling (0-1)
+  bool mix_overshoot;              // soft setpoint+delta reaction latched
   bool mix_motion;                 // motor energized right now (L1 -> L0)
   int8_t mix_dir;                  // +1 opening, -1 closing, 0 idle
   bool mix_emergency;              // emergency close latched; writers locked out

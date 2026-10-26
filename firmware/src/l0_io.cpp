@@ -10,8 +10,12 @@ namespace hpn {
 namespace l0 {
 namespace {
 
-// TODO(hardware): confirm the relay-driver polarity on HomeNet Heatpumps 1.0.
-// The 74HC595 drives the relay board; active-high is assumed.
+// The HomeNet Heatpumps 1.0 carrier does not use a bare 74HC595. It uses a
+// 74HC595-compatible serial output extender whose selected outputs pull the
+// relay-driver inputs to GND at boot/reset. With the relay board's active-high
+// inputs this means all relays are OFF in the reset state, so the 0x00 safe
+// byte is correct. Do not change kActuatorOnLevel without re-checking the
+// carrier schematic.
 constexpr uint8_t kActuatorOnLevel = io::kHigh;
 constexpr uint8_t kActuatorOffLevel = io::kLow;
 
@@ -69,8 +73,8 @@ void init_output_pin(uint8_t pin, const char* name) {
   Serial.printf("[l0] %-11s GPIO%u (safe=OFF)\n", name, static_cast<unsigned>(pin));
 }
 
-// A 74HC595 with MSBFIRST puts bit 0 on Q0 (QA), matching the legacy ESPHome
-// configuration.
+// A shift register with MSBFIRST puts bit 0 on Q0 (QA), matching the legacy
+// ESPHome configuration.
 void write_shift_register() {
   if (g_board.output_backend != OutputBackend::ShiftRegister) {
     return;
@@ -114,9 +118,9 @@ void init_shift_register() {
   }
 
   Serial.printf(
-      "[l0] 74HC595 data=%u clock=%u latch=%u oe=%u\n", static_cast<unsigned>(g_board.sr_data_pin),
-      static_cast<unsigned>(g_board.sr_clock_pin), static_cast<unsigned>(g_board.sr_latch_pin),
-      static_cast<unsigned>(g_board.sr_oe_pin));
+      "[l0] output extender data=%u clock=%u latch=%u oe=%u\n",
+      static_cast<unsigned>(g_board.sr_data_pin), static_cast<unsigned>(g_board.sr_clock_pin),
+      static_cast<unsigned>(g_board.sr_latch_pin), static_cast<unsigned>(g_board.sr_oe_pin));
 }
 
 void init_direct_outputs() {
@@ -172,7 +176,8 @@ void begin(const Config& config, const BoardConfig& board) {
   g_last_power_poll_ms = 0;
 
   Serial.printf("[l0] carrier   %s (%s)\n", g_board.name,
-                g_board.output_backend == OutputBackend::ShiftRegister ? "74HC595" : "direct GPIO");
+                g_board.output_backend == OutputBackend::ShiftRegister ? "output extender"
+                                                                      : "direct GPIO");
   Serial.printf("[l0] backend   %s\n", io::kEmulated ? "emulation" : "hardware");
 
   // Seed the emulation model (or the hardware backend) with this carrier.
@@ -263,10 +268,10 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
   // Optional pump-power feedback, at the same cadence as the temperatures.
   if (now - g_last_power_poll_ms >= config.temp_poll_interval_ms) {
     g_last_power_poll_ms = now;
-    state.pump_power_w[0] = read_power_w(CurrentChannel::PumpFloor);
-    state.pump_power_w[1] = read_power_w(CurrentChannel::PumpRad1);
-    state.pump_power_w[2] = read_power_w(CurrentChannel::PumpRad2);
-    state.mixer_power_w = read_power_w(CurrentChannel::Mixer);
+    state.pump_power_w[0] = read_power_w(config, CurrentChannel::PumpFloor);
+    state.pump_power_w[1] = read_power_w(config, CurrentChannel::PumpRad1);
+    state.pump_power_w[2] = read_power_w(config, CurrentChannel::PumpRad2);
+    state.mixer_power_w = read_power_w(config, CurrentChannel::Mixer);
   }
 
   // Encoder sampling and the remaining L0 diagnostics are still TODO(L0). The
@@ -362,7 +367,7 @@ bool read_temperature(TempRole role, float& celsius) {
   return io::read_temperature(role, celsius);
 }
 
-float read_power_w(CurrentChannel channel) {
+float read_power_w(const Config& config, CurrentChannel channel) {
   if (io::kEmulated) {
     return io::read_power_w(channel);
   }
@@ -374,8 +379,9 @@ float read_power_w(CurrentChannel channel) {
   }
 
   // ACS712/CT front end: sample two mains cycles and remove the DC bias.
-  // Calibration matches the old ESPHome ct_clamp fit (0.004 -> 0 W,
-  // 0.072 -> 40 W) until per-unit calibration is added.
+  // The shared calibration comes from Settings -> Hardware -> Pump current.
+  // The default is the legacy ESPHome ct_clamp fit (0.004 -> 0 W,
+  // 0.072 -> 40 W), approximately 588 W/V above the zero point.
   const uint32_t start = micros();
   uint32_t count = 0;
   float mean = 0.0f;
@@ -392,7 +398,11 @@ float read_power_w(CurrentChannel channel) {
     return 0.0f;
   }
   const float rms_volts = sqrtf(m2 / static_cast<float>(count));
-  float watts = (rms_volts - 0.004f) * 588.2f;
+  float offset_v = config.pump_current_offset_v;
+  float w_per_v = config.pump_current_w_per_v;
+  if (!isfinite(offset_v) || offset_v < 0.0f || offset_v > 1.0f) offset_v = 0.004f;
+  if (!isfinite(w_per_v) || w_per_v < 1.0f || w_per_v > 5000.0f) w_per_v = 588.2f;
+  float watts = (rms_volts - offset_v) * w_per_v;
   if (watts < 5.0f) {
     watts = 0.0f;
   } else if (watts > 2000.0f) {

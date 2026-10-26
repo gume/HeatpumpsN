@@ -22,8 +22,8 @@ io  firmware/src/io_backend.cpp   compile-time switch
 ```
 
 The carrier profile (`BoardConfig`) is shared by both backends, so the
-emulated 1.0 carrier decodes exactly the same 74HC595 byte, MUX channel and
-relay bits as the real one.
+emulated 1.0 carrier decodes exactly the same output-extender byte, MUX channel
+and relay bits as the real one.
 
 ## 2. Building
 
@@ -45,7 +45,7 @@ future carrier, keep the flag and change the carrier macro.
 At boot L0 prints which path is active:
 
 ```
-[l0] carrier   HomeNet Heatpumps 1.0 (74HC595)
+[l0] carrier   HomeNet Heatpumps 1.0 (output extender)
 [l0] backend   emulation
 ```
 
@@ -69,7 +69,7 @@ An `esp32dev_sim` image must never be expected to drive real relays. Verify the
 | `realistic_power` | Pump power follows its relay; mixer power follows motion |
 | `realistic_boiler` | Boiler supply is the placeholder sine wave around 65 °C |
 | `mux_channel` | Decoded MUX channel, `0xFF` if the carrier has none |
-| `output_byte` | Last byte latched into the 74HC595 (controller output) |
+| `output_byte` | Last byte latched into the output extender (controller output) |
 | `output_enabled` | `OE` state of the shift register |
 | `led_count`, `led_rgb[]` | Last LED frame, logical RGB |
 | `revision` | Bumped on every change; cheap change detection for the UI |
@@ -107,9 +107,12 @@ relay is on and 0 W while off. The mixer reports its configured moving-power
 while motion is commanded and 0 W while idle. Turn the switch off to write the
 current-sense answer directly (useful for dry-run and welded-relay tests).
 
-`read_power_w()` is the seam L1 will use for dry-run and welded-relay
+`read_power_w()` is the seam L1 uses for dry-run and welded-relay
 supervision: set `0 W` while the relay is on to simulate a dry run, or nonzero
-power while off to simulate a welded relay.
+power while off to simulate a welded relay. In the emulation build L0 returns
+the model value directly; on hardware it converts the sampled RMS voltage with
+the shared `pump_current_offset_v` / `pump_current_w_per_v` calibration from
+Settings → Hardware.
 
 All setters and `snapshot()` are safe to call from different tasks; the model
 uses a short critical section. Copy sizes are small, so no mutex is needed.
@@ -132,8 +135,9 @@ electronics:
   same emulated carrier state as the bench page; counters stay in RAM and are
   never written to NVS under emulation.
 
-The emulated `l0::read_current_raw()` returns `0`. Use `l0::read_power_w()`.
-On real hardware both current paths are still TODO.
+The emulated `l0::read_current_raw()` returns `0`. Use
+`l0::read_power_w(const Config&, CurrentChannel)`, which takes the shared
+calibration for hardware and the model value under emulation.
 
 ## 5. Web dashboard integration
 

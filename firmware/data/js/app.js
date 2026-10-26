@@ -21,6 +21,8 @@ const state = {
   counterPersistence: null,
   sensorDiscovery: [],
   sensorDiscoveryLoading: false,
+  sensorRoles: null,
+  sensorRoleLoading: false,
   runtime: null,
   ws: null,
   wsConnected: false,
@@ -433,6 +435,22 @@ async function discoverSensors() {
   }
 }
 
+async function verifySensorRoles() {
+  if (state.sensorRoleLoading) return;
+  state.sensorRoleLoading = true;
+  renderCurrent();
+  try {
+    const data = await apiGet('/api/sensors/roles');
+    state.sensorRoles = data;
+    toast(data.summary || 'Sensor role check complete.', data.plausible ? 'ok' : 'warn', 4500);
+  } catch (err) {
+    toast(`Sensor role check failed: ${err.message}`, 'err', 6000);
+  } finally {
+    state.sensorRoleLoading = false;
+    renderCurrent();
+  }
+}
+
 async function refreshRuntime() {
   try {
     state.runtime = await apiGet('/api/runtime');
@@ -821,7 +839,9 @@ function renderDashboard() {
           <div class="metric-row"><span class="k">Mixer power</span><span class="v">${fmtNum(power.mixer, 1)} W</span></div>
           <div class="metric-row"><span class="k">Estimated position</span><span class="v">${mixerPos.toFixed(1)}%</span></div>
           <div class="metric-row"><span class="k">Target position</span><span class="v">${mixerTarget.toFixed(1)}%</span></div>
-          <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%</span></div>
+          <div class="metric-row"><span class="k">Minimum opening</span><span class="v">${num(floor.mixerMinPct, 0)}%</span></div>
+          <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%${floor.mixerMaxDynamic ? ` (dynamic, absolute ${num(floor.mixerMaxAbsPct, 100)}%)` : ''}</span></div>
+          ${floor.mixerOvershoot ? '<div class="metric-row"><span class="k">Overshoot reaction</span><span class="v">active</span></div>' : ''}
           <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
           <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
           <div class="metric-row"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
@@ -1218,7 +1238,9 @@ function renderTest() {
         </div>
         <div class="metric-row"><span class="k">Estimated position</span><span class="v">${fmtNum(floor.mixerPos, 1)}%</span></div>
         <div class="metric-row"><span class="k">Target position</span><span class="v">${fmtNum(floor.mixerTarget, 1)}%</span></div>
-        <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%</span></div>
+        <div class="metric-row"><span class="k">Minimum opening</span><span class="v">${fmtNum(floor.mixerMinPct, 0)}%</span></div>
+        <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%${floor.mixerMaxDynamic ? ` (dynamic)` : ''}</span></div>
+        ${floor.mixerOvershoot ? '<div class="metric-row"><span class="k">Overshoot reaction</span><span class="v">active</span></div>' : ''}
         <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
         <div class="metric-row"><span class="k">Encoder</span><span class="v">${fmtNum(floor.encoderPos, 1)}% ${floor.encoderValid ? '' : '⚠'}</span></div>
 
@@ -1369,6 +1391,25 @@ function sensorDiscoveryTable() {
   </table></div>`;
 }
 
+function sensorRoleTable() {
+  const roles = state.sensorRoles;
+  if (!roles) return '';
+  const checks = roles.checks || {};
+  const mark = (ok) => ok ? '<span class="chip chip-ok">ok</span>' : '<span class="chip chip-warn">inverted</span>';
+  const temps = roles.temperatures || {};
+  return `<div class="table-wrap" style="margin-top:10px"><table>
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Heating active</td><td><span class="chip ${roles.heating_active ? 'chip-ok' : ''}">${roles.heating_active ? 'yes' : 'no'}</span></td></tr>
+      <tr><td>All readings valid</td><td><span class="chip ${roles.all_valid ? 'chip-ok' : 'chip-warn'}">${roles.all_valid ? 'yes' : 'no'}</span></td></tr>
+      <tr><td>Boiler (${fmtTemp(temps.boiler)}) ≥ forward (${fmtTemp(temps.mix)})</td><td>${mark(checks.boiler_ge_mix)}</td></tr>
+      <tr><td>Forward (${fmtTemp(temps.mix)}) ≥ return (${fmtTemp(temps.return)})</td><td>${mark(checks.mix_ge_return)}</td></tr>
+      <tr><td>Boiler (${fmtTemp(temps.boiler)}) ≥ return (${fmtTemp(temps.return)})</td><td>${mark(checks.boiler_ge_return)}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small faint" style="margin-top:6px">${esc(roles.summary || '')}. Tolerance ${fmtNum(roles.tolerance_c, 1)} K.</p>`;
+}
+
 function formActions(label, extra = '') {
   return `<div class="form-actions">
     <button class="btn btn-primary" type="submit">${esc(label)}</button>
@@ -1411,6 +1452,50 @@ function renderSettingsSafety() {
             ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Time without a fresh HA demand before the demand is dropped.', 'int', 's')}
             ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Pumps keep running for this long after heating stops.', 'int', 's')}
             ${fieldNumber('long_pause_min', 'Long-pause threshold', cfg.long_pause_s / 60, 0, 1440, 1, 'Time before a long-pause divergence is reported.', 'number', 'min')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Mixer operating window</h3>
+          <p class="small faint">The minimum applies only to normal floor-demand control. Safety closes, end-stop homing, DHW and no-demand closes can always reach 0 %.</p>
+          <div class="form-grid">
+            ${fieldRange('mix_min_open_pct', 'Minimum mixer opening', cfg.mix_min_open_pct, 0, 100, 1, '%', 'Normal floor-heating minimum. Set to 0 to allow full closing during control.')}
+            ${fieldCheckbox('mix_max_dynamic', 'Dynamic maximum', cfg.mix_max_dynamic, 'Select a lower maximum above the boiler-temperature switch point, with hysteresis.')}
+            ${fieldRange('mix_max_below_pct', 'Maximum below switch', cfg.mix_max_below_pct, 10, 100, 1, '%', 'Ceiling when the boiler-side temperature is below the switch point.')}
+            ${fieldRange('mix_max_above_pct', 'Maximum above switch', cfg.mix_max_above_pct, 10, 100, 1, '%', 'Ceiling when the boiler-side temperature is above the switch point.')}
+            ${fieldRange('mix_max_switch_c', 'Dynamic switch temperature', cfg.mix_max_switch_c, 0, 90, 0.5, '°C', 'Boiler-side temperature that selects the above/below maximum.')}
+            ${fieldRange('mix_max_hysteresis_c', 'Dynamic hysteresis', cfg.mix_max_hysteresis_c, 0.5, 10, 0.1, 'K', 'Hysteresis around the switch point to prevent chattering.')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Forward-temperature overshoot</h3>
+          <p class="small faint">Soft reaction around setpoint. This is a warning, not the L1 hard over-temperature rule.</p>
+          <div class="form-grid">
+            ${fieldRange('mix_overshoot_delta_c', 'Overshoot delta', cfg.mix_overshoot_delta_c, 0.5, 10, 0.1, 'K', 'React when forward temperature reaches setpoint + delta.')}
+            ${fieldRange('mix_overshoot_recovery_c', 'Overshoot recovery', cfg.mix_overshoot_recovery_c, 0, 10, 0.1, 'K', 'Release the reaction below setpoint − recovery.')}
+            ${fieldRange('mix_overshoot_target_pct', 'Overshoot target opening', cfg.mix_overshoot_target_pct, 0, 100, 1, '%', 'Opening held while the overshoot reaction is latched. It bypasses the normal minimum.')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Sensor role plausibility</h3>
+          <p class="small faint">Measured only while the heater and floor pump are running: boiler ≥ forward ≥ return within the tolerance. Warning-only.</p>
+          <div class="form-grid">
+            ${fieldCheckbox('sensor_role_check_enabled', 'Enable role check', cfg.sensor_role_check_enabled, 'Raise a warning when the three sensor roles look inverted during heating.')}
+            ${fieldRange('sensor_role_tolerance_c', 'Role tolerance', cfg.sensor_role_tolerance_c, 0.5, 20, 0.5, 'K', 'Allowed inversion before the order is considered suspect.')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Inferred DHW (optional)</h3>
+          <p class="small faint">Use only when no DHW meter is configured. A boiler-temperature drop while the heater is on is treated as DHW charging. The meter signal remains authoritative when present.</p>
+          <div class="form-grid">
+            ${fieldCheckbox('dhw_infer_enabled', 'Infer DHW from boiler temperature', cfg.dhw_infer_enabled, 'Treat a configured boiler-temperature drop as DHW priority.')}
+            ${fieldRange('dhw_infer_drop_c', 'DHW detection drop', cfg.dhw_infer_drop_c, 1, 20, 0.5, 'K', 'Drop from the recent boiler peak that starts DHW inference.')}
+            ${fieldNumber('dhw_infer_window_s', 'DHW peak window', cfg.dhw_infer_window_s, 10, 3600, 10, 'How long a boiler peak remains a valid baseline.', 'int', 's')}
+            ${fieldRange('dhw_infer_recovery_c', 'DHW recovery band', cfg.dhw_infer_recovery_c, 0, 20, 0.5, 'K', 'Recovery below the pre-drop peak ends DHW inference.')}
+            ${fieldNumber('dhw_infer_max_s', 'Maximum DHW charge', cfg.dhw_infer_max_s, 60, 86400, 60, 'An inferred charge longer than this raises a warning and releases the floor.', 'int', 's')}
           </div>
         </div>
 
@@ -1477,13 +1562,27 @@ function renderSettingsHardware() {
           <h3>Sensor identities</h3>
           <div class="row between" style="margin-bottom:10px">
             <p class="small faint">Scan the bus, then assign each role from the discovered list.</p>
-            <button class="btn btn-sm" type="button" data-action="discover-sensors" ${state.sensorDiscoveryLoading ? 'disabled' : ''}>${state.sensorDiscoveryLoading ? 'Scanning…' : 'Discover sensors'}</button>
+            <span>
+              <button class="btn btn-sm" type="button" data-action="discover-sensors" ${state.sensorDiscoveryLoading ? 'disabled' : ''}>${state.sensorDiscoveryLoading ? 'Scanning…' : 'Discover sensors'}</button>
+              <button class="btn btn-sm" type="button" data-action="verify-sensor-roles" ${state.sensorRoleLoading ? 'disabled' : ''}>${state.sensorRoleLoading ? 'Checking…' : 'Verify roles'}</button>
+            </span>
           </div>
           ${sensorDiscoveryTable()}
+          ${sensorRoleTable()}
           <div class="form-grid" style="margin-top:12px">
             ${fieldSelect('sensor_id_boiler', 'Mixer hot in sensor', cfg.sensor_id_boiler, sensorIdOptions(cfg.sensor_id_boiler), 'Sensor mounted on the boiler side of the mixer.', 'string')}
             ${fieldSelect('sensor_id_ret', 'Mixer cold in / return sensor', cfg.sensor_id_ret, sensorIdOptions(cfg.sensor_id_ret), 'Sensor on the cold inlet / return side.', 'string')}
             ${fieldSelect('sensor_id_mix', 'Mixer forward sensor', cfg.sensor_id_mix, sensorIdOptions(cfg.sensor_id_mix), 'Sensor on the mixed flow outlet.', 'string')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Pump current calibration</h3>
+          <p class="small faint">All current channels share the same ACS712/CT front end. Power is computed as <span class="mono">(Vrms − offset) × W/V</span>. Calibrate against a clamp meter before enabling protection on a new carrier.</p>
+          <div class="form-grid">
+            ${fieldNumber('pump_current_w_per_v', 'Watts per volt', cfg.pump_current_w_per_v, 1, 5000, 0.1, 'Slope of the current-sense front end.', 'number', 'W/V')}
+            ${fieldNumber('pump_current_offset_v', 'Zero-current offset', cfg.pump_current_offset_v, 0, 1, 0.001, 'RMS voltage reported with no pump current.', 'number', 'V')}
+            ${fieldCheckbox('pump_power_check_enabled', 'Enable current-based protection', cfg.pump_power_check_enabled, 'Use the measured current for dry-run and welded-relay detection. Disable while the shunt is uncalibrated.')}
           </div>
         </div>
 
@@ -2319,6 +2418,9 @@ async function handleViewClick(event) {
       break;
     case 'discover-sensors':
       await discoverSensors();
+      break;
+    case 'verify-sensor-roles':
+      await verifySensorRoles();
       break;
     case 'export-events':
       exportEvents();

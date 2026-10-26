@@ -509,10 +509,12 @@ class Controller:
             self.check_error_sensors()
             self.check_leds()
             self.check_mixer_cap()
+            self.check_sensor_roles()
         else:
             self.checker.skip("error-sensor fault transitions", "requires HPN_IO_EMULATION")
             self.checker.skip("LED mapping", "requires HPN_IO_EMULATION")
             self.checker.skip("mixer opening cap enforcement", "requires HPN_IO_EMULATION")
+            self.checker.skip("sensor role verification", "requires HPN_IO_EMULATION")
 
     def check_status(self) -> None:
         status = self.status
@@ -549,6 +551,13 @@ class Controller:
                 "dashboard JS served",
                 status == 200 and "dashboardLeds" in script and "Error text" in script,
             )
+            self.checker.expect(
+                "portal JS exposes the new safety features",
+                status == 200
+                and "verify-sensor-roles" in script
+                and "Pump current calibration" in script
+                and "mix_min_open_pct" in script,
+            )
         except Exception as error:  # noqa: BLE001
             self.checker.fail("portal static assets", str(error))
 
@@ -560,9 +569,50 @@ class Controller:
             not missing,
             "missing " + ", ".join(missing) if missing else "",
         )
-        self.checker.expect(
-            "mixer opening cap field exposed", "mix_max_open_pct" in self.safety
+        safety_fields = (
+            "mix_max_open_pct",
+            "mix_min_open_pct",
+            "mix_max_dynamic",
+            "mix_max_below_pct",
+            "mix_max_above_pct",
+            "mix_max_switch_c",
+            "mix_max_hysteresis_c",
+            "mix_overshoot_delta_c",
+            "mix_overshoot_recovery_c",
+            "mix_overshoot_target_pct",
+            "sensor_role_check_enabled",
+            "sensor_role_tolerance_c",
+            "dhw_infer_enabled",
+            "dhw_infer_drop_c",
+            "dhw_infer_window_s",
+            "dhw_infer_recovery_c",
+            "dhw_infer_max_s",
         )
+        missing_safety = [key for key in safety_fields if key not in self.safety]
+        self.checker.expect(
+            "mixer window and supervision fields exposed",
+            not missing_safety,
+            "missing " + ", ".join(missing_safety) if missing_safety else "",
+        )
+        hardware_fields = (
+            "pump_current_w_per_v",
+            "pump_current_offset_v",
+            "pump_power_check_enabled",
+        )
+        missing_hardware = [key for key in hardware_fields if key not in self.hardware]
+        self.checker.expect(
+            "pump current calibration fields exposed",
+            not missing_hardware,
+            "missing " + ", ".join(missing_hardware) if missing_hardware else "",
+        )
+        roles_ok = False
+        try:
+            roles = http_json(self.base, "/api/sensors/roles")
+            roles_ok = {"measurable", "plausible", "summary", "checks"} <= set(roles)
+        except Exception:  # noqa: BLE001 - reported by the check below
+            roles_ok = False
+        self.checker.expect("sensor role endpoint exposes the contract", roles_ok)
+
         removed = ("min_pulse_ms", "max_pulse_ms", "pulse_cooldown_ms")
         found: list[str] = []
         for section in ("safety", "hardware", "system"):
@@ -754,6 +804,10 @@ class Controller:
                 if led_red_seen and led_off_seen:
                     break
                 time.sleep(0.1)
+            # The RAM logger samples diagnostic transitions once per second. The
+            # LED blink is proven in well under a second, so hold the fault long
+            # enough for at least one logger tick to record the 201 transition.
+            time.sleep(2.5)
             self._set_temperature("mix", 35.0, True, quiet=True)
             time.sleep(4.0)
         finally:
@@ -1034,6 +1088,91 @@ class Controller:
                     self.changed_hardware.discard("travel_time_ms")
                 except Exception as error:  # noqa: BLE001
                     print(f"[ WARN ] could not restore travel_time_ms: {error}")
+            if activated:
+                try:
+                    self._test_mode(False)
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not leave Test Mode: {error}")
+
+    # -- sensor role verification -----------------------------------------
+
+    def check_sensor_roles(self) -> None:
+        """Roles are only measurable while the heater and floor pump run."""
+        enabled = self.safety.get("sensor_role_check_enabled")
+        if enabled is None:
+            self.checker.fail(
+                "sensor role check configurable", "missing sensor_role_check_enabled"
+            )
+            return
+
+        original_window = int(self.safety.get("boiler_min_off_ms", 0) or 0)
+        activated = False
+        paused = False
+        try:
+            if not enabled:
+                self._put_safety({"sensor_role_check_enabled": True})
+            if original_window > 0:
+                self._put_safety({"boiler_min_off_ms": 0})
+                paused = True
+            if not self.test_was_active:
+                self._test_mode(True)
+                activated = True
+
+            for role, value in SAFE_TEMPERATURES.items():
+                self._set_temperature(role, value, True, quiet=True)
+            self._set_intents({"heater": True, "pump_floor": True}, quiet=True)
+
+            deadline = time.monotonic() + 15.0
+            roles = http_json(self.base, "/api/sensors/roles")
+            while time.monotonic() < deadline and not roles.get("measurable"):
+                time.sleep(0.5)
+                roles = http_json(self.base, "/api/sensors/roles")
+
+            self.checker.expect(
+                "roles measurable while heating",
+                bool(roles.get("measurable")),
+                str(roles.get("summary", "")),
+            )
+            self.checker.expect(
+                "correct sensor order is plausible",
+                bool(roles.get("plausible")),
+                str(roles.get("summary", "")),
+            )
+
+            # Invert boiler and return: the plant cannot produce a warm return
+            # from a cold boiler-side sensor, so the roles must look suspect.
+            self._set_temperature("boiler", 25.0, True, quiet=True)
+            self._set_temperature("mix", 40.0, True, quiet=True)
+            self._set_temperature("return", 50.0, True, quiet=True)
+            time.sleep(1.5)
+            suspect = http_json(self.base, "/api/sensors/roles")
+            checks = suspect.get("checks", {})
+            self.checker.expect(
+                "inverted sensor order reported suspect",
+                bool(suspect.get("measurable"))
+                and not suspect.get("plausible")
+                and not checks.get("boiler_ge_mix", True),
+                f"measurable={suspect.get('measurable')} plausible={suspect.get('plausible')}",
+            )
+        finally:
+            try:
+                self._set_intents({}, quiet=True)
+                for role, value in SAFE_TEMPERATURES.items():
+                    self._set_temperature(role, value, True, quiet=True)
+            except Exception as error:  # noqa: BLE001
+                print(f"[ WARN ] could not restore emulation temperatures: {error}")
+            if paused:
+                try:
+                    self._put_safety({"boiler_min_off_ms": original_window}, record=False)
+                    self.changed_safety.discard("boiler_min_off_ms")
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not restore boiler_min_off_ms: {error}")
+            if not enabled:
+                try:
+                    self._put_safety({"sensor_role_check_enabled": False}, record=False)
+                    self.changed_safety.discard("sensor_role_check_enabled")
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not restore sensor_role_check_enabled: {error}")
             if activated:
                 try:
                     self._test_mode(False)

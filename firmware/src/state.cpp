@@ -9,6 +9,8 @@ void state_init(SystemState& state) {
 
   state.mode = MODE_HEAT;
   state.dhw_active = false;
+  state.dhw_meter_active = false;
+  state.dhw_inferred = false;
   state.test_mode_rem_s = 0;
 
   state.T_boiler.value_c = NAN;
@@ -23,6 +25,8 @@ void state_init(SystemState& state) {
   state.pos_encoder = 0.0f;
   state.pos_encoder_valid = false;
   state.mix_target_pos = 0.0f;
+  state.mix_ceiling = 1.0f;
+  state.mix_overshoot = false;
   state.mix_motion = false;
   state.mix_dir = 0;
   state.mix_emergency = false;
@@ -55,6 +59,10 @@ const char* error_code_name(uint16_t code) {
       return "welded relay contact";
     case ERR_NVS_DATA_CORRUPTED:
       return "NVS checksum mismatch";
+    case ERR_SENSOR_ROLE_SUSPECT:
+      return "sensor role plausibility";
+    case ERR_DHW_INFER_TIMEOUT:
+      return "inferred DHW charging timeout";
     default:
       return "unknown error";
   }
@@ -86,6 +94,16 @@ const char* alarm_name(uint32_t bit) {
       return "welded relay";
     case WARN_NVS_CORRUPTED:
       return "NVS corrupted";
+    case WARN_MIX_MOTION_OVERRUN:
+      return "mixer motion overrun";
+    case WARN_MIX_NO_RESPONSE:
+      return "mixer no encoder response";
+    case WARN_MIX_OVERSHOOT:
+      return "mixer forward overshoot";
+    case WARN_SENSOR_ROLE_SUSPECT:
+      return "sensor role suspect";
+    case WARN_DHW_INFER_TIMEOUT:
+      return "inferred DHW too long";
     default:
       return "unknown";
   }
@@ -176,6 +194,12 @@ void format_error_text(const SystemState& state, char* out, size_t out_size) {
       break;
     case ERR_NVS_DATA_CORRUPTED:
       append(out, out_size, " (saved NVS data rejected; defaults loaded)");
+      break;
+    case ERR_SENSOR_ROLE_SUSPECT:
+      append(out, out_size, " (sensor order implausible while heating)");
+      break;
+    case ERR_DHW_INFER_TIMEOUT:
+      append(out, out_size, " (inferred DHW charging exceeded the configured maximum)");
       break;
     default:
       break;

@@ -10,7 +10,13 @@
 
 L1 evaluates deterministically on every tick of `T_safety` (Core 1, highest priority, $500\text{ ms}$–$1\text{ s}$ interval) and **arbitrates all final relay and actuator outputs** (`heater_phys`, `pump_floor_phys`, `pump_rad1_phys`, `pump_rad2_phys`). It also owns the mixer servo: L1 alone energizes the mixer motor (`mix_motion` / `mix_dir`) from `mix_target_pos`, applying the stop–wait–switch direction-change dead-time.
 
-> **Opening ceiling.** Every opening move is clamped to `mix_max_open_pct` (default **85 %**, configurable from the portal). This is a hard ceiling in the servo: it applies to L2 targets, portal test commands and maintenance sweeps alike. Closing moves and end-stop homing to $0.0$ are unaffected, and lowering the ceiling while the valve is open drives it back down to the new limit.
+> **Opening ceiling.** Every opening move is clamped to the effective ceiling: `mix_max_open_pct` (default **85 %**, configurable from the portal) and, when `mix_max_dynamic` is enabled, the applicable two-point limit below/above `mix_max_switch_c` with `mix_max_hysteresis_c`. The effective value is `min(absolute, dynamic)` and is published as `state.mix_ceiling`; it applies to L2 targets, portal test commands and maintenance sweeps alike. Closing moves and end-stop homing to $0.0$ are unaffected, and lowering the ceiling while the valve is open drives it back down to the new limit. The minimum opening (`mix_min_open_pct`) is an L2 normal-demand rule only; L1 never uses it to block a close.
+
+> **Pump current protection.** L1's dry-run and welded-relay checks act on the shared `pump_current_offset_v` / `pump_current_w_per_v` calibration only while `pump_power_check_enabled` is true. When it is false, measurements remain visible but the counters and trips are cleared, so an uncalibrated shunt cannot stop the plant.
+
+> **Warning-only mixer indications.** A move longer than `travel_time_ms + 15 s` raises `WARN_MIX_MOTION_OVERRUN`; a commanded move with a valid external encoder and no position change within 3 s raises `WARN_MIX_NO_RESPONSE`. Neither stops the motor: a seized valve, a frozen encoder and a wiring fault are indistinguishable from this data alone.
+
+> **Sensor role plausibility.** While the heater and floor pump are physically on and all three readings are valid, L1 checks boiler $\ge$ forward $\ge$ return within `sensor_role_tolerance_c`. A persistent inversion raises `WARN_SENSOR_ROLE_SUSPECT` after 60 s and clears it after 30 s of a plausible order. Outside that condition the check reports "not measurable" instead of guessing.
 
 * Nothing reaches L0 hardware drivers without passing L1 arbitration.
 * L1 continues executing and enforcing safe states even if L2 (`T_control`) hangs or WiFi/MQTT (`T_comms`) is down.

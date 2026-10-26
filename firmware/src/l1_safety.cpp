@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "hpn/l0_io.h"
+#include "hpn/sensor_roles.h"
 #include "hpn/web_portal.h"
 
 namespace hpn {
@@ -16,6 +17,25 @@ uint32_t g_heater_off_ms = 0;
 bool g_overtemp_latched = false;
 uint8_t g_dry_run_count[3] = {};
 uint8_t g_welded_count[3] = {};
+bool g_dynamic_above = false;  // hysteresis side of the two-point maximum
+
+// Mixer motion supervision. These are indications only: a seized valve, a
+// frozen external encoder and a wiring fault all look alike, so the controller
+// never forces a stop from them.
+uint32_t g_motion_start_ms = 0;
+uint32_t g_encoder_check_ms = 0;
+float g_encoder_ref = 0.0f;
+bool g_motion_overrun = false;
+bool g_no_response = false;
+
+uint32_t g_role_bad_since_ms = 0;
+uint32_t g_role_good_since_ms = 0;
+
+constexpr uint32_t kRoleBadDebounceMs = 60000u;
+constexpr uint32_t kRoleGoodDebounceMs = 30000u;
+constexpr uint32_t kMixerOverrunGraceMs = 15000u;
+constexpr uint32_t kEncoderResponseWindowMs = 3000u;
+constexpr float kEncoderResponseMinDelta = 0.005f;  // 0.5 % of full travel
 
 // Minimum time the mixer motion stays de-energized when the direction changes,
 // so the relay contacts have physically dropped before the opposite coil is
@@ -50,6 +70,32 @@ void stop_mixer(SystemState& state) {
   state.mix_dir = 0;
 }
 
+// Two-point dynamic ceiling with hysteresis on the boiler-side temperature.
+// The absolute mix_max_open_pct always caps the result.
+void update_effective_ceiling(const Config& config, SystemState& state) {
+  if (config.mix_max_dynamic) {
+    if (state.T_boiler.is_valid && isfinite(state.T_boiler.value_c)) {
+      const float temp = state.T_boiler.value_c;
+      const float hyst = config.mix_max_hysteresis_c > 0.0f ? config.mix_max_hysteresis_c : 0.0f;
+      if (!g_dynamic_above && temp >= config.mix_max_switch_c + hyst) {
+        g_dynamic_above = true;
+      } else if (g_dynamic_above && temp <= config.mix_max_switch_c - hyst) {
+        g_dynamic_above = false;
+      }
+    }
+  } else {
+    g_dynamic_above = false;
+  }
+
+  state.mix_ceiling = mixer_effective_ceiling(config, g_dynamic_above);
+  if (!isfinite(state.mix_ceiling) || state.mix_ceiling < 0.01f) {
+    state.mix_ceiling = 0.01f;
+  }
+  if (state.mix_ceiling > 1.0f) {
+    state.mix_ceiling = 1.0f;
+  }
+}
+
 // Energize the motor in `want_dir`. If the relays were last driven the other
 // way, drop the motion, wait for the contacts to release, then switch direction
 // and start again.
@@ -63,11 +109,23 @@ void start_mixer(SystemState& state, int8_t want_dir) {
   state.mix_motion = true;
   state.mix_dir = want_dir;
   g_mixer_last_ms = millis();
+
+  // Start a fresh motion-supervision window. Previous warnings stay visible
+  // until the next commanded move so an intermittent fault is not hidden by a
+  // single successful retry.
+  g_motion_start_ms = g_mixer_last_ms;
+  g_encoder_check_ms = g_mixer_last_ms;
+  g_encoder_ref = state.pos_encoder;
+  g_motion_overrun = false;
+  g_no_response = false;
+  state.active_alarms &= ~(WARN_MIX_MOTION_OVERRUN | WARN_MIX_NO_RESPONSE);
 }
 
 void service_mixer(const Config& config, SystemState& state, bool force_close, bool allow_open) {
   const uint32_t now = millis();
-  const float ceiling = mixer_ceiling(config);
+  const float ceiling =
+      isfinite(state.mix_ceiling) && state.mix_ceiling > 0.0f ? state.mix_ceiling
+                                                             : mixer_ceiling(config);
 
   // The ceiling is absolute: even a stale target or a maintenance sweep cannot
   // command the valve past it. Force-close always wins.
@@ -131,6 +189,42 @@ void service_mixer(const Config& config, SystemState& state, bool force_close, b
     }
     state.pos_est_dr = next;
 
+    // --- Motion anomaly indications --------------------------------------
+    // A close (or any move) that runs longer than a full stroke suggests a
+    // seized valve, a broken coupling or a lost end stop. This is warning-only:
+    // the old stall detector used the supply temperature and was unreliable.
+    const uint32_t motion_ms = now - g_motion_start_ms;
+    if (!g_motion_overrun && motion_ms > travel_ms + kMixerOverrunGraceMs) {
+      g_motion_overrun = true;
+      state.active_alarms |= WARN_MIX_MOTION_OVERRUN;
+      web::log_event(1, 1301, "Mixer motion exceeded a full stroke; check the valve");
+    }
+
+    // If a valid external encoder is present, a commanded move must produce a
+    // position change. A frozen encoder produces the same signature as a stuck
+    // valve, so this is also indication only.
+    if (state.pos_encoder_valid && !force_close) {
+      if (now - g_encoder_check_ms >= kEncoderResponseWindowMs) {
+        if (fabsf(state.pos_encoder - g_encoder_ref) < kEncoderResponseMinDelta) {
+          if (!g_no_response) {
+            g_no_response = true;
+            state.active_alarms |= WARN_MIX_NO_RESPONSE;
+            web::log_event(1, 1302, "Mixer commanded but the external encoder did not respond");
+          }
+        } else {
+          g_encoder_ref = state.pos_encoder;
+          g_encoder_check_ms = now;
+          if (g_no_response) {
+            g_no_response = false;
+            state.active_alarms &= ~WARN_MIX_NO_RESPONSE;
+          }
+        }
+      }
+    } else if (!state.pos_encoder_valid && g_no_response) {
+      g_no_response = false;
+      state.active_alarms &= ~WARN_MIX_NO_RESPONSE;
+    }
+
     if (stop) {
       stop_mixer(state);
     }
@@ -165,13 +259,31 @@ void service_mixer(const Config& config, SystemState& state, bool force_close, b
 }  // namespace
 
 void begin(const Config& config, SystemState& state) {
-  (void)state;
-  Serial.printf("[l1] mixer opening limit %u%%\n",
-                static_cast<unsigned>(config.mix_max_open_pct));
+  Serial.printf("[l1] mixer opening limit %u%% (absolute)", static_cast<unsigned>(config.mix_max_open_pct));
+  if (config.mix_max_dynamic) {
+    Serial.printf("[l1] dynamic maximum %u%% above / %u%% below %.1f C, hysteresis %.1f K\n",
+                  static_cast<unsigned>(config.mix_max_above_pct),
+                  static_cast<unsigned>(config.mix_max_below_pct),
+                  static_cast<double>(config.mix_max_switch_c),
+                  static_cast<double>(config.mix_max_hysteresis_c));
+  } else {
+    Serial.println("[l1] dynamic maximum disabled");
+  }
+  Serial.printf("[l1] normal floor opening minimum %u%%\n",
+                static_cast<unsigned>(config.mix_min_open_pct));
   g_mix_last_dir = 0;
   g_mixer_last_ms = 0;
   g_heater_off_ms = millis();  // hold anti-short-cycle at cold boot
   g_overtemp_latched = false;
+  g_dynamic_above = false;
+  g_motion_start_ms = 0;
+  g_encoder_check_ms = 0;
+  g_encoder_ref = 0.0f;
+  g_motion_overrun = false;
+  g_no_response = false;
+  g_role_bad_since_ms = 0;
+  g_role_good_since_ms = 0;
+  state.mix_ceiling = mixer_ceiling(config);
   for (uint8_t i = 0; i < 3; ++i) {
     g_dry_run_count[i] = 0;
     g_welded_count[i] = 0;
@@ -225,6 +337,46 @@ void tick(const Config& config, SystemState& state) {
     if (state.system_error_code == ERR_SENSOR_BOILER_LOST) state.system_error_code = ERR_OK;
   }
 
+  // --- Sensor role plausibility (heating only) ----------------------------
+  if (config.sensor_role_check_enabled) {
+    const SensorRoleResult roles = verify_sensor_roles(config, state);
+    if (roles.measurable) {
+      if (!roles.plausible) {
+        if (g_role_bad_since_ms == 0) g_role_bad_since_ms = now;
+        g_role_good_since_ms = 0;
+        if (now - g_role_bad_since_ms >= kRoleBadDebounceMs) {
+          state.active_alarms |= WARN_SENSOR_ROLE_SUSPECT;
+          if (state.system_error_code == ERR_OK) {
+            state.system_error_code = ERR_SENSOR_ROLE_SUSPECT;
+          }
+        }
+      } else {
+        g_role_bad_since_ms = 0;
+        if (g_role_good_since_ms == 0) g_role_good_since_ms = now;
+        if (now - g_role_good_since_ms >= kRoleGoodDebounceMs) {
+          state.active_alarms &= ~WARN_SENSOR_ROLE_SUSPECT;
+          if (state.system_error_code == ERR_SENSOR_ROLE_SUSPECT) {
+            state.system_error_code = ERR_OK;
+          }
+        }
+      }
+    } else {
+      // The check cannot distinguish a swapped sensor from an idle plant.
+      g_role_bad_since_ms = 0;
+      g_role_good_since_ms = 0;
+      state.active_alarms &= ~WARN_SENSOR_ROLE_SUSPECT;
+      if (state.system_error_code == ERR_SENSOR_ROLE_SUSPECT) {
+        state.system_error_code = ERR_OK;
+      }
+    }
+  } else {
+    state.active_alarms &= ~WARN_SENSOR_ROLE_SUSPECT;
+    if (state.system_error_code == ERR_SENSOR_ROLE_SUSPECT) {
+      state.system_error_code = ERR_OK;
+    }
+  }
+
+  update_effective_ceiling(config, state);
   // --- Hard floor over-temperature ----------------------------------------
   const bool mix_valid = state.T_mix_out.is_valid && isfinite(state.T_mix_out.value_c);
   if (mix_valid && state.T_mix_out.value_c >= config.t_max_hard) {
@@ -312,25 +464,35 @@ void tick(const Config& config, SystemState& state) {
   const bool pump_on[3] = {state.pump_floor_phys, state.pump_rad1_phys, state.pump_rad2_phys};
   bool dry_run = false;
   bool welded = false;
-  for (uint8_t i = 0; i < 3; ++i) {
-    if (!config.has_pump_power[i]) {
+  if (config.pump_power_check_enabled) {
+    for (uint8_t i = 0; i < 3; ++i) {
+      if (!config.has_pump_power[i]) {
+        g_dry_run_count[i] = 0;
+        g_welded_count[i] = 0;
+        continue;
+      }
+      const float watts = state.pump_power_w[i];
+      if (pump_on[i] && watts < 2.0f) {
+        if (g_dry_run_count[i] < 255) g_dry_run_count[i]++;
+      } else {
+        g_dry_run_count[i] = 0;
+      }
+      if (!pump_on[i] && watts > 2.0f) {
+        if (g_welded_count[i] < 255) g_welded_count[i]++;
+      } else {
+        g_welded_count[i] = 0;
+      }
+      dry_run = dry_run || g_dry_run_count[i] >= 20;
+      welded = welded || g_welded_count[i] >= 20;
+    }
+  } else {
+    // The owner explicitly disabled current-based protection, usually because
+    // the shunt is not calibrated yet. Keep the measurements for display, but
+    // never act on them.
+    for (uint8_t i = 0; i < 3; ++i) {
       g_dry_run_count[i] = 0;
       g_welded_count[i] = 0;
-      continue;
     }
-    const float watts = state.pump_power_w[i];
-    if (pump_on[i] && watts < 2.0f) {
-      if (g_dry_run_count[i] < 255) g_dry_run_count[i]++;
-    } else {
-      g_dry_run_count[i] = 0;
-    }
-    if (!pump_on[i] && watts > 2.0f) {
-      if (g_welded_count[i] < 255) g_welded_count[i]++;
-    } else {
-      g_welded_count[i] = 0;
-    }
-    dry_run = dry_run || g_dry_run_count[i] >= 20;
-    welded = welded || g_welded_count[i] >= 20;
   }
   if (dry_run) {
     state.active_alarms |= WARN_PUMP_DRY_RUN;
@@ -347,6 +509,9 @@ void tick(const Config& config, SystemState& state) {
     force_mixer_close = true;
   } else {
     state.active_alarms &= ~ALARM_WELDED_RELAY;
+    if (state.system_error_code == ERR_RELAY_FAULT_WELDED) {
+      state.system_error_code = ERR_OK;
+    }
   }
 
   // --- Mixer servo ---------------------------------------------------------

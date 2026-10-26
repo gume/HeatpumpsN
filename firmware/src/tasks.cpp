@@ -59,6 +59,16 @@ bool g_started = false;
 
 bool g_wdt_ready = false;
 bool g_wdt_subscribed = false;
+uint32_t g_last_health_log_ms = 0;
+
+// Ages of the three supervised tasks, in milliseconds. `started` is false until
+// all of them have reported at least once after boot.
+struct HealthAges {
+  uint32_t safety_ms;
+  uint32_t io_ms;
+  uint32_t control_ms;
+  bool started;
+};
 
 void mark(TaskId id) {
   const size_t index = static_cast<size_t>(id);
@@ -70,27 +80,31 @@ void mark(TaskId id) {
   taskEXIT_CRITICAL(&g_seen_mux);
 }
 
-bool health_ok() {
+HealthAges read_health_ages() {
+  HealthAges ages = {0, 0, 0, false};
   const TickType_t now = xTaskGetTickCount();
   const uint8_t required = static_cast<uint8_t>((1u << static_cast<size_t>(TaskId::Safety)) |
                                                 (1u << static_cast<size_t>(TaskId::Io)) |
                                                 (1u << static_cast<size_t>(TaskId::Control)));
-  bool ok = false;
 
   taskENTER_CRITICAL(&g_seen_mux);
   if ((g_seen_mask & required) == required) {
-    const TickType_t safety_age = now - g_last_seen[static_cast<size_t>(TaskId::Safety)];
-    const TickType_t io_age = now - g_last_seen[static_cast<size_t>(TaskId::Io)];
-    const TickType_t control_age = now - g_last_seen[static_cast<size_t>(TaskId::Control)];
-
-    ok = (safety_age <= pdMS_TO_TICKS(kSafetyPeriodMs * 3)) &&
-         (io_age <= pdMS_TO_TICKS(kIoPeriodMs * 10)) &&
-         (control_age <= pdMS_TO_TICKS(g_control_period_ms * 3));
+    ages.started = true;
+    ages.safety_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Safety)]);
+    ages.io_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Io)]);
+    ages.control_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Control)]);
   }
   taskEXIT_CRITICAL(&g_seen_mux);
 
-  return ok;
+  return ages;
 }
+
+bool health_ok(const HealthAges& ages) {
+  return ages.started && (ages.safety_ms <= kSafetyPeriodMs * 3) &&
+         (ages.io_ms <= kIoPeriodMs * 10) && (ages.control_ms <= g_control_period_ms * 3);
+}
+
+bool health_ok() { return health_ok(read_health_ages()); }
 
 void watchdog_begin(uint32_t timeout_ms) {
   esp_task_wdt_config_t config = {timeout_ms, 0, true};
@@ -144,8 +158,37 @@ void task_io(void* arg) {
 
     const TickType_t now = xTaskGetTickCount();
     const bool startup_grace = (now - g_start_tick) < pdMS_TO_TICKS(2000);
-    if (g_wdt_subscribed && (startup_grace || health_ok())) {
-      esp_task_wdt_reset();
+    if (g_wdt_subscribed) {
+      if (startup_grace) {
+        esp_task_wdt_reset();
+      } else {
+        const HealthAges ages = read_health_ages();
+        if (health_ok(ages)) {
+          esp_task_wdt_reset();
+          g_last_health_log_ms = 0;
+        } else {
+          // Withhold the feed: a real-time task missed its deadline, so the
+          // controller resets instead of leaving the outputs latched. Log the
+          // observed ages once per second first, otherwise the reset reason is
+          // impossible to diagnose from the RAM-only event log.
+          const uint32_t now_ms = millis();
+          if (g_last_health_log_ms == 0 || now_ms - g_last_health_log_ms >= 1000u) {
+            g_last_health_log_ms = now_ms;
+            if (!ages.started) {
+              logger::log_event(2, 1900,
+                                "Watchdog feed withheld: real-time tasks have not all reported");
+            } else {
+              char detail[96];
+              snprintf(detail, sizeof(detail),
+                       "Watchdog feed withheld: safety %ums, io %ums, control %ums",
+                       static_cast<unsigned>(ages.safety_ms),
+                       static_cast<unsigned>(ages.io_ms),
+                       static_cast<unsigned>(ages.control_ms));
+              logger::log_event(2, 1901, detail);
+            }
+          }
+        }
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(kIoPeriodMs));
