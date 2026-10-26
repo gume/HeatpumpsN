@@ -1,0 +1,26 @@
+{
+  "boiler": {
+    "nominal_temp_c": 67.9,
+    "incoming_nominal_c": 65.02,
+    "oscillation_period_s": 3600.0,
+    "oscillation_amplitude_k": 3.5,
+    "warmup_rate_k_per_s": 0.05,
+    "cooldown_rate_k_per_s": -0.0469
+  },
+  "mixer": {
+    "dead_time_s": 120.0,
+    "tau_mix_s": 30.0,
+    "travel_time_ms": 145000,
+    "valve_curve_c1": 1.1354,
+    "valve_curve_c2": -1.0844
+  },
+  "floor": {
+    "loop_delay_s": 30.0,
+    "nominal_return_temp_c": 25.19,
+    "steady_state_delta_t_k": 8.81,
+    "min_useful_delta_t_k": 2.0,
+    "tau_floor_s": 2400.0,
+    "return_rise_rate_k_per_s": 0.00501,
+    "cooldown_rate_k_per_s": -0.002
+  }
+}
