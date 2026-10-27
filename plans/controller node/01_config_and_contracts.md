@@ -95,8 +95,28 @@ struct Config {
   uint8_t  gpio_led_data;          // Addressable RGB LED data GPIO (TBD, WS2812B/SK6812)
   uint8_t  num_leds;               // Addressable LED count (e.g. 5, see 02_hardware_and_l0.md)
   bool     has_pump_power[3];      // optional power sensors [floor, rad1, rad2]
-  uint8_t  i2c_sda, i2c_scl;       // reserved for future I2C mixer encoder (TBD)
+  uint8_t  i2c_sda, i2c_scl;       // I2C bus (PCF8574 / future mixer encoder)
   char     sensor_id_boiler[17], sensor_id_ret[17], sensor_id_mix[17];
+
+  // --- Output driver / port expander --------------------------------------
+  // Runtime-selectable so one firmware image can drive direct GPIOs, the
+  // legacy 74HC595 carrier or a PCF8574 board (including a custom address).
+  uint8_t  output_expander;        // 0 = direct, 1 = 74HC595, 2 = PCF8574
+  uint8_t  expander_address;       // 7-bit I2C address, default 0x20
+  uint8_t  expander_data_pin;      // 74HC595 SER/DS
+  uint8_t  expander_clock_pin;     // 74HC595 SRCLK/SHCP
+  uint8_t  expander_latch_pin;     // 74HC595 RCLK/STCP
+  uint8_t  expander_oe_pin;        // 74HC595 /OE, 255 when hard-wired
+  bool     expander_oe_active_low; // true = low enables the 595 outputs
+  bool     output_active_low;      // true = logical ON drives the pin low
+  uint8_t  expander_bit_heater;    // expander bit 0-7 for each logical channel
+  uint8_t  expander_bit_pump_rad1;
+  uint8_t  expander_bit_pump_rad2;
+  uint8_t  expander_bit_pump_floor;
+  uint8_t  expander_bit_mix_direction;
+  uint8_t  expander_bit_mix_motion;
+  uint8_t  expander_bit_mux_s0;
+  uint8_t  expander_bit_mux_s1;
 
   // =========================================================================
   // CATEGORY 2: Dynamic Heating Parameters (Owner: Home Assistant, shadowed)
@@ -125,7 +145,7 @@ struct Config {
 2. **Category 2 — Dynamic Heating Parameters:** Commanded dynamically by **Home Assistant** (`floor_setpoint`, `summer_mode`). The controller persists the last valid value in NVS as a shadow/fallback (`setpoint_default` is used only before the first valid HA setpoint ever arrives or if NVS is blank).
 3. **Category 3 — Control Loop Tuning:** Computed and pushed *only* by the **Observer** into L3. L3 validates every parameter against hard compiled-in safety/plausibility bounds before adoption and NVS persistence. Not exposed for manual editing on human UIs.
 
-**NVS format and integrity:** the whole `Config` is stored as one blob with a magic value, format version, exact struct size, and a CRC32 checksum. Any blob that fails validation is discarded and compiled defaults are used; there is deliberately **no migration** between firmware versions while the hardware is still being tested on separate boards. A CRC/size failure in a current-format blob latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` so the condition is visible in Home Assistant and the event log; an older-format blob is discarded silently. The latch is held for the current boot and clears on the next boot once all persisted blobs validate; saving settings rewrites the config blob but does not clear the live flag, so unrelated counter or anti-seize damage cannot be hidden by a config save. Relay counters and the anti-seize schedule use the same CRC32-protected blob pattern.
+**NVS format and integrity:** the whole `Config` is stored as one blob with a magic value, format version, exact struct size, and a CRC32 checksum. Any blob that fails validation is discarded and compiled defaults are used. Older formats are migrated by copying their unchanged prefix onto current defaults: v1 (1288-byte prefix) and v2 (1348 bytes) are supported, and the appended fields (currently the output-driver block in v3) receive valid defaults. A CRC/size failure in a current-format blob latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` so the condition is visible in Home Assistant and the event log; an older-format blob is migrated (or discarded if it predates a supported prefix). The latch is held for the current boot and clears on the next boot once all persisted blobs validate; saving settings rewrites the config blob but does not clear the live flag, so unrelated counter or anti-seize damage cannot be hidden by a config save. Relay counters and the anti-seize schedule use the same CRC32-protected blob pattern.
 
 ---
 

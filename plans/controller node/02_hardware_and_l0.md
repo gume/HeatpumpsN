@@ -33,6 +33,17 @@ current is multiplexed onto one ADC pin, and the LED chain has 5 elements. The
 and ESP32-S3 primary targets); until then the `HHN1` carrier profile supplies
 the mapping.
 
+The output driver is **runtime configuration**, not a compile-time carrier
+property. `output_expander` selects direct GPIO, a 74HC595 or a PCF8574-style
+I2C expander; the expander pins, bit map, I2C address (for PCF8574) and output
+polarity are editable on the Hardware & Pins page. This lets the same firmware
+drive the legacy serial extender and the next carrier's PCF8574 board, including
+boards at a custom I2C address. `output_active_low` is the safety-relevant
+choice: the legacy 74HC595 relays are active-high (safe byte `0x00`), while the
+PCF8574 pins idle high and its relay board is active-low (safe byte `0xFF`).
+The MUX select bits are always written raw/active-high, independent of the
+relay polarity.
+
 L0 is written against a compile-time I/O backend, so the same layers can run
 against the real 1.0 carrier or against an emulated 1.0 carrier on a boardless
 devkit (`-DHPN_IO_EMULATION`). See
@@ -107,6 +118,12 @@ Using addressable RGB LEDs (WS2812B or SK6812) requires only **one single GPIO p
   the 74HC595 instead of separate open/close relays. There is no hardware
   interlock on that carrier, so the L1 sequence (motion off $\rightarrow$ wait
   $\rightarrow$ set direction $\rightarrow$ motion on) is the only protection.
+* Relay polarity is part of the runtime configuration (`output_active_low`).
+  Active-low boards are driven high for OFF, so the boot/safe byte is `0xFF`
+  rather than `0x00`; this is what keeps a PCF8574 relay board de-energised
+  while the MCU boots. L0 applies the same polarity to direct GPIOs and to both
+  expander types, and always re-writes the safe byte before enabling a 74HC595
+  `/OE`.
 
 ### 2.4 Steady-Rate 1-Wire Temperature Polling & Error Filtering
 
@@ -125,4 +142,4 @@ Using addressable RGB LEDs (WS2812B or SK6812) requires only **one single GPIO p
   * `pump_*_phys == ON` with $\text{power} \approx 0\text{ W} \rightarrow$ raises `WARN_PUMP_DRY_RUN` (dry-run, disconnected pump, or manual hardware switch open).
   * `pump_*_phys == OFF` with $\text{power} > 0\text{ W} \rightarrow$ raises `ALARM_WELDED_RELAY` alarm.
 * **Temporary carrier:** on HomeNet Heatpumps 1.0 the four ACS712 outputs share one ADC pin through a 74HC4051 whose select lines are bits 1–2 of the same 74HC595 as the relays, so a channel switch rewrites the output byte. `l0::select_current_channel()` is the only permitted way to change channels. Under emulation the ADC is not modelled; `l0::read_power_w()` returns the mocked watts instead.
-* **Reserved $\text{I}^2\text{C}$ Port:** Initialized on pins `i2c_sda` and `i2c_scl` when `pos_source == POS_SRC_I2C` for future direct magnetic encoder attachment (e.g., AS5600).
+* **Reserved $\text{I}^2\text{C}$ Port:** Initialized on pins `i2c_sda` and `i2c_scl` when `pos_source == POS_SRC_I2C` for future direct magnetic encoder attachment (e.g., AS5600), or when the PCF8574 output driver is selected. The PCF8574 has no register pointer: L0 writes one port byte per update at `expander_address` (7-bit, default `0x20`). A failed write is logged once and leaves the last safe state; the driver never enables outputs whose I2C bus has not acknowledged. The legacy serial extender and the PCF8574 are mutually exclusive choices for the same logical relay/mixer channels.

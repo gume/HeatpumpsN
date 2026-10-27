@@ -25,9 +25,9 @@ the design specifications live in [`plans/`](plans/).
 * The **only flashed board so far is a plain ESP32 devkit running the emulated
   carrier**. The real ESP32-S2 + HomeNet Heatpumps 1.0 carrier has never been
   flashed or validated. That is the single largest open risk.
-* Configuration is a **v2 CRC32-protected NVS blob** (1348 bytes) with automatic
-  v1→v2 migration. Adding a field requires bumping `kVersion` and extending the
-  migration path — there is a `static_assert` that will stop you otherwise.
+* Configuration is a **v3 CRC32-protected NVS blob** (1364 bytes) with automatic
+  v1/v2→v3 migration. Adding a field requires bumping `kVersion` and extending
+  the migration path — there is a `static_assert` that will stop you otherwise.
 * The **plant watchdog is fed only by `T_io`**. AsyncTCP's own watchdog entry is
   disabled at build time (`-DCONFIG_ASYNC_TCP_USE_WDT=0`). Do not remove that
   flag; it caused a real bench reset.
@@ -310,17 +310,19 @@ from the three coordinated circuit requests. Test Mode may drive the heater
 manually. MQTT switch topics publish the effective circuit demand; the four
 binary sensors publish `*_phys`.
 
-### 6.4 Configuration (v2)
+### 6.4 Configuration (v3)
 
-* `struct Config` is **1348 bytes**, sectioned: provisioning, safety bounds,
+* `struct Config` is **1364 bytes**, sectioned: provisioning, safety bounds,
   hardware constants, pin assignment, network/time, carrier wiring, MQTT
   meters, log streaming, output limits, pump calibration, mixer window, sensor
-  roles, inferred DHW. See `firmware/include/hpn/config.h`.
+  roles, inferred DHW, output-driver/expander. See
+  `firmware/include/hpn/config.h`.
 * NVS blob = header (magic, version, size) + payload + **CRC32**.
-* `kVersion = 2`, `kV1ConfigSize = 1288`. A v1 blob is CRC-checked, copied over
-  current defaults, sanitized, returned as `ConfigLoadResult::Migrated`, and
-  **saved immediately** by `main.cpp` so migration happens once.
-* `static_assert(sizeof(Config) == 1348)` — adding a field forces you to review
+* `kVersion = 3`, `kV1ConfigSize = 1288`, `kV2ConfigSize = 1348`. A v1 or v2
+  blob is CRC-checked, copied over current defaults, sanitized, returned as
+  `ConfigLoadResult::Migrated`, and **saved immediately** by `main.cpp` so
+  migration happens once.
+* `static_assert(sizeof(Config) == 1364)` — adding a field forces you to review
   the NVS format, bump the version and extend the migration path.
 * `sanitize_config()` range-checks every field; an inconsistent pair (e.g.
   minimum above ceiling) is clamped, not rejected.
@@ -468,8 +470,10 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
    `[l0] backend` line, extender init, 1-Wire discovery and relay safe state.
    Do not connect actuators on the first boot.
 3. **Bench-test relays one at a time with a meter** before connecting pumps.
-   The extender pulls outputs to GND at reset and the relay board is active-high;
-   re-confirm this on the actual board.
+   The legacy extender pulls outputs to GND at reset and its relay board is
+   active-high; a PCF8574 idles high and its relay board is active-low. Confirm
+   the selected driver and `output_active_low` on the actual board before
+   connecting actuators.
 4. **Implement and calibrate pump current** (`io_backend.cpp:268`): sample the
    selected MUX channel through the carrier divider, then set
    `pump_current_offset_v` / `pump_current_w_per_v` with a clamp meter. Leave
@@ -522,8 +526,9 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
 3. **Never run the serial monitor unbounded.** Always `timeout`.
 4. **Upload the filesystem before the app** when assets changed, then let the
    board reset. Stale `.gz` files silently serve old JS.
-5. **The extender has a single writer (`T_io`).** It carries relay bits and MUX
-   select lines. Safe byte is `0x00`.
+5. **The output driver has a single writer (`T_io`).** It carries relay bits
+   and MUX select lines. The safe byte is polarity-dependent: `0x00` for the
+   legacy active-high carrier, `0xFF` for an active-low PCF8574 board.
 6. **`*_intended` ≠ `*_demand` ≠ `*_requested` ≠ `*_phys`.** Debug the correct
    stage. A stale keep-alive clears the demand but not the intent.
 7. **Minimum opening never blocks a close.** If you add a path that closes the

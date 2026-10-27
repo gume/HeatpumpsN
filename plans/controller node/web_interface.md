@@ -179,10 +179,14 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 - Mixer travel timeout (max allowed travel time before fault)
 
 **3.5.2 Hardware & Pins**
-- Pin mapping table: pump relays, heater relay, mixer open/close (or 3-point config), sensor buses (1-Wire GPIO, etc.)
+- **Output driver:** direct GPIO, 74HC595 shift register or PCF8574 / custom I2C expander. The selected driver reveals only its relevant wiring fields.
+- **Output polarity:** relay/mixer outputs active high or active low (the PCF8574 board is active-low and idles high, so active-low keeps its relays off at boot). MUX select bits remain active-high.
+- **Expander wiring:** 74HC595 data/clock/latch, optional `/OE` pin and `/OE` polarity; PCF8574 7-bit I2C address (`0x20–0x27`, `0x38–0x3F`, or another `0x08–0x77` address for compatible parts) plus SDA/SCL pins.
+- **Expander bit map:** one distinct bit 0–7 for each relay, both mixer channels and the optional current-MUX select lines.
+- Pin mapping for direct mode: pump relays, heater relay, mixer open/close (or 3-point config), sensor buses (1-Wire GPIO, etc.)
 - Sensor offset calibration values
 - Valve travel time, end-stop configuration (if applicable)
-- Warning banner: changes affect Layer 1 arbitration scope; validate on bench.
+- Warning banner: changes affect Layer 1 arbitration scope; validate on bench. Output-driver, wiring and bit-map changes require a reboot.
 
 **3.5.3 Network & MQTT**
 - Wi-Fi: SSID, password (masked), fallback AP mode toggle
@@ -258,7 +262,7 @@ relay — useful to exercise L1 once it exists.
 
 **Read-only — emulated carrier:**
 
-- 74HC595 controller output byte and `OE` state
+- output-driver byte (74HC595 latch or PCF8574 port) and `OE` state where applicable
 - effective relay states (heater, rad1, rad2, floor) and manual-override badges
 - mixer direction + motion
 - selected MUX channel

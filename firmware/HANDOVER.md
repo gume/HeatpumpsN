@@ -250,3 +250,51 @@ tests/runtime_check.py
    value applied to all three circuits.
 5. **Version string:** `0.3.0-web` marks the new contract; bump it again once
    the hardware run passes if you want a distinguishable deployed build.
+
+---
+
+## 8. Change set 2 — runtime output driver / port expander (2026-10-27)
+
+### 8.1 Objective
+
+The legacy carrier and the next carrier have too few GPIOs, so both use a port
+expander. The Hardware & Pins page previously asked for raw relay GPIOs even
+when an expander was fitted, and the output polarity was compiled in. This
+change makes the driver and polarity runtime configuration:
+
+* select **direct GPIO**, **74HC595** or **PCF8574 / custom I²C expander**;
+* configure a 7-bit PCF8574 address (standard `0x20–0x27` / `0x38–0x3F` or a
+  custom `0x08–0x77` address);
+* configure the expander bit map and 74HC595 pins, `/OE` pin and `/OE` polarity;
+* choose **active-high or active-low** relay/mixer outputs.
+
+The MUX select lines stay raw/active-high in both cases.
+
+### 8.2 Safety-relevant behaviour
+
+* The safe output byte follows `output_active_low`: `0x00` for active-high,
+  `0xFF` for active-low (with the MUX select bits forced low). The PCF8574
+  board idles high, so active-low keeps its relays off during boot.
+* A 74HC595 `/OE` is disabled before the safe byte is shifted, then enabled.
+  The legacy carrier pulls `/OE` up, so outputs stay off until L0 drives it.
+* A PCF8574 I²C write failure is logged once; the driver keeps the last safe
+  byte instead of guessing.
+* Expander bit assignments must be unique (0–7); duplicate bits are rejected by
+  the server. 74HC595 requires data/clock/latch pins; PCF8574 requires SDA/SCL.
+* Direct GPIO outputs use the same polarity mapping as the expanders.
+
+### 8.3 Configuration format
+
+Config is now **v3**, 1364 bytes. v1 (1288-byte prefix) and v2 (1348 bytes)
+blobs migrate onto current defaults and are saved immediately as v3. The new
+fields are `output_expander`, `expander_address`, the 74HC595 pins and `/OE`
+polarity, `output_active_low`, and eight `expander_bit_*` values.
+
+### 8.4 Verification
+
+* `pio run -d firmware -e esp32dev_sim` → **SUCCESS**.
+* `pio run -d firmware -e esp32s2` → **SUCCESS** (compile only).
+* `node --check firmware/data/js/app.js` and `gzip -9` asset regeneration → OK.
+* `python3 -m py_compile tests/runtime_check.py` → OK.
+* Bench flash and full runtime suite: see the top-level `HANDOVER.md` for the
+  current result and the remaining hardware caveat (no real PCF8574 board yet).

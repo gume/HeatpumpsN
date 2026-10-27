@@ -65,10 +65,17 @@ share one 8-bit shift register and one latch.
 The part is **not a bare 74HC595**. It is a 74HC595-compatible serial output
 extender whose selected outputs pull to **GND** at power-on/reset. The relay
 board inputs are active-high, so a pulled-down (GND) output means the relay is
-**off**. That is why the `0x00` safe byte is correct for this carrier and why
-the firmware keeps `kActuatorOnLevel = HIGH`. Do not change the on/off levels
-based on a 595 datasheet alone; the polarity depends on the extender and the
-relay board together.
+**off**. That is why the `0x00` safe byte is correct for this carrier with
+`output_active_low = false`. Do not change the on/off levels based on a 595
+datasheet alone; the polarity depends on the extender and the relay board
+together.
+
+The output driver is **runtime configuration** (`Config::output_expander`,
+default `OUTPUT_EXPANDER_74HC595` for this carrier). The wiring below is the
+legacy default; the Hardware & Pins page can change the pins, the bit map and
+the polarity without a rebuild. A PCF8574 board is the alternative driver, and
+its relay board is active-low (safe byte `0xFF`) as described in
+`plans/controller node/02_hardware_and_l0.md`.
 
 Shift order is `MSBFIRST` with **bit 0 on Q0 (QA)**, matching the legacy
 ESPHome `sn74hc595` component.
@@ -101,7 +108,9 @@ explicitly at boot and on any task-startup failure.
 
 `OE` is active low. The old ESPHome driver asserted it `HIGH` (disabled) while
 configuring pins, shifted `0x00`, pulsed the latch, and only then pulled it
-`LOW`. The firmware mirrors that order in `l0::begin()`.
+`LOW`. The firmware mirrors that order in `l0::begin()`, and derives the safe
+byte from `output_active_low` (`0x00` active-high, `0xFF` active-low) so the
+same sequence protects either relay board.
 
 > **Hardware caveat:** between power-on and the first firmware write, `OE` is
 > floating. A pull-up resistor on `OE` to 3V3 is recommended so the outputs
@@ -125,10 +134,10 @@ supersedes it. Any code that writes bits 3 and 4 must go through
 ### 3.3 Shared register, single writer
 
 The MUX select bits (1–2) live in the same byte as the relay bits. Selecting an
-ADC channel therefore rewrites the whole shift register. This is safe only
+ADC channel therefore rewrites the whole output byte. This is safe only
 because the latch holds the previous outputs while shifting, and because the
-firmware keeps one authoritative copy (`g_sr_cache`) that only `T_io` mutates.
-Do not write the shift register from any other task.
+firmware keeps one authoritative copy (`g_output_byte`) that only `T_io`
+mutates. Do not write the output driver from any other task.
 
 ## 4. Pump current measurement
 

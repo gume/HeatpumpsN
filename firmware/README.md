@@ -245,17 +245,20 @@ task and never blocks the real-time tasks.
   `*_intended` → `*_requested` intake as HA. The heater is refused unless a pump
   is commanded ON. Activation/deactivation and every command are logged.
 - **Settings** — Safety & Timeouts, Hardware & Pins, Network & MQTT, Firmware
-  Update and System. Saves are validated server-side and written to NVS only
-  when the form is submitted. The Network page shows the live MQTT state, can
-  queue a test publication, and configures optional log streaming.
+  Update and System. Hardware & Pins selects the output driver (direct GPIO,
+  74HC595 or PCF8574), its wiring/bit map and active-high/low polarity before
+  showing the remaining sensor and calibration fields. Saves are validated
+  server-side and written to NVS only when the form is submitted. The Network
+  page shows the live MQTT state, can queue a test publication, and configures
+  optional log streaming.
 - **Runtime Parameters** — read-only HA/observer values.
 
 The event, access and slow logs are RAM-only in this build; they reset on
 reboot. Event and slow records can optionally be mirrored to MQTT (see above).
 Relay counters are persisted hourly in hardware builds and stay in RAM under
 emulation (see above). Configuration, counters and the anti-seize schedule are
-persisted as CRC32-protected NVS blobs. The config blob is versioned: a v1 blob
-is migrated to v2 by copying its unchanged 1288-byte prefix over current
+persisted as CRC32-protected NVS blobs. The config blob is versioned: v1 and
+v2 blobs are migrated to v3 by copying their unchanged prefix over current
 defaults, preserving every existing setting while initialising the appended
 fields, and the upgraded blob is saved immediately. Counters and the anti-seize
 schedule still have no migration path; an old-format blob of those is
@@ -406,7 +409,7 @@ firmware/
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
-│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1→v2)
+│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1/v2→v3)
 │   ├── crc32.h           # portable CRC32 helper
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
@@ -476,15 +479,18 @@ is a Python SConscript despite its extension; see the remote upload section.
 - The portal's Test Mode and configuration editor are not safety-rated. The
   external hardware over-temperature cutout and pump-cut switch remain
   mandatory and independent of this firmware.
-- On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX select lines
-  share one serial output extender (not a bare 74HC595). Keep a single writer
-  (`T_io`); the safe byte is `0x00`. See
+- The output driver is runtime configuration: direct GPIO, 74HC595 or
+  PCF8574. On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX
+  select lines share one serial output extender (not a bare 74HC595); the
+  default bit map and `0x00` safe byte live in `board_apply_defaults()` and the
+  Hardware & Pins page. Keep a single writer (`T_io`). See
   [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
 - Unassigned pins use `HPN_GPIO_UNASSIGNED` and are never driven.
 - The carrier's output extender pulls its selected outputs to GND at
-  power-on/reset and the relay board is active-high, so `0x00` is the safe
-  state. This polarity is confirmed for the 1.0 carrier; re-check it after any
-  board swap.
+  power-on/reset and the legacy relay board is active-high, so `0x00` is its
+  safe state. A PCF8574 idles high and its relay board is active-low, so select
+  "Relay outputs are active low" and use the `0xFF` safe byte. Re-check the
+  polarity after any board swap; it is a safety-relevant setting.
 - The external hardware over-temperature cutout and pump-cut switch (Layer 0)
   are mandatory and independent of this firmware.
 - `HPN_HAS_DUAL_CORE` is 0 for ESP32-S2 and ESP32-C3. Do not call
