@@ -1345,6 +1345,17 @@ function fieldText(name, label, value, help, type = 'text', placeholder = '') {
   </div>`;
 }
 
+function fieldHex(name, label, value, help) {
+  const byte = Math.max(0, Math.min(255, Number(value) || 0));
+  return `<div class="field">
+    <label for="f_${esc(name)}">${esc(label)}</label>
+    <input id="f_${esc(name)}" data-field="${esc(name)}" data-type="hex" type="text"
+           value="0x${byte.toString(16).toUpperCase().padStart(2, '0')}"
+           autocomplete="off" spellcheck="false">
+    <small>${esc(help || '')}</small>
+  </div>`;
+}
+
 function fieldPassword(name, label, hasValue, help) {
   return `<div class="field">
     <label for="f_${esc(name)}">${esc(label)}</label>
@@ -1552,7 +1563,20 @@ function renderSettingsHardware() {
         </div>
 
         <div class="form-section">
-          <h3>GPIO map</h3>
+          <h3>Output driver</h3>
+          <div class="form-grid">
+            ${fieldSelect('output_expander', 'Output driver', cfg.output_expander, [
+              { value: 0, label: 'Direct GPIO' },
+              { value: 1, label: '74HC595 shift register' },
+              { value: 2, label: 'PCF8574 / custom I2C expander' }
+            ], 'Selects how the relay and mixer channels are reached. Expander outputs share one byte.')}
+            ${fieldCheckbox('output_active_low', 'Relay outputs are active low', cfg.output_active_low, 'On: a logical ON drives the output low. Off: ON drives it high. The PCF8574 board idles high, so active-low keeps its relays off at boot.')}
+          </div>
+          <p class="small faint" style="margin-top:8px">The two current-MUX select bits stay active high regardless of this setting. With active-low outputs the safe boot byte becomes <span class="mono">0xFF</span> instead of <span class="mono">0x00</span>.</p>
+        </div>
+
+        <div class="form-section" data-expander-section="0">
+          <h3>Direct GPIO map</h3>
           <div class="form-grid">
             ${fieldNumber('gpio_pump_floor', 'Floor pump GPIO', cfg.gpio_pump_floor, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_pump_rad1', 'Heating loop 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
@@ -1560,10 +1584,49 @@ function renderSettingsHardware() {
             ${fieldNumber('gpio_heater', 'Heater GPIO', cfg.gpio_heater, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_mix_open', 'Mixer open / direction GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_mix_close', 'Mixer close / motion GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_onewire', 'OneWire GPIO', cfg.gpio_onewire, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_led_data', 'LED data GPIO', cfg.gpio_led_data, 0, 255, 1, pinHelp, 'int')}
+          </div>
+        </div>
+
+        <div class="form-section" data-expander-section="1">
+          <h3>74HC595 wiring</h3>
+          <div class="form-grid">
+            ${fieldNumber('expander_data_pin', 'Serial data (SER/DS) GPIO', cfg.expander_data_pin, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('expander_clock_pin', 'Shift clock (SRCLK/SHCP) GPIO', cfg.expander_clock_pin, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('expander_latch_pin', 'Latch clock (RCLK/STCP) GPIO', cfg.expander_latch_pin, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('expander_oe_pin', 'Output enable (/OE) GPIO', cfg.expander_oe_pin, 0, 255, 1, '255 when /OE is hard-wired on the board.', 'int')}
+            ${fieldCheckbox('expander_oe_active_low', '/OE is active low', cfg.expander_oe_active_low, 'Most 74HC595 boards enable the outputs with a low level; the legacy carrier pulls /OE up to disable them at boot.')}
+          </div>
+        </div>
+
+        <div class="form-section" data-expander-section="2">
+          <h3>PCF8574 wiring</h3>
+          <div class="form-grid">
+            ${fieldHex('expander_address', 'I2C address (7-bit)', cfg.expander_address, '0x20–0x27 for a PCF8574, 0x38–0x3F for a PCF8574A. Other 0x08–0x77 addresses are accepted for compatible expanders.')}
             ${fieldNumber('i2c_sda', 'I2C SDA GPIO', cfg.i2c_sda, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('i2c_scl', 'I2C SCL GPIO', cfg.i2c_scl, 0, 255, 1, pinHelp, 'int')}
+          </div>
+          <p class="small faint" style="margin-top:8px">The I2C bus is also reserved for the future local mixer encoder.</p>
+        </div>
+
+        <div class="form-section" data-expander-section="1 2">
+          <h3>Expander bit map</h3>
+          <div class="form-grid">
+            ${fieldNumber('expander_bit_pump_floor', 'Floor pump bit', cfg.expander_bit_pump_floor, 0, 7, 1, 'Output bit 0–7. Each logical channel must use a distinct bit.', 'int')}
+            ${fieldNumber('expander_bit_pump_rad1', 'Heating loop 1 pump bit', cfg.expander_bit_pump_rad1, 0, 7, 1, 'Output bit 0–7.', 'int')}
+            ${fieldNumber('expander_bit_pump_rad2', 'Heating loop 2 pump bit', cfg.expander_bit_pump_rad2, 0, 7, 1, 'Output bit 0–7.', 'int')}
+            ${fieldNumber('expander_bit_heater', 'Heater bit', cfg.expander_bit_heater, 0, 7, 1, 'Output bit 0–7.', 'int')}
+            ${fieldNumber('expander_bit_mix_direction', 'Mixer open / direction bit', cfg.expander_bit_mix_direction, 0, 7, 1, 'First mixer channel.', 'int')}
+            ${fieldNumber('expander_bit_mix_motion', 'Mixer close / motion bit', cfg.expander_bit_mix_motion, 0, 7, 1, 'Second mixer channel.', 'int')}
+            ${fieldNumber('expander_bit_mux_s0', 'Current MUX S0 bit', cfg.expander_bit_mux_s0, 0, 7, 1, 'Only used when the carrier has a current MUX.', 'int')}
+            ${fieldNumber('expander_bit_mux_s1', 'Current MUX S1 bit', cfg.expander_bit_mux_s1, 0, 7, 1, 'Only used when the carrier has a current MUX.', 'int')}
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3>Sensors &amp; LEDs</h3>
+          <div class="form-grid">
+            ${fieldNumber('gpio_onewire', 'OneWire GPIO', cfg.gpio_onewire, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_led_data', 'LED data GPIO', cfg.gpio_led_data, 0, 255, 1, pinHelp, 'int')}
           </div>
         </div>
 
@@ -1965,6 +2028,17 @@ function bindFormBehaviors(root) {
     target.addEventListener('input', () => { range.value = target.value; });
   });
 
+  const expanderSelect = root.querySelector('[data-field="output_expander"]');
+  if (expanderSelect) {
+    const syncExpanderSections = () => {
+      $$('[data-expander-section]', root).forEach((section) => {
+        section.hidden = !section.dataset.expanderSection.split(' ').includes(expanderSelect.value);
+      });
+    };
+    expanderSelect.addEventListener('change', syncExpanderSections);
+    syncExpanderSections();
+  }
+
   $$('form.settings-form', root).forEach((form) => {
     const markDirty = (event) => {
       if (event?.target?.id === 'theme-select') return;
@@ -1995,6 +2069,11 @@ function collectForm(form) {
     }
     if (input.dataset.type === 'int') {
       data[key] = parseInt(input.value, 10);
+      return;
+    }
+    if (input.dataset.type === 'hex') {
+      const parsed = parseInt(String(input.value).trim().replace(/^0x/i, ''), 16);
+      data[key] = Number.isInteger(parsed) ? parsed : 0;
       return;
     }
     if (input.dataset.type === 'number') {

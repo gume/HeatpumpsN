@@ -648,6 +648,22 @@ void fill_hardware(JsonObject o, const Config& c) {
   }
   o["i2c_sda"] = c.i2c_sda;
   o["i2c_scl"] = c.i2c_scl;
+  o["output_expander"] = c.output_expander;
+  o["expander_address"] = c.expander_address;
+  o["expander_data_pin"] = c.expander_data_pin;
+  o["expander_clock_pin"] = c.expander_clock_pin;
+  o["expander_latch_pin"] = c.expander_latch_pin;
+  o["expander_oe_pin"] = c.expander_oe_pin;
+  o["expander_oe_active_low"] = c.expander_oe_active_low;
+  o["output_active_low"] = c.output_active_low;
+  o["expander_bit_heater"] = c.expander_bit_heater;
+  o["expander_bit_pump_rad1"] = c.expander_bit_pump_rad1;
+  o["expander_bit_pump_rad2"] = c.expander_bit_pump_rad2;
+  o["expander_bit_pump_floor"] = c.expander_bit_pump_floor;
+  o["expander_bit_mix_direction"] = c.expander_bit_mix_direction;
+  o["expander_bit_mix_motion"] = c.expander_bit_mix_motion;
+  o["expander_bit_mux_s0"] = c.expander_bit_mux_s0;
+  o["expander_bit_mux_s1"] = c.expander_bit_mux_s1;
   o["sensor_id_boiler"] = c.sensor_id_boiler;
   o["sensor_id_ret"] = c.sensor_id_ret;
   o["sensor_id_mix"] = c.sensor_id_mix;
@@ -970,6 +986,58 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_pin(in, "i2c_sda", c.i2c_sda, err)) return false;
   if (!json_pin(in, "i2c_scl", c.i2c_scl, err)) return false;
 
+  if (!json_uint8(in, "output_expander", c.output_expander, OUTPUT_EXPANDER_NONE,
+                  OUTPUT_EXPANDER_PCF8574, err))
+    return false;
+  if (!json_uint8(in, "expander_address", c.expander_address, 0x08, 0x77, err)) return false;
+  if (!json_pin(in, "expander_data_pin", c.expander_data_pin, err)) return false;
+  if (!json_pin(in, "expander_clock_pin", c.expander_clock_pin, err)) return false;
+  if (!json_pin(in, "expander_latch_pin", c.expander_latch_pin, err)) return false;
+  if (!json_pin(in, "expander_oe_pin", c.expander_oe_pin, err)) return false;
+  if (!json_bool(in, "expander_oe_active_low", c.expander_oe_active_low, err)) return false;
+  if (!json_bool(in, "output_active_low", c.output_active_low, err)) return false;
+  if (!json_uint8(in, "expander_bit_heater", c.expander_bit_heater, 0, 7, err)) return false;
+  if (!json_uint8(in, "expander_bit_pump_rad1", c.expander_bit_pump_rad1, 0, 7, err))
+    return false;
+  if (!json_uint8(in, "expander_bit_pump_rad2", c.expander_bit_pump_rad2, 0, 7, err))
+    return false;
+  if (!json_uint8(in, "expander_bit_pump_floor", c.expander_bit_pump_floor, 0, 7, err))
+    return false;
+  if (!json_uint8(in, "expander_bit_mix_direction", c.expander_bit_mix_direction, 0, 7, err))
+    return false;
+  if (!json_uint8(in, "expander_bit_mix_motion", c.expander_bit_mix_motion, 0, 7, err))
+    return false;
+  if (!json_uint8(in, "expander_bit_mux_s0", c.expander_bit_mux_s0, 0, 7, err)) return false;
+  if (!json_uint8(in, "expander_bit_mux_s1", c.expander_bit_mux_s1, 0, 7, err)) return false;
+
+  const uint8_t expander_bits[] = {
+      c.expander_bit_heater,     c.expander_bit_pump_rad1,   c.expander_bit_pump_rad2,
+      c.expander_bit_pump_floor, c.expander_bit_mix_direction, c.expander_bit_mix_motion,
+      c.expander_bit_mux_s0,     c.expander_bit_mux_s1,
+  };
+  for (size_t i = 0; i < sizeof(expander_bits); ++i) {
+    for (size_t j = i + 1; j < sizeof(expander_bits); ++j) {
+      if (expander_bits[i] == expander_bits[j]) {
+        err = "expander bit assignments must be unique";
+        return false;
+      }
+    }
+  }
+
+  if (c.output_expander == OUTPUT_EXPANDER_74HC595) {
+    if (c.expander_data_pin == HPN_GPIO_UNASSIGNED ||
+        c.expander_clock_pin == HPN_GPIO_UNASSIGNED ||
+        c.expander_latch_pin == HPN_GPIO_UNASSIGNED) {
+      err = "74HC595 needs data, clock and latch pins";
+      return false;
+    }
+  } else if (c.output_expander == OUTPUT_EXPANDER_PCF8574) {
+    if (c.i2c_sda == HPN_GPIO_UNASSIGNED || c.i2c_scl == HPN_GPIO_UNASSIGNED) {
+      err = "PCF8574 needs I2C SDA and SCL pins";
+      return false;
+    }
+  }
+
   // LED count and pump-power feedback are fixed by the carrier profile, not
   // user-selectable. They are intentionally not parsed here.
 
@@ -1024,7 +1092,23 @@ bool hardware_requires_reboot(const Config& a, const Config& b) {
          a.gpio_led_data != b.gpio_led_data ||
          a.i2c_sda != b.i2c_sda || a.i2c_scl != b.i2c_scl ||
          a.mixer_wiring != b.mixer_wiring || a.tick_ms != b.tick_ms ||
-         a.temp_poll_interval_ms != b.temp_poll_interval_ms;
+         a.temp_poll_interval_ms != b.temp_poll_interval_ms ||
+         a.output_expander != b.output_expander ||
+         a.expander_address != b.expander_address ||
+         a.expander_data_pin != b.expander_data_pin ||
+         a.expander_clock_pin != b.expander_clock_pin ||
+         a.expander_latch_pin != b.expander_latch_pin ||
+         a.expander_oe_pin != b.expander_oe_pin ||
+         a.expander_oe_active_low != b.expander_oe_active_low ||
+         a.output_active_low != b.output_active_low ||
+         a.expander_bit_heater != b.expander_bit_heater ||
+         a.expander_bit_pump_rad1 != b.expander_bit_pump_rad1 ||
+         a.expander_bit_pump_rad2 != b.expander_bit_pump_rad2 ||
+         a.expander_bit_pump_floor != b.expander_bit_pump_floor ||
+         a.expander_bit_mix_direction != b.expander_bit_mix_direction ||
+         a.expander_bit_mix_motion != b.expander_bit_mix_motion ||
+         a.expander_bit_mux_s0 != b.expander_bit_mux_s0 ||
+         a.expander_bit_mux_s1 != b.expander_bit_mux_s1;
 }
 
 bool hostname_valid(const char* hostname) {
