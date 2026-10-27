@@ -61,7 +61,7 @@ Every discovery payload injects a shared device block:
     "identifiers": ["heatpumpsn_aabbcc112233"],
     "name": "HeatpumpsN Controller",
     "manufacturer": "HeatpumpsN",
-    "model": "HomeNet Heatpumps 1.0",
+    "model": "HomeNet Heating control v0.1",
     "sw_version": "0.3.0-web",
     "configuration_url": "http://192.168.2.14/"
   },

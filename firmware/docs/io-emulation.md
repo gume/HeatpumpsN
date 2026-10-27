@@ -1,9 +1,9 @@
 # I/O emulation
 
 The controller is developed on a **boardless** ESP32 devkit, while the plant
-currently runs a **HomeNet Heatpumps 1.0** carrier. To develop the control
+currently runs a **HomeNet Heating control v0.1** board. To develop the control
 layers without that hardware, L0 can run against an in-memory model of the
-carrier instead of physical pins.
+board instead of physical pins.
 
 Emulation is a **compile-time** choice. There is no runtime switching and no
 hardware autodetection: either the firmware talks to pins, or it talks to the
@@ -14,46 +14,50 @@ model.
 ```
 L1/L2/L4
    │  logical calls (relay, mixer, temperature, power)
-L0  firmware/src/l0_io.cpp        carrier logic: bits, MUX channel, safe state
+L0  firmware/src/l0_io.cpp        board logic: bits, MUX channel, safe state
    │  pin / ADC / LED / sensor calls
 io  firmware/src/io_backend.cpp   compile-time switch
    ├── hardware: Arduino GPIO, shiftOut, analogRead, Adafruit_NeoPixel
    └── emulated: firmware/src/sim.cpp  in-memory model
 ```
 
-The carrier profile (`BoardConfig`) is shared by both backends, so the
-emulated 1.0 carrier decodes exactly the same output-extender byte, MUX channel
-and relay bits as the real one.
+The board profile (`BoardConfig`) is shared by both backends, so the emulated
+v0.1 board decodes exactly the same output-extender byte, MUX channel and relay
+bits as the real one. The same applies to the v1.x PCF8574 byte and its P7
+fault input.
 
 ## 2. Building
 
-| Environment | Carrier | Backend |
+| Environment | Board | Backend |
 | --- | --- | --- |
-| `esp32dev_sim` | HomeNet Heatpumps 1.0 | **emulated** — default env |
+| `esp32dev_sim` | HomeNet Heating control v0.1 | **emulated** — default env |
+| `esp32dev_hhn1x_sim` | HomeNet Heating control v1.x | **emulated** bench |
 | `esp32dev` | boardless | hardware, no pins assigned |
-| `esp32s2` | HomeNet Heatpumps 1.0 | hardware |
-| `esp32s3` / `esp32c3` | boardless | hardware, 2.0 targets pending |
+| `esp32s2` | HomeNet Heating control v0.1 | hardware |
+| `esp32c3_hhn1x` | HomeNet Heating control v1.x | hardware |
+| `esp32s3` / `esp32c3` | boardless | hardware, future board |
 
 ```bash
 pio run -e esp32dev_sim         # default environment
 pio run -e esp32dev_sim -t upload
 ```
 
-The flag is `-DHPN_IO_EMULATION` (plus `-DHPN_CARRIER_HHN1`). To emulate a
-future carrier, keep the flag and change the carrier macro.
+The flag is `-DHPN_IO_EMULATION` (plus `-DHPN_CARRIER_HHN1` or
+`-DHPN_CARRIER_HHN1X`). To emulate another board, keep the flag and change the
+board macro.
 
 At boot L0 prints which path is active:
 
 ```
-[l0] carrier   HomeNet Heatpumps 1.0 (74HC595 output extender)
+[l0] board     HomeNet Heating control v0.1 (74HC595 output driver)
 [l0] backend   emulation
 [l0] 74HC595   data=12 clock=11 latch=9 oe=7 (OE active-low)
 ```
 
 An `esp32dev_sim` image must never be expected to drive real relays. Verify the
 `backend` line before connecting anything. The driver name follows the runtime
-`output_expander` setting; a PCF8574 selection prints `PCF8574 output extender`
-and uses the same emulated output byte.
+`output_expander` setting; a PCF8574 selection prints `PCF8574` and uses the
+same emulated output byte.
 
 ## 3. What the model contains
 
@@ -160,7 +164,7 @@ Because the HTTP server runs in the AsyncTCP task and L0 in `T_io`, the page
 never blocks the control loop. The page contains:
 
 1. Four compact relay buttons (heater, floor, radiator 1, radiator 2) that
-   override the emulated carrier directly.
+   override the emulated board directly.
 2. Mixer open/stop/close buttons.
 3. Behaviour switches: follow controller, realistic current sensors and the
    placeholder realistic boiler sine wave.
@@ -169,25 +173,26 @@ never blocks the control loop. The page contains:
 5. Four power inputs (floor, radiator 1, radiator 2, mixer), limited to
    0–40 W. With realistic current sensors on, the input sets the on/moving
    wattage and the page shows the effective power separately.
-6. A carrier readout (controller output byte, MUX, OE, model revision) and a
-   reset button.
+6. A board readout (controller output byte, MUX, OE, interlock fault, model
+   revision) and a reset button.
 
 Status LEDs are shown on the main dashboard, not on the emulation page. They
 are derived from the controller's live state (system/comms, boiler, floor,
-radiator 1, radiator 2) using the HHN 1.0 semantics in
+radiator 1, radiator 2) using the HomeNet Heating control v0.1 semantics in
 [`../../plans/controller node/02_hardware_and_l0.md`](../../plans/controller%20node/02_hardware_and_l0.md).
 The live dashboard reads the controller state through `/ws`; changes made on
 the emulation page appear there after the next L0 poll.
 
-## 6. Adding HomeNet Heatpumps 2.0
+## 6. Adding another board
 
-When the 2.0 layout is defined:
+When another board layout is defined:
 
-1. Add a `BoardConfig` constant and an `HPN_CARRIER_HHN2` branch in
+1. Add a `BoardConfig` constant and a new `HPN_CARRIER_*` branch in
    `firmware/src/board.cpp`.
-2. Add its defaults (pins, sensor IDs, LED count) in `board_apply_defaults()`.
-3. Add envs for the primary MCUs, e.g. `esp32c3` and `esp32s3`, with
-   `-DHPN_CARRIER_HHN2`, plus an `*_sim` variant for emulation.
-4. Update `sim.cpp` only if the carrier uses a shape the model does not decode
+2. Add its defaults (pins, bit map, polarity, current front end, sensor IDs,
+   LED count) in `board_apply_defaults()`.
+3. Add envs for its MCUs with the new macro, plus an `*_sim` variant for
+   emulation.
+4. Update `sim.cpp` only if the board uses a shape the model does not decode
    (for example more than one shift register or a different MUX topology).
-5. Document the pin map in `firmware/docs/hhn-2.0.md`.
+5. Document the pin map in `firmware/docs/boards.md`.

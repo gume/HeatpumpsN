@@ -6,8 +6,8 @@
 > (commit `bea823e`).
 
 PlatformIO project for the ESP32 controller node. It currently implements a
-FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
-HomeNet Heatpumps 1.0 and 2.0, a compile-time **I/O emulation** backend so the
+FreeRTOS task set, the boot-safe **L0** output layer, a board abstraction for
+HomeNet Heating control v0.1 and v1.x, a compile-time **I/O emulation** backend so the
 controller can be developed on a boardless devkit, a station-mode **Wi-Fi
 client**, a **MQTT/Home Assistant** integration, and a LittleFS-backed **web
 portal** in L4. L1 safety arbitration and L2 floor control are implemented;
@@ -15,33 +15,37 @@ L3 adaptation and the observer-owned tuning remain TODO. The next implementation
 steps are described in
 [`../plans/controller node/`](../plans/controller%20node/).
 
-## Targets, carriers and backends
+## Targets, boards and backends
 
-| Environment | MCU board | Core | Carrier | Backend |
+| Environment | MCU board | Core | Board | Backend |
 | --- | --- | --- | --- | --- |
-| `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — default env |
+| `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heating control v0.1 | **emulated** — default env |
+| `esp32dev_hhn1x_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heating control v1.x | **emulated** bench |
 | `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
-| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, runtime output driver + MUX |
-| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, 2.0 target |
-| `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, 2.0 target |
+| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heating control v0.1 | hardware, runtime output driver + MUX |
+| `esp32c3_hhn1x` | `esp32-c3-devkitm-1` | single-core RISC-V | HomeNet Heating control v1.x | hardware, PCF8574 + ADS1115 |
+| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, future board |
+| `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, future board |
 
-Carriers describe wiring; the backend describes whether writes reach pins. They
+Boards describe wiring; the backend describes whether writes reach pins. They
 are independent compile-time choices:
 
-- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: 74HC595 default output
+- `-DHPN_CARRIER_HHN1` — HomeNet Heating control v0.1: 74HC595 default output
   driver, analogue current MUX, 5 LEDs, 1-Wire. ESP32-S2 in the field. The
   output driver itself is runtime configuration, so a PCF8574 can be selected
-  on the same carrier.
+  on the same board.
+- `-DHPN_CARRIER_HHN1X` — HomeNet Heating control v1.x: PCF8574 relay board,
+  P7 interlock fault input, ADS1115 current sensing with an optional TLV9064
+  assembly. No analogue MUX.
 - `-DHPN_CARRIER_BOARDLESS` — bare devkit, pins unassigned
-  (`HPN_GPIO_UNASSIGNED`) until the 2.0 layout exists.
-- `-DHPN_IO_EMULATION` — L0 runs against an in-memory model of the carrier
+  (`HPN_GPIO_UNASSIGNED`) until a board layout is selected.
+- `-DHPN_IO_EMULATION` — L0 runs against an in-memory model of the board
   instead of pins.
 
-The HomeNet Heatpumps 1.0 carrier is documented in
-[`docs/hhn-1.0.md`](docs/hhn-1.0.md): pin map, serial output extender bit map,
-MUX channels, ACS712 scaling, 1-Wire ROM IDs, LED mapping and the safety
-caveats of that wiring. The 2.0 carrier is still under planning and has no profile yet;
-ESP32-C3 and ESP32-S3 are its primary targets.
+Both boards are documented in [`docs/boards.md`](docs/boards.md): pin maps,
+74HC595/PCF8574 bit maps, per-output polarity, the v1.x fault input, MUX and
+ADS1115 channels, current-sensor scaling, 1-Wire ROM IDs, LED mapping and the
+safety caveats of each wiring.
 
 The emulation model, its API and the bench web page are described in
 [`docs/io-emulation.md`](docs/io-emulation.md).
@@ -318,8 +322,10 @@ include `-d firmware` so they work from the repository root; drop that option
 when you are already in `firmware/`.
 
 ```bash
-pio remote run -e esp32dev_sim                # daily dev: boardless + emulated HHN 1.0
-pio remote run -e esp32s2                     # real HHN 1.0 carrier
+pio remote run -e esp32dev_sim                # daily dev: emulated HomeNet Heating control v0.1
+pio remote run -e esp32dev_hhn1x_sim          # emulated HomeNet Heating control v1.x
+pio remote run -e esp32s2                     # real HomeNet Heating control v0.1
+pio remote run -e esp32c3_hhn1x               # real HomeNet Heating control v1.x
 pio remote run --force-remote -d firmware --target uploadfs   # LittleFS assets
 pio remote run --force-remote -d firmware --target upload     # application
 timeout 10s pio remote device monitor -b 115200 || true
@@ -403,16 +409,16 @@ Requirements, the full check list and the state the suite restores are in
 firmware/
 ├── platformio.ini
 ├── docs/
-│   ├── hhn-1.0.md            # HomeNet Heatpumps 1.0 carrier: pins, output extender, MUX
+│   ├── boards.md             # board descriptions: pins, output drivers, fault input, current sensing
 │   └── io-emulation.md       # emulation model, API, web integration
 ├── include/hpn/          # public contracts shared by all layers
 │   ├── build_target.h    # compile-time MCU / core count
-│   ├── board.h           # carrier profiles and output backends
+│   ├── board.h           # board profiles and output backends
 │   ├── io_types.h        # logical types: TempRole, CurrentChannel, Relay
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
-│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1/v2→v3)
+│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1/v2/v3→v4)
 │   ├── crc32.h           # portable CRC32 helper
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
@@ -427,7 +433,7 @@ firmware/
 │   └── logger.h          # RAM event/slow buffers + MQTT stream API
 ├── src/
 │   ├── main.cpp          # boot sequence, carrier selection, RTOS start
-│   ├── board.cpp         # HomeNet Heatpumps 1.0 and boardless definitions
+│   ├── board.cpp         # HomeNet Heating control v0.1/v1.x and boardless profiles
 │   ├── io_backend.cpp    # hardware or emulated I/O implementation
 │   ├── sim.cpp           # emulation model (only under HPN_IO_EMULATION)
 │   ├── config.cpp        # compiled-in safe defaults
@@ -482,17 +488,18 @@ is a Python SConscript despite its extension; see the remote upload section.
 - The portal's Test Mode and configuration editor are not safety-rated. The
   external hardware over-temperature cutout and pump-cut switch remain
   mandatory and independent of this firmware.
-- The output driver is runtime configuration: direct GPIO, 74HC595 or
-  PCF8574. On HomeNet Heatpumps 1.0 the relay outputs and the analogue-MUX
-  select lines share one serial output extender (not a bare 74HC595); the
-  default bit map and `0x00` safe byte live in `board_apply_defaults()` and the
-  Hardware & Pins page. Keep a single writer (`T_io`). See
-  [`docs/hhn-1.0.md`](docs/hhn-1.0.md) before wiring anything.
+- The output driver is runtime configuration: direct GPIO, 74HC595
+  (HomeNet Heating control v0.1) or PCF8574 (HomeNet Heating control v1.x).
+  On v0.1 the relay outputs and the analogue-MUX select lines share one serial
+  output extender (not a bare 74HC595); the default bit map and `0x00` safe
+  byte live in `board_apply_defaults()` and the Hardware & Pins page. Keep a
+  single writer (`T_io`). See [`docs/boards.md`](docs/boards.md) before wiring
+  anything.
 - Unassigned pins use `HPN_GPIO_UNASSIGNED` and are never driven.
-- The carrier's output extender pulls its selected outputs to GND at
-  power-on/reset and the legacy relay board is active-high, so `0x00` is its
-  safe state. A PCF8574 idles high and its relay board is active-low, so select
-  "Relay outputs are active low" and use the `0xFF` safe byte. Re-check the
+- The v0.1 output extender pulls its selected outputs to GND at
+  power-on/reset and the relay board is active-high, so `0x00` is its safe
+  state. A v1.x PCF8574 idles high and its relay board is active-low, so set
+  the per-output active-low flags and use the `0xFF` safe byte. Re-check the
   polarity after any board swap; it is a safety-relevant setting.
 - The external hardware over-temperature cutout and pump-cut switch (Layer 0)
   are mandatory and independent of this firmware.

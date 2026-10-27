@@ -10,7 +10,7 @@
 
 The Emulation Suite provides an autonomous, host-decoupled test and development environment directly on the ESP32. It fulfills three critical operational requirements:
 
-1. **Boardless Firmware Development:** Enables complete development and testing of all higher control layers (L1 Safety Arbiter, L2 Multi-Circuit Coordinator, L4 Comms & Web Portal) on a standard ESP32 devkit without physical connection to the HomeNet Heatpumps carrier board, high-voltage relays, or plumbing.
+1. **Boardless Firmware Development:** Enables complete development and testing of all higher control layers (L1 Safety Arbiter, L2 Multi-Circuit Coordinator, L4 Comms & Web Portal) on a standard ESP32 devkit without physical connection to a HomeNet Heating control board, high-voltage relays, or plumbing.
 2. **Deterministic Fault Injection:** Allows manual and automated simulation of critical edge-cases that are dangerous or difficult to reproduce on live equipment, including:
    * Hard floor overtemperature cutoffs ($T_{\text{mix\_out}} \ge 50.0\ ^{\circ}\text{C}$).
    * Temperature gradient spikes ($dT/dt > 0.3\ \text{K/s}$).
@@ -52,10 +52,10 @@ The emulation backend is selected at compile-time via PlatformIO build flags:
 
 | Environment | Carrier Profile | Backend Target | Description |
 | :--- | :--- | :--- | :--- |
-| `esp32dev_sim` | `HPN_CARRIER_HHN1` | `-DHPN_IO_EMULATION` | **Default bench target.** Emulates HomeNet Heatpumps 1.0 (74HC595 shift register, 74HC4051 current MUX, 5 LEDs). |
+| `esp32dev_sim` | `HPN_CARRIER_HHN1` | `-DHPN_IO_EMULATION` | **Default bench target.** Emulates HomeNet Heating control v0.1 (74HC595 shift register, 74HC4051 current MUX, 5 LEDs). |
 | `esp32dev` | `HPN_CARRIER_BOARDLESS` | Physical Hardware | Devkit target without pin assignments (stubs hardware). |
-| `esp32s2` | `HPN_CARRIER_HHN1` | Physical Hardware | Production target for physical HomeNet Heatpumps 1.0 carrier. |
-| `esp32c3` / `esp32s3` | `HPN_CARRIER_BOARDLESS` | Physical Hardware | Future HomeNet Heatpumps 2.0 targets. |
+| `esp32s2` | `HPN_CARRIER_HHN1` | Physical Hardware | Production target for physical HomeNet Heating control v0.1 board. |
+| `esp32c3` / `esp32s3` | `HPN_CARRIER_BOARDLESS` | Physical Hardware | Future board targets. |
 
 > [!CAUTION]
 > Firmware built with `-DHPN_IO_EMULATION` never manipulates physical GPIO pins. It must never be used to control live heating equipment. At startup, L0 explicitly announces the active backend on the serial console:
@@ -121,7 +121,7 @@ struct Snapshot {
 * **Output driver:** L0 writes the selected driver into the model. For a
   74HC595 the emulator captures the latch byte; for a PCF8574 it captures the
   I²C port byte. Both feed the same relay/MUX model, and
-  `output_active_low` inverts the relay interpretation. The default HHN 1.0 bit
+  the per-output `output_active_low_*` flags invert each relay. The default v0.1 bit
   map is:
   * Bit 0: Heater switch
   * Bit 3: Mixer direction
@@ -165,7 +165,7 @@ Under emulation builds, the web server serves a dedicated bench dashboard at `/e
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│  Board Emulation — HomeNet Heatpumps 1.0          [Revision: #1042]    │
+│  Board Emulation — HomeNet Heating control v0.1   [Revision: #1042]    │
 ├───────────────────────────────────┬────────────────────────────────────┤
 │ CARRIER RELAYS (Bypass L1)        │ BEHAVIOR MODES                     │
 │ [ Heater: OFF ] [ Floor: ON ]     │ [x] Follow Controller              │

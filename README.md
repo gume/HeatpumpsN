@@ -100,22 +100,23 @@ nothing is pinned to a non-existent Core 1. `T_io` feeds the task watchdog only
 while the real-time tasks are healthy, so a hung safety or control task resets
 the controller rather than leaving outputs latched.
 
-## Carriers and I/O emulation
+## Boards and I/O emulation
 
-Two hardware carriers exist:
+Two controller boards are supported:
 
-| Carrier | Status | MCUs |
+| Board | Status | MCU |
 | --- | --- | --- |
-| HomeNet Heatpumps 1.0 | in the plant today | any MCU in the LOLIN S2 Mini footprint; currently ESP32-S2 |
-| HomeNet Heatpumps 2.0 | under planning | ESP32-C3 and ESP32-S3 are the primary targets |
+| HomeNet Heating control v0.1 | in the plant today | ESP32-S2 (LOLIN S2 Mini footprint) |
+| HomeNet Heating control v1.x | current design, not yet validated on hardware | ESP32-C3 |
 
-Carrier wiring is isolated in a compile-time profile
-(`-DHPN_CARRIER_HHN1`, `-DHPN_CARRIER_BOARDLESS`). The 1.0 pin map, 74HC595 bit
-map, MUX channels, current-sensor scaling and safety caveats are documented in
-[`firmware/docs/hhn-1.0.md`](firmware/docs/hhn-1.0.md).
+Board wiring is isolated in a compile-time profile
+(`-DHPN_CARRIER_HHN1`, `-DHPN_CARRIER_HHN1X`, `-DHPN_CARRIER_BOARDLESS`). The
+pin maps, 74HC595/PCF8574 bit maps, per-output polarity, fault input, current
+sensing and safety caveats are documented in
+[`firmware/docs/boards.md`](firmware/docs/boards.md).
 
 The day-to-day development target is a **boardless ESP32 devkit** running the
-1.0 carrier **emulated** (`-DHPN_IO_EMULATION`, env `esp32dev_sim`, the default
+v0.1 board **emulated** (`-DHPN_IO_EMULATION`, env `esp32dev_sim`, the default
 PlatformIO environment): L0 drives an in-memory model of the carrier, mocked
 temperatures and pump power can be edited, and no pin is touched. The planned
 web dashboard gets a board-emulation page built on the same model. See

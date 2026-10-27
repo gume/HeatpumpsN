@@ -257,8 +257,7 @@ tests/runtime_check.py
 
 ### 8.1 Objective
 
-The legacy carrier and the next carrier have too few GPIOs, so both use a port
-expander. The Hardware & Pins page previously asked for raw relay GPIOs even
+HomeNet Heating control v0.1 and v1.x both use a port expander. The Hardware & Pins page previously asked for raw relay GPIOs even
 when an expander was fitted, and the output polarity was compiled in. This
 change makes the driver and polarity runtime configuration:
 
@@ -315,3 +314,101 @@ polarity, `output_active_low`, and eight `expander_bit_*` values.
 **Still open:** no real PCF8574 board or ESP32-S2 carrier has been available, so
 the I²C backend and the active-low relay board are compile/emulation-verified
 only. Bench-test polarity with a meter before connecting pumps.
+
+
+---
+
+## 9. Change set 3 — HomeNet Heating control v0.1 / v1.x (2026-10-27)
+
+### 9.1 Objective
+
+Describe and support both named boards, and make the differences runtime
+configuration instead of naming assumptions:
+
+* **HomeNet Heating control v0.1** — 74HC595-compatible serial extender,
+  74HC4051 analogue current MUX, ESP32-S2.
+* **HomeNet Heating control v1.x** — PCF8574 I²C extender, P7 interlock fault
+  input, ADS1115 current sensing with an optional TLV9064 assembly, ESP32-C3.
+
+### 9.2 Configuration and contract changes
+
+* Config is now **v4**, 1376 bytes. `kV3ConfigSize = 1364`; a v1/v2/v3 blob is
+  migrated onto current defaults. A v3 blob's single `output_active_low` is
+  copied into all six per-output flags so relay behaviour does not change.
+* Added **per-output polarity**: `output_active_low_heater`,
+  `..._pump_rad1`, `..._pump_rad2`, `..._pump_floor`, `..._mix_direction`,
+  `..._mix_motion`. The legacy global `output_active_low` remains only as a
+  migration input and is no longer exposed or used by the output code.
+* Added the v1.x fault input: `expander_bit_mix_fault` (0–7, 255 = disabled)
+  and `mix_fault_active_low`.
+* Added the current front end: `current_sense` (`NONE`, `MUX_ADC`, `ADS1115`),
+  `ads1115_address` and `tlv9064_present`. `current_sense_available()` returns
+  false for an ADS1115 without the TLV9064 assembly.
+* New board profile `HPN_CARRIER_HHN1X` and envs `esp32c3_hhn1x` (hardware) and
+  `esp32dev_hhn1x_sim` (emulated). The default bit map is P0 pump 1, P1 pump 2,
+  P2 pump 3/floor, P3 open, P4 close, P5 heat, P6 unused, P7 fault.
+* `BoardConfig` gained `current_ads_channel[]`; the v1.x map is
+  `floor=A3, rad1=A0, rad2=A1, mixer=A4` (see the A4 caveat in
+  `firmware/docs/boards.md` §3.4).
+* The portal exposes only the settings that belong to the selected driver and
+  current-sense mode, while storing every value. Mixer options are labelled
+  `Direction + motion (HomeNet Heating control v0.1)` and
+  `Open + close (HomeNet Heating control v1.x)`; drivers are `Direct GPIO`,
+  `74HC595 (HomeNet Heating control v0.1)` and
+  `PCF8574 (HomeNet Heating control v1.x)`.
+
+### 9.3 Safety-relevant behaviour
+
+* The safe byte is built per output from its own polarity flag. PCF8574 unused
+  pins and P7 idle high; the 74HC595 starts at `0x00`. The MUX select bits stay
+  active high.
+* `l0::write_outputs()` forces P7 high before every PCF8574 read so the input
+  is released.
+* `l0::update_interlock_fault()` reads P7 every `tick()`. When asserted, L1
+  de-energises both mixer channels, refuses further motion, raises
+  `ALARM_MIX_INTERLOCK` and sets `ERR_MIX_INTERLOCK_FAULT` (402) until the
+  input clears.
+* The ADS1115 path reads single-shot, single-ended inputs at ±4.096 V over
+  `Wire` (no extra library). Without the TLV9064 assembly it returns 0 W and
+  current-based protection stays off.
+* Duplicate expander bits are rejected; `255` ("not connected") is accepted for
+  the MUX select lines and the fault input and is excluded from the uniqueness
+  check.
+* Validation now requires an output expander plus two select bits for
+  `CURRENT_SENSE_MUX_ADC`, and I²C pins for `CURRENT_SENSE_ADS1115`.
+
+### 9.4 Verification
+
+* `pio run -d firmware -e esp32dev_sim` → **SUCCESS**.
+* `pio run -d firmware -e esp32s2` → **SUCCESS** (compile only).
+* `pio run -d firmware -e esp32dev_hhn1x_sim` → **SUCCESS**.
+* `pio run -d firmware -e esp32c3_hhn1x` → **SUCCESS** (compile only).
+* `static_assert(sizeof(Config) == 1376)` confirms the v4 layout.
+* `node --check firmware/data/js/app.js`, gzip asset regeneration and
+  `python3 -m py_compile tests/runtime_check.py` → OK.
+* Runtime suite extended for the new fields, mixed polarity, the P7 fault bit,
+  the ADS1115/TLV settings and the `255` optional-bit values.
+* Bench ESP32 reflashed (`uploadfs` + `upload`, env `esp32dev_sim`) and the full
+  suite run against `http://localhost:30080`: **89 passed, 0 failed, 0 skipped**
+  with `--serial`, **82 passed, 0 failed** without. Boot log after the v4 load:
+  `[config] loaded saved configuration from NVS`,
+  `board : HomeNet Heating control v0.1`,
+  `[l0] board HomeNet Heating control v0.1 (74HC595 output driver)`,
+  `[l0] backend emulation`.
+* The v1.x P7 fault path was verified by hand on the same emulated build: with
+  the PCF8574 driver, fault bit P7, active-low fault input and the v1.x bit map
+  stored and rebooted, the port byte at boot is `0xFF` (P7 released).
+  `POST /api/sim/interlock {"fault":true}` makes `/api/sim` report
+  `interlockFault=true` and `/api/state` report
+  `safety.errorCode=402` / *"mixer interlock fault (board reports open and close
+  energised together)"*; releasing the input clears the error back to `0`.
+  The bench config was restored to the v0.1 defaults afterwards.
+* New emulation endpoint: `POST /api/sim/interlock` with `{"fault": true|false}`
+  drives the simulated P7 input; the Emulation page has a matching
+  *Board interlock fault* checkbox and an *Interlock fault* readout.
+
+**Still open:** the schematic PDFs referenced for v1.x were not present in this
+checkout. The I²C pins (SDA 8 / SCL 9), PCF8574 address (`0x20`), ADS1115
+address (`0x48`), active-low relay polarity and the A4 mixer input must be
+confirmed before a physical v1.x board is energised. No v1.x hardware or
+ADS1115/TLV9064 assembly has been available for validation.

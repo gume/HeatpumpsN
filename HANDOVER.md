@@ -15,20 +15,22 @@ the design specifications live in [`plans/`](plans/).
 
 ## 1. TL;DR
 
-* The controller firmware is **bench-complete** on the emulated carrier: it
-  boots, runs a fixed FreeRTOS task set, drives the emulated HHN 1.0 carrier,
-  serves a web portal, talks to MQTT/Home Assistant, and passes its runtime
-  suite on a real ESP32 (`esp32dev_sim`; the exact check count is in
-  `tests/README.md`). The current output-driver change set was flashed to that
-  bench board (firmware + LittleFS) and passes the full suite:
+* The controller firmware is **bench-complete** on the emulated boards: it
+  boots, runs a fixed FreeRTOS task set, drives the emulated HomeNet Heating
+  control v0.1 and v1.x profiles, serves a web portal, talks to MQTT/Home
+  Assistant, and passes its runtime suite on a real ESP32 (`esp32dev_sim`; the
+  exact check count is in `tests/README.md`). The output-driver change set was
+  flashed to that bench board (firmware + LittleFS) and passed the full suite:
   `89 passed, 0 failed, 0 skipped` with `--serial` and `82 passed` without it on
   2026-10-27.
-* The **only flashed board so far is a plain ESP32 devkit running the emulated
-  carrier**. The real ESP32-S2 + HomeNet Heatpumps 1.0 carrier has never been
-  flashed or validated. That is the single largest open risk.
-* Configuration is a **v3 CRC32-protected NVS blob** (1364 bytes) with automatic
-  v1/v2→v3 migration. Adding a field requires bumping `kVersion` and extending
-  the migration path — there is a `static_assert` that will stop you otherwise.
+* The **only flashed board so far is a plain ESP32 devkit running an emulated
+  board**. The real ESP32-S2 + HomeNet Heating control v0.1 board and the
+  ESP32-C3 + HomeNet Heating control v1.x board have never been flashed or
+  validated. That is the single largest open risk.
+* Configuration is a **v4 CRC32-protected NVS blob** (1376 bytes) with automatic
+  v1/v2/v3→v4 migration. Adding a field requires bumping `kVersion` and
+  extending the migration path — there is a `static_assert` that will stop you
+  otherwise.
 * The **plant watchdog is fed only by `T_io`**. AsyncTCP's own watchdog entry is
   disabled at build time (`-DCONFIG_ASYNC_TCP_USE_WDT=0`). Do not remove that
   flag; it caused a real bench reset.
@@ -78,7 +80,7 @@ see §10.
 | `firmware/` | PlatformIO project: controller firmware | yes |
 | `firmware/HANDOVER.md` | engineering logs of recent change sets | yes |
 | `firmware/README.md` | firmware details: targets, tasks, portal, NVS, safety notes | yes |
-| `firmware/docs/hhn-1.0.md` | carrier wiring, output extender, MUX, current sensing | yes |
+| `firmware/docs/boards.md` | carrier wiring, output extender, MUX, current sensing | yes |
 | `firmware/docs/io-emulation.md` | emulation model and its seams | yes |
 | `firmware/data/` | LittleFS portal assets (`index.html`, `js/app.js`, `.gz`) | yes |
 | `firmware/test/` | unit tests — **currently only a README** | yes |
@@ -102,7 +104,7 @@ Not tracked on purpose: `analysis/heatpumps.duckdb` (~264 MB), `analysis/db/`,
 | Item | Value |
 | --- | --- |
 | MCU | ESP32-D0WDQ6 devkit (dual-core) |
-| PlatformIO env | `esp32dev_sim` — boardless devkit, **emulated** HHN 1.0 carrier |
+| PlatformIO env | `esp32dev_sim` — boardless devkit, **emulated** HomeNet Heating control v0.1 |
 | Portal | `http://192.168.2.14` (may change after reflash/DHCP) |
 | Wi-Fi | SSID `Testing`, weak signal (≈ −75 dBm) |
 | MQTT broker | `smcl.tmit.bme.hu:31883`, anonymous in tests |
@@ -266,15 +268,16 @@ HA / portal / MQTT
   L0  I/O      (T_io, 20 ms, core 1)  ── the ONLY layer that touches pins
         │  relays, expander, MUX, LEDs, 1-Wire
         ▼
-   carrier (HHN 1.0 extender / PCF8574) / emulation model
+   board (74HC595 / PCF8574) / emulation model
 ```
 
 Binding rules:
 
 * **Only L0 touches hardware.** L1/L2 write logical state and call L0.
-* **One writer for the output driver** (`T_io`). The selected 74HC595 or
-  PCF8574 carries relay bits *and* MUX select lines; two writers would corrupt
-  both.
+* **One writer for the output driver** (`T_io`). On HomeNet Heating control
+  v0.1 the 74HC595 carries relay bits *and* MUX select lines; on v1.x the
+  PCF8574 carries the relay bits and the P7 fault input. Two writers would
+  corrupt both.
 * L1 always wins. L2 and the portal may clamp for coherence, but L1 re-checks
   every move and never opens past the effective ceiling.
 * `T_io` feeds the plant task watchdog **only while** `T_safety`, `T_io` and
@@ -312,19 +315,20 @@ from the three coordinated circuit requests. Test Mode may drive the heater
 manually. MQTT switch topics publish the effective circuit demand; the four
 binary sensors publish `*_phys`.
 
-### 6.4 Configuration (v3)
+### 6.4 Configuration (v4)
 
-* `struct Config` is **1364 bytes**, sectioned: provisioning, safety bounds,
-  hardware constants, pin assignment, network/time, carrier wiring, MQTT
+* `struct Config` is **1376 bytes**, sectioned: provisioning, safety bounds,
+  hardware constants, pin assignment, network/time, board wiring, MQTT
   meters, log streaming, output limits, pump calibration, mixer window, sensor
-  roles, inferred DHW, output-driver/expander. See
-  `firmware/include/hpn/config.h`.
+  roles, inferred DHW, output-driver/expander, per-output polarity, fault input
+  and current front end. See `firmware/include/hpn/config.h`.
 * NVS blob = header (magic, version, size) + payload + **CRC32**.
-* `kVersion = 3`, `kV1ConfigSize = 1288`, `kV2ConfigSize = 1348`. A v1 or v2
-  blob is CRC-checked, copied over current defaults, sanitized, returned as
-  `ConfigLoadResult::Migrated`, and **saved immediately** by `main.cpp` so
-  migration happens once.
-* `static_assert(sizeof(Config) == 1364)` — adding a field forces you to review
+* `kVersion = 4`, `kV1ConfigSize = 1288`, `kV2ConfigSize = 1348`,
+  `kV3ConfigSize = 1364`. A v1/v2/v3 blob is CRC-checked, copied over current
+  defaults, sanitized, returned as `ConfigLoadResult::Migrated`, and **saved
+  immediately** by `main.cpp` so migration happens once. A v3 blob's single
+  global polarity is copied into all six per-output flags.
+* `static_assert(sizeof(Config) == 1376)` — adding a field forces you to review
   the NVS format, bump the version and extend the migration path.
 * `sanitize_config()` range-checks every field; an inconsistent pair (e.g.
   minimum above ceiling) is clamped, not rejected.
@@ -429,11 +433,11 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
 
 | Area | Notes |
 | --- | --- |
-| L0 carrier + emulation | HHN 1.0 profile, runtime direct/74HC595/PCF8574 driver, expander bit map, polarity-aware safe state, LEDs, 1-Wire, MUX select |
+| L0 boards + emulation | HomeNet Heating control v0.1 and v1.x profiles, runtime direct/74HC595/PCF8574 driver, expander bit map, per-output polarity, P7 interlock input, MUX and ADS1115 current front ends, LEDs, 1-Wire |
 | L1 supervision | hard/warn overtemp + hysteresis, gradient, sensor postures, role check, summer/anti-seize lockout, anti-short-cycle, pump plausibility |
 | L1 mixer | continuous target-position servo, ceiling/minimum, dynamic max, emergency close, homing/sweep, warning-only anomalies |
 | L2 control | PI + Smith predictor, flush + ΔT pause, DHW freeze/priority, long-pause, inferred DHW, overshoot reaction, per-circuit keep-alive, derived heater, board after-run |
-| Config | v3 + v1/v2 migration + CRC + sanitize + export/import |
+| Config | v4 + v1/v2/v3 migration + CRC + sanitize + export/import |
 | Comms | Wi-Fi, MQTT/HA (incl. error sensors + log streaming), portal, WebSocket, OTA |
 | Diagnostics | RAM event/slow/access logs, relay counters, 5 LEDs, boot-safe state |
 | Bench hardening | watchdog ownership, pre-sized JSON, withheld-feed diagnostics |
@@ -442,15 +446,15 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
 
 | Gap | Where | Impact |
 | --- | --- | --- |
-| **Real HHN 1.0 / ESP32-S2 validation** | `esp32s2` env | highest risk: no real relay, extender, MUX or 1-Wire run yet |
-| **Real PCF8574 / active-low relay validation** | runtime output driver | I²C backend and polarity are compile/emulation-verified only |
-| **Pump-current hardware sampling** | `io_backend.cpp:268` TODO; `read_power_w()` returns 0 on hardware | pump protection cannot work on the real plant until done |
+| **Real v0.1 / ESP32-S2 validation** | `esp32s2` env | highest risk: no real relay, extender, MUX or 1-Wire run yet |
+| **Real v1.x validation** | `esp32c3_hhn1x` env | PCF8574, P7 fault input, ADS1115 and the I²C pin choice are compile/emulation-verified only |
+| **Pump-current hardware sampling** | the MUX/ADC path exists; the ADS1115 path has no physical validation | pump protection is unverified on both boards |
 | **Local encoder sampling** | `l0_io.cpp:277`; `POS_SRC_I2C` declared but unimplemented | position stays dead-reckoned + external MQTT encoder |
 | **L3 adaptive tuning** | not implemented; no `/config/tuning/set` | parameters stay manual/observer-owned |
 | **Test sequence `heater-pump`** | `web_portal.cpp:2324` returns 501 | manual plant test not automatable (anti-seize, mixer-sweep and endstop-home exist) |
 | **Unit/native tests** | `firmware/test/` has only README | regressions are caught only by the runtime suite |
 | **Full L2 coordination edge cases** | `l2_control.h:10` says so | matrix is implemented but not exhaustively specified/tested |
-| **2.0 carrier** | `HPN_CARRIER_BOARDLESS` only | pins, LEDs and power topology still TBD |
+| **Future board** | `HPN_CARRIER_BOARDLESS` only | pins, LEDs and power topology still TBD |
 | **Captive-portal provisioning / portal auth** | portal is open on the LAN | credential entry is manual; no auth |
 | **Counter/anti-seize migration** | old-format blobs discarded | acceptable now, document before a format change |
 | **Secrets** | compiled bench credentials in `config.cpp` | replace with provisioning before deployment |
@@ -466,7 +470,7 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
 
 ### P0 — make the real plant safe to try
 
-1. **Read `firmware/docs/hhn-1.0.md` end to end**, then verify the carrier wiring
+1. **Read `firmware/docs/boards.md` end to end**, then verify the carrier wiring
    and the external over-temperature cutout / pump-cut switch. Those hardware
    protections are mandatory and independent of the firmware.
 2. **Flash `esp32s2` with pumps and boiler disabled.** Watch the boot log for the
@@ -581,14 +585,14 @@ untracked.
 
 - [ ] `pio remote agent list` shows the agent; `pio account login` done.
 - [ ] `curl http://192.168.2.14/api/status` returns `ok: true`.
-- [ ] `pio run -d firmware -e esp32dev_sim` and `-e esp32s2` both succeed.
+- [ ] `pio run -d firmware -e esp32dev_sim`, `-e esp32s2`, `-e esp32dev_hhn1x_sim` and `-e esp32c3_hhn1x` all succeed.
 - [ ] `python3 tests/runtime_check.py` → all checks pass on the current bench build.
 - [ ] `tests/flash_and_check.sh --serial` → all checks pass, no reset, no `501`.
 - [ ] Boot log shows `[l1] mixer opening limit …`, dynamic-max and minimum lines,
       plus `[rtos] task WDT armed at 9000ms`.
 - [ ] `GET /api/config/export` saved as a backup.
 - [ ] Read `plans/master_plan.md` and `plans/controller node/00…04`.
-- [ ] Read `firmware/docs/hhn-1.0.md` before touching the real carrier.
+- [ ] Read `firmware/docs/boards.md` before touching the real carrier.
 - [ ] Confirm with the owner who may operate the plant and when.
 - [ ] Agree on the P0/P1 order in §8 before starting.
 
@@ -600,7 +604,7 @@ untracked.
 | --- | --- |
 | What changed in the last session, in detail? | `firmware/HANDOVER.md` |
 | How do targets, tasks, portal and NVS work? | `firmware/README.md` |
-| How is the 1.0 carrier wired? | `firmware/docs/hhn-1.0.md` |
+| How are the boards wired? | `firmware/docs/boards.md` |
 | How does the emulation work and what can I fake? | `firmware/docs/io-emulation.md` |
 | What do the runtime checks cover? | `tests/README.md` |
 | System architecture and actors | `plans/master_plan.md` |
