@@ -33,9 +33,18 @@ typedef enum {
   DIV_LONG_PAUSE,
   DIV_ANTI_SHORT_CYCLE,
   DIV_DEMAND_LOSS,
-  DIV_AFTER_HEATING_TIMEOUT,
+  DIV_AFTER_RUN,          // board-managed pump overrun after a demand ends
   DIV_DHW_PRIORITY_ACTIVE
 } DivergenceReason;
+
+// Per-circuit runtime indexes. The order matches pump_power_w[3] and the
+// CurrentChannel enum (floor, radiator 1, radiator 2).
+typedef enum {
+  CIRCUIT_FLOOR = 0,
+  CIRCUIT_RAD1,
+  CIRCUIT_RAD2,
+  CIRCUIT_COUNT
+} CircuitIndex;
 
 // Bitmask constants for SystemState.active_alarms
 #define ALARM_OVERTEMP_HARD (1u << 0)
@@ -63,7 +72,6 @@ typedef enum {
 #define ERR_SENSOR_RET_LOST 202
 #define ERR_SENSOR_BOILER_LOST 203
 #define ERR_HA_KEEPALIVE_TIMEOUT 301
-#define ERR_AFTER_HEAT_TIMEOUT 302
 #define ERR_RELAY_FAULT_WELDED 401
 #define ERR_NVS_DATA_CORRUPTED 501
 #define ERR_SENSOR_ROLE_SUSPECT 603
@@ -110,17 +118,26 @@ struct SystemState {
   int8_t mix_free_run_dir;         // non-zero: homing/sweep, ignore target/limits
   uint32_t mix_free_run_until_ms;  // free-run safety deadline
 
-  // --- Relays: Intended (L4), Requested (L2), Physical (L1 -> L0) ----------
+  // --- Relays: Intended (L4), Demand (L2), Requested (L2), Physical (L1 -> L0)
+  //
+  // Heating switches own the circuit demand. `*_intended` is the last accepted
+  // HA/Test command; `*_demand` is the effective request after the per-circuit
+  // keep-alive check (and equals `*_intended` in Test Mode). The heater has no
+  // HA switch: in normal operation L2 derives `heater_intended` from the three
+  // circuit demands. Test Mode may still drive `heater_intended` manually.
   bool heater_intended, heater_requested, heater_phys;
-  bool pump_floor_intended, pump_floor_requested, pump_floor_phys;
-  bool pump_rad1_intended, pump_rad1_requested, pump_rad1_phys;
-  bool pump_rad2_intended, pump_rad2_requested, pump_rad2_phys;
+  bool pump_floor_intended, pump_floor_demand, pump_floor_requested, pump_floor_phys;
+  bool pump_rad1_intended, pump_rad1_demand, pump_rad1_requested, pump_rad1_phys;
+  bool pump_rad2_intended, pump_rad2_demand, pump_rad2_requested, pump_rad2_phys;
 
   // --- Optional feedback & supervision timers ------------------------------
   float pump_power_w[3];
   float mixer_power_w;
-  uint32_t keepalive_age_s;
-  uint32_t after_heating_timer_s;
+  // Indexed by CircuitIndex. The demand age is reset by every accepted ON
+  // command (the repeated command is the keep-alive). The after-run age starts
+  // when a circuit demand ends and is owned by the board.
+  uint32_t demand_age_s[CIRCUIT_COUNT];
+  uint32_t after_run_age_s[CIRCUIT_COUNT];
 
   // --- Diagnostics, alarms & divergence ------------------------------------
   DivergenceReason divergence_reason;

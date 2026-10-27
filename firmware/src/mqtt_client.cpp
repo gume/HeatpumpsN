@@ -55,29 +55,21 @@ uint32_t g_log_slow_cursor = 0;
 volatile bool g_test_requested = false;
 
 struct StateCache {
+  bool have_loop1 = false;
+  bool loop1 = false;
+  bool have_loop2 = false;
+  bool loop2 = false;
+  bool have_floor_heating = false;
+  bool floor_heating = false;
+
+  bool have_pump1 = false;
+  bool pump1 = false;
+  bool have_pump2 = false;
+  bool pump2 = false;
+  bool have_floor_pump = false;
+  bool floor_pump = false;
   bool have_heater = false;
   bool heater = false;
-  bool have_heater_virtual = false;
-  bool heater_virtual = false;
-  bool have_heater_physical = false;
-  bool heater_physical = false;
-
-  bool have_pump_floor = false;
-  bool pump_floor = false;
-  bool have_pump_floor_virtual = false;
-  bool pump_floor_virtual = false;
-  bool have_pump_floor_physical = false;
-  bool pump_floor_physical = false;
-
-  bool have_pump_rad1 = false;
-  bool pump_rad1 = false;
-  bool have_pump_rad1_physical = false;
-  bool pump_rad1_physical = false;
-
-  bool have_pump_rad2 = false;
-  bool pump_rad2 = false;
-  bool have_pump_rad2_physical = false;
-  bool pump_rad2_physical = false;
 
   bool have_power_floor = false;
   float power_floor = 0.0f;
@@ -243,28 +235,24 @@ void publish_states() {
 
   const SystemState& st = *g_state;
 
-  // Switch states are the physical relay states. The virtual binary sensors
-  // expose the accepted HA command (intended) separately.
-  publish_bool("state/heater", st.heater_phys, g_cache.have_heater, g_cache.heater);
-  publish_bool("state/pump_floor", st.pump_floor_phys, g_cache.have_pump_floor,
-               g_cache.pump_floor);
-  publish_bool("state/pump_rad1", st.pump_rad1_phys, g_cache.have_pump_rad1,
-               g_cache.pump_rad1);
-  publish_bool("state/pump_rad2", st.pump_rad2_phys, g_cache.have_pump_rad2,
-               g_cache.pump_rad2);
+  // Heating switches expose the effective circuit demand (the accepted HA
+  // request, subject to the per-circuit keep-alive). Binary sensors expose the
+  // physical relays only: there are no virtual/physical duplicates any more.
+  publish_bool("state/heating_loop_1", st.pump_rad1_demand, g_cache.have_loop1,
+               g_cache.loop1);
+  publish_bool("state/heating_loop_2", st.pump_rad2_demand, g_cache.have_loop2,
+               g_cache.loop2);
+  publish_bool("state/floor_heating", st.pump_floor_demand, g_cache.have_floor_heating,
+               g_cache.floor_heating);
 
-  publish_bool("state/heater_virtual", st.heater_intended, g_cache.have_heater_virtual,
-               g_cache.heater_virtual);
-  publish_bool("state/heater_physical", st.heater_phys, g_cache.have_heater_physical,
-               g_cache.heater_physical);
-  publish_bool("state/pump_floor_virtual", st.pump_floor_intended,
-               g_cache.have_pump_floor_virtual, g_cache.pump_floor_virtual);
-  publish_bool("state/pump_floor_physical", st.pump_floor_phys,
-               g_cache.have_pump_floor_physical, g_cache.pump_floor_physical);
-  publish_bool("state/pump_rad1_physical", st.pump_rad1_phys,
-               g_cache.have_pump_rad1_physical, g_cache.pump_rad1_physical);
-  publish_bool("state/pump_rad2_physical", st.pump_rad2_phys,
-               g_cache.have_pump_rad2_physical, g_cache.pump_rad2_physical);
+  publish_bool("state/pump_1_physical", st.pump_rad1_phys, g_cache.have_pump1,
+               g_cache.pump1);
+  publish_bool("state/pump_2_physical", st.pump_rad2_phys, g_cache.have_pump2,
+               g_cache.pump2);
+  publish_bool("state/floor_pump_physical", st.pump_floor_phys, g_cache.have_floor_pump,
+               g_cache.floor_pump);
+  publish_bool("state/heater_physical", st.heater_phys, g_cache.have_heater,
+               g_cache.heater);
 
   publish_float("state/power_floor", st.pump_power_w[0], g_cache.have_power_floor,
                 g_cache.power_floor);
@@ -365,6 +353,17 @@ void publish_switch(const char* object_id, const char* name, const char* state_t
   publish_config("switch", object_id, doc);
 }
 
+// Remove a retained discovery entity left behind by an older firmware. Empty
+// retained payloads are the Home Assistant contract for entity deletion.
+void remove_discovery(const char* component, const char* object_id) {
+  char topic[160];
+  snprintf(topic, sizeof(topic), "homeassistant/%s/%s/%s/config", component,
+           g_node_id, object_id);
+  if (!g_client.publish(topic, "", true)) {
+    Serial.printf("[mqtt] discovery removal failed for %s/%s\n", component, object_id);
+  }
+}
+
 void publish_binary_sensor(const char* object_id, const char* name,
                            const char* state_topic, const char* device_class) {
   JsonDocument doc;
@@ -455,30 +454,35 @@ void publish_error_sensors() {
 }
 
 void publish_discovery() {
-  publish_switch("heater", "Heater", "state/heater", "cmd/heater", "mdi:fire");
-  publish_switch("pump_floor", "Pump floor", "state/pump_floor", "cmd/pump_floor",
-                 "mdi:pump");
-  publish_switch("pump_rad1", "Pump radiator 1", "state/pump_rad1", "cmd/pump_rad1",
-                 "mdi:pump");
-  publish_switch("pump_rad2", "Pump radiator 2", "state/pump_rad2", "cmd/pump_rad2",
-                 "mdi:pump");
+  // Delete the heater/pump switch and virtual/physical entities that previous
+  // firmware revisions left in retained discovery.
+  remove_discovery("switch", "heater");
+  remove_discovery("switch", "pump_floor");
+  remove_discovery("switch", "pump_rad1");
+  remove_discovery("switch", "pump_rad2");
+  remove_discovery("binary_sensor", "heater_virtual");
+  remove_discovery("binary_sensor", "heater_physical");
+  remove_discovery("binary_sensor", "pump_floor_virtual");
+  remove_discovery("binary_sensor", "pump_floor_physical");
+  remove_discovery("binary_sensor", "pump_rad1_physical");
+  remove_discovery("binary_sensor", "pump_rad2_physical");
 
-  publish_binary_sensor("heater_virtual", "Heater virtual", "state/heater_virtual",
-                        "heat");
-  publish_binary_sensor("heater_physical", "Heater physical", "state/heater_physical",
-                        "heat");
-  publish_binary_sensor("pump_floor_virtual", "Pump floor virtual",
-                        "state/pump_floor_virtual", "running");
-  publish_binary_sensor("pump_floor_physical", "Pump floor physical",
-                        "state/pump_floor_physical", "running");
-  publish_binary_sensor("pump_rad1_physical", "Pump radiator 1 physical",
-                        "state/pump_rad1_physical", "running");
-  publish_binary_sensor("pump_rad2_physical", "Pump radiator 2 physical",
-                        "state/pump_rad2_physical", "running");
+  publish_switch("heating_loop_1", "Heating loop 1", "state/heating_loop_1",
+                 "cmd/heating_loop_1", "mdi:radiator");
+  publish_switch("heating_loop_2", "Heating loop 2", "state/heating_loop_2",
+                 "cmd/heating_loop_2", "mdi:radiator");
+  publish_switch("floor_heating", "Floor heating", "state/floor_heating",
+                 "cmd/floor_heating", "mdi:radiator");
+
+  publish_binary_sensor("pump_1", "Pump 1", "state/pump_1_physical", "running");
+  publish_binary_sensor("pump_2", "Pump 2", "state/pump_2_physical", "running");
+  publish_binary_sensor("floor_pump", "Floor pump", "state/floor_pump_physical",
+                        "running");
+  publish_binary_sensor("heater", "Heater", "state/heater_physical", "heat");
 
   publish_power_sensor("power_floor", "Floor pump power", "state/power_floor");
-  publish_power_sensor("power_rad1", "Radiator 1 pump power", "state/power_rad1");
-  publish_power_sensor("power_rad2", "Radiator 2 pump power", "state/power_rad2");
+  publish_power_sensor("power_rad1", "Pump 1 power", "state/power_rad1");
+  publish_power_sensor("power_rad2", "Pump 2 power", "state/power_rad2");
   publish_power_sensor("power_mixer", "Mixer motor power", "state/power_mixer");
 
   publish_mixer_sensor();
@@ -634,8 +638,9 @@ void handle_command(const char* topic, const char* value) {
   }
   const char* suffix = topic + base_len + 1;
 
-  if (strcmp(suffix, "cmd/heater") == 0 || strcmp(suffix, "cmd/pump_floor") == 0 ||
-      strcmp(suffix, "cmd/pump_rad1") == 0 || strcmp(suffix, "cmd/pump_rad2") == 0) {
+  if (strcmp(suffix, "cmd/heating_loop_1") == 0 ||
+      strcmp(suffix, "cmd/heating_loop_2") == 0 ||
+      strcmp(suffix, "cmd/floor_heating") == 0) {
     bool on = false;
     if (!parse_on_off(value, on)) {
       web::log_event(1, 1803, "MQTT command rejected: expected ON/OFF");
@@ -647,22 +652,31 @@ void handle_command(const char* topic, const char* value) {
       return;
     }
 
-    if (strcmp(suffix, "cmd/heater") == 0) {
-      g_state->heater_intended = on;
-      if (on) {
-        g_state->keepalive_age_s = 0;
-      }
-    } else if (strcmp(suffix, "cmd/pump_floor") == 0) {
-      g_state->pump_floor_intended = on;
-    } else if (strcmp(suffix, "cmd/pump_rad1") == 0) {
-      g_state->pump_rad1_intended = on;
+    bool* target = nullptr;
+    uint8_t circuit = CIRCUIT_COUNT;
+    if (strcmp(suffix, "cmd/heating_loop_1") == 0) {
+      target = &g_state->pump_rad1_intended;
+      circuit = CIRCUIT_RAD1;
+    } else if (strcmp(suffix, "cmd/heating_loop_2") == 0) {
+      target = &g_state->pump_rad2_intended;
+      circuit = CIRCUIT_RAD2;
     } else {
-      g_state->pump_rad2_intended = on;
+      target = &g_state->pump_floor_intended;
+      circuit = CIRCUIT_FLOOR;
     }
 
-    char detail[80];
-    snprintf(detail, sizeof(detail), "MQTT %s = %s", suffix + 4, on ? "ON" : "OFF");
-    web::log_event(0, 1803, detail);
+    // Every accepted command, including a repeated ON, refreshes the
+    // keep-alive for that circuit. Only transitions are logged so a periodic
+    // refresh does not flood the event ring.
+    const bool changed = (*target != on);
+    *target = on;
+    g_state->demand_age_s[circuit] = 0;
+
+    if (changed) {
+      char detail[80];
+      snprintf(detail, sizeof(detail), "MQTT %s = %s", suffix + 4, on ? "ON" : "OFF");
+      web::log_event(0, 1803, detail);
+    }
     g_last_publish_ms = 0;
     return;
   }

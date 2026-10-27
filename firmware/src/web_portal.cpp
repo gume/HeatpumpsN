@@ -228,8 +228,8 @@ const char* divergence_name(DivergenceReason reason) {
       return "anti_short_cycle";
     case DIV_DEMAND_LOSS:
       return "demand_loss";
-    case DIV_AFTER_HEATING_TIMEOUT:
-      return "after_heating_timeout";
+    case DIV_AFTER_RUN:
+      return "after_run";
     case DIV_DHW_PRIORITY_ACTIVE:
       return "dhw_priority_active";
     default:
@@ -318,12 +318,17 @@ void add_sensor_json(JsonArray sensors, const char* id, const char* label, const
   s["state"] = health;
 }
 
-JsonObject add_circuit_json(JsonObject circuits, const char* key, bool cmd, bool phys,
-                            uint32_t after_run_s) {
+JsonObject add_circuit_json(JsonObject circuits, const char* key, bool intended, bool demand,
+                            bool phys, uint32_t demand_age_s, uint32_t after_run_age_s,
+                            uint32_t after_run_limit_s) {
   JsonObject c = circuits[key].to<JsonObject>();
-  c["cmd"] = cmd ? 1 : 0;
+  c["intended"] = intended ? 1 : 0;
+  c["demand"] = demand ? 1 : 0;
+  c["cmd"] = demand ? 1 : 0;  // compatibility with older portal builds
   c["phys"] = phys ? 1 : 0;
-  c["afterRun"] = after_run_s;
+  c["demandAge"] = demand_age_s;
+  const bool after_run = !demand && (after_run_limit_s > after_run_age_s);
+  c["afterRun"] = after_run ? after_run_limit_s - after_run_age_s : 0;
   return c;
 }
 
@@ -426,10 +431,16 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   mqtt["errors"] = s.mqtt_errors;
 
   JsonObject circuits = doc["circuits"].to<JsonObject>();
-  add_circuit_json(circuits, "rad1", st.pump_rad1_intended, st.pump_rad1_phys, st.after_heating_timer_s);
-  add_circuit_json(circuits, "rad2", st.pump_rad2_intended, st.pump_rad2_phys, st.after_heating_timer_s);
+  add_circuit_json(circuits, "rad1", st.pump_rad1_intended, st.pump_rad1_demand,
+                   st.pump_rad1_phys, st.demand_age_s[CIRCUIT_RAD1],
+                   st.after_run_age_s[CIRCUIT_RAD1], cfg.pump_stop_after_heating_s);
+  add_circuit_json(circuits, "rad2", st.pump_rad2_intended, st.pump_rad2_demand,
+                   st.pump_rad2_phys, st.demand_age_s[CIRCUIT_RAD2],
+                   st.after_run_age_s[CIRCUIT_RAD2], cfg.pump_stop_after_heating_s);
   JsonObject floor =
-      add_circuit_json(circuits, "floor", st.pump_floor_intended, st.pump_floor_phys, st.after_heating_timer_s);
+      add_circuit_json(circuits, "floor", st.pump_floor_intended, st.pump_floor_demand,
+                       st.pump_floor_phys, st.demand_age_s[CIRCUIT_FLOOR],
+                       st.after_run_age_s[CIRCUIT_FLOOR], cfg.pump_stop_after_heating_s);
   floor["mixerPos"] = st.pos_est_dr * 100.0f;
   floor["mixerTarget"] = st.mix_target_pos * 100.0f;
   floor["mixerMaxPct"] = (isfinite(st.mix_ceiling) ? st.mix_ceiling : mixer_ceiling(cfg)) * 100.0f;
@@ -452,18 +463,21 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   add_temp_json(temps, health, "return", st.T_return_floor, now_ms);
 
   JsonObject heater = doc["heater"].to<JsonObject>();
+  heater["automatic"] = true;
   heater["cmd"] = st.heater_intended ? 1 : 0;
+  heater["requested"] = st.heater_requested ? 1 : 0;
   heater["phys"] = st.heater_phys ? 1 : 0;
-  heater["demandAge"] = st.keepalive_age_s;
-  const bool any_pump = st.pump_floor_intended || st.pump_rad1_intended || st.pump_rad2_intended;
-  if (!st.heater_intended) {
-    heater["reason"] = "off";
+  const bool any_demand = st.pump_floor_demand || st.pump_rad1_demand || st.pump_rad2_demand;
+  if (!st.heater_requested) {
+    heater["reason"] = "no_demand";
   } else if (st.heater_phys) {
-    heater["reason"] = "pump_active";
-  } else if (!any_pump || (st.active_alarms & WARN_HEATER_NO_PUMP)) {
+    heater["reason"] = "heating";
+  } else if (!any_demand || (st.active_alarms & WARN_HEATER_NO_PUMP)) {
     heater["reason"] = "pump_required";
+  } else if (st.divergence_reason == DIV_ANTI_SHORT_CYCLE) {
+    heater["reason"] = "anti_short_cycle";
   } else {
-    heater["reason"] = "arbitration_pending";
+    heater["reason"] = "starting";
   }
 
   JsonObject safety = doc["safety"].to<JsonObject>();
@@ -2640,25 +2654,33 @@ void handle_sim_intent(AsyncWebServerRequest* request, JsonVariant& json) {
     return;
   }
   JsonObject in = json.as<JsonObject>();
-  if (in["heater"].is<bool>()) g_state->heater_intended = in["heater"].as<bool>();
-  if (in["pump_floor"].is<bool>()) g_state->pump_floor_intended = in["pump_floor"].as<bool>();
-  if (in["pump_rad1"].is<bool>()) g_state->pump_rad1_intended = in["pump_rad1"].as<bool>();
-  if (in["pump_rad2"].is<bool>()) g_state->pump_rad2_intended = in["pump_rad2"].as<bool>();
+  if (in["heating_loop_1"].is<bool>()) {
+    g_state->pump_rad1_intended = in["heating_loop_1"].as<bool>();
+    g_state->demand_age_s[CIRCUIT_RAD1] = 0;
+  }
+  if (in["heating_loop_2"].is<bool>()) {
+    g_state->pump_rad2_intended = in["heating_loop_2"].as<bool>();
+    g_state->demand_age_s[CIRCUIT_RAD2] = 0;
+  }
+  if (in["floor_heating"].is<bool>()) {
+    g_state->pump_floor_intended = in["floor_heating"].as<bool>();
+    g_state->demand_age_s[CIRCUIT_FLOOR] = 0;
+  }
   if (in["dhw_active"].is<bool>()) {
     g_state->dhw_meter_active = in["dhw_active"].as<bool>();
     g_state->dhw_active = g_state->dhw_meter_active;
   }
   if (in["keepalive"].is<bool>() && in["keepalive"].as<bool>()) {
-    g_state->keepalive_age_s = 0;
+    for (uint8_t i = 0; i < CIRCUIT_COUNT; ++i) {
+      g_state->demand_age_s[i] = 0;
+    }
   }
-  g_state->keepalive_age_s = 0;
   log_event(0, 1510, "Simulated HA intent update");
   JsonDocument doc;
   doc["ok"] = true;
-  doc["heater_intended"] = g_state->heater_intended;
-  doc["pump_floor_intended"] = g_state->pump_floor_intended;
-  doc["pump_rad1_intended"] = g_state->pump_rad1_intended;
-  doc["pump_rad2_intended"] = g_state->pump_rad2_intended;
+  doc["heating_loop_1"] = g_state->pump_rad1_intended;
+  doc["heating_loop_2"] = g_state->pump_rad2_intended;
+  doc["floor_heating"] = g_state->pump_floor_intended;
   doc["dhw_active"] = g_state->dhw_active;
   send_json(request, 200, doc);
 }

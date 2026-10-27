@@ -428,23 +428,6 @@ void tick(const Config& config, SystemState& state) {
     g_heater_off_ms = now;
   }
 
-  // --- Keep-alive backstop -------------------------------------------------
-  if (heater_req && state.keepalive_age_s >= config.demand_timeout_s) {
-    heater_req = false;
-    state.divergence_reason = DIV_DEMAND_LOSS;
-    state.system_error_code = ERR_HA_KEEPALIVE_TIMEOUT;
-  }
-
-  // --- After-heating pump backstop ----------------------------------------
-  if (!heater_req && state.after_heating_timer_s >= config.pump_stop_after_heating_s &&
-      (floor_req || rad1_req || rad2_req)) {
-    floor_req = false;
-    rad1_req = false;
-    rad2_req = false;
-    state.divergence_reason = DIV_AFTER_HEATING_TIMEOUT;
-    state.system_error_code = ERR_AFTER_HEAT_TIMEOUT;
-  }
-
   // --- Relay arbitration ---------------------------------------------------
   const bool any_pump = floor_req || rad1_req || rad2_req;
   if (heater_req && !any_pump) {

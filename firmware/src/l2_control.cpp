@@ -31,6 +31,65 @@ uint32_t g_dhw_infer_start_ms = 0;
 uint32_t g_dhw_peak_ms = 0;
 float g_dhw_peak_c = NAN;
 
+// Update one circuit's demand age and return whether the repeated ON command
+// has gone stale. The raw intent stays set so a fresh ON can re-arm it.
+bool update_demand_age(const Config& config, SystemState& state, CircuitIndex index,
+                       uint32_t dt_s) {
+  uint32_t& age = state.demand_age_s[index];
+  const bool intended = index == CIRCUIT_FLOOR   ? state.pump_floor_intended
+                        : index == CIRCUIT_RAD1  ? state.pump_rad1_intended
+                                                 : state.pump_rad2_intended;
+  if (!intended) {
+    age = 0;
+    return false;
+  }
+  if (age < 0xFFFFFFFFu - dt_s) {
+    age += dt_s;
+  } else {
+    age = 0xFFFFFFFFu;
+  }
+  return config.demand_timeout_s > 0 && age >= config.demand_timeout_s;
+}
+
+// Board-owned pump after-run. `demand` is the coordinated heating request for
+// this circuit. When it ends while the pump is running, the circuit keeps its
+// pump requested for `pump_stop_after_heating_s`. Returns true while an
+// after-run is in progress.
+bool service_after_run(const Config& config, SystemState& state, CircuitIndex index,
+                       bool demand, bool& requested, bool physical, uint32_t dt_s) {
+  uint32_t& age = state.after_run_age_s[index];
+  if (demand) {
+    age = 0;
+    requested = true;
+    return false;
+  }
+
+  const uint32_t limit = config.pump_stop_after_heating_s;
+  const bool was_running = requested || physical;
+  if (!was_running || limit == 0) {
+    age = 0;
+    requested = false;
+    return false;
+  }
+  if (age >= limit) {
+    requested = false;
+    return false;
+  }
+
+  if (age < 0xFFFFFFFFu - dt_s) {
+    age += dt_s;
+  } else {
+    age = 0xFFFFFFFFu;
+  }
+  if (age >= limit) {
+    age = limit;
+    requested = false;
+  } else {
+    requested = true;
+  }
+  return true;
+}
+
 float clampf(float value, float low, float high) {
   if (value < low) return low;
   if (value > high) return high;
@@ -354,14 +413,22 @@ void tick(const Config& config, SystemState& state) {
   const uint32_t dt_s = (dt_ms + 500u) / 1000u;
 
   // Test Mode bypasses the coordination matrix and passes intents straight
-  // through. L1 still arbitrates safety and drives the relays.
+  // through. L1 still arbitrates safety and drives the relays. The heater is
+  // manual here because Test Mode is the local bench override.
   if (state.mode == MODE_TEST_OVERRIDE) {
     state.heater_requested = state.heater_intended;
+    state.pump_floor_demand = state.pump_floor_intended;
+    state.pump_rad1_demand = state.pump_rad1_intended;
+    state.pump_rad2_demand = state.pump_rad2_intended;
     state.pump_floor_requested = state.pump_floor_intended;
     state.pump_rad1_requested = state.pump_rad1_intended;
     state.pump_rad2_requested = state.pump_rad2_intended;
+    for (uint8_t i = 0; i < CIRCUIT_COUNT; ++i) {
+      state.demand_age_s[i] = 0;
+      state.after_run_age_s[i] = 0;
+    }
     service_position_tracking(config, state, now);
-    g_floor_was_on = state.pump_floor_requested;
+    g_floor_was_on = state.pump_floor_intended;
     return;
   }
 
@@ -370,68 +437,53 @@ void tick(const Config& config, SystemState& state) {
   state.dhw_active = state.dhw_meter_active || state.dhw_inferred;
   service_overshoot(config, state);
 
-  // --- Command keep-alive and after-heating timers ------------------------
-  if (state.heater_intended) {
-    if (state.keepalive_age_s < 0xFFFFFFFFu - dt_s) {
-      state.keepalive_age_s += dt_s;
-    }
-  } else {
-    state.keepalive_age_s = 0;
-  }
+  // --- Heating-switch keep-alive ------------------------------------------
+  // Each circuit has its own age. A repeated ON command is the keep-alive; an
+  // unrefreshed demand is dropped after demand_timeout_s but the raw intent is
+  // kept so the next ON re-arms it immediately.
+  const bool stale_floor = update_demand_age(config, state, CIRCUIT_FLOOR, dt_s);
+  const bool stale_rad1 = update_demand_age(config, state, CIRCUIT_RAD1, dt_s);
+  const bool stale_rad2 = update_demand_age(config, state, CIRCUIT_RAD2, dt_s);
+  const bool any_stale = stale_floor || stale_rad1 || stale_rad2;
 
-  const bool pumps_intended = state.pump_floor_intended || state.pump_rad1_intended ||
-                              state.pump_rad2_intended;
-  if (!state.heater_requested && pumps_intended) {
-    if (state.after_heating_timer_s < 0xFFFFFFFFu - dt_s) {
-      state.after_heating_timer_s += dt_s;
-    }
-  } else {
-    state.after_heating_timer_s = 0;
-  }
+  bool demand_floor = state.pump_floor_intended && !stale_floor;
+  bool demand_rad1 = state.pump_rad1_intended && !stale_rad1;
+  bool demand_rad2 = state.pump_rad2_intended && !stale_rad2;
 
-  // --- Start from HA intents ----------------------------------------------
-  bool req_heater = state.heater_intended;
-  bool req_floor = state.pump_floor_intended;
-  bool req_rad1 = state.pump_rad1_intended;
-  bool req_rad2 = state.pump_rad2_intended;
+  state.pump_floor_demand = demand_floor;
+  state.pump_rad1_demand = demand_rad1;
+  state.pump_rad2_demand = demand_rad2;
+
   DivergenceReason div = DIV_NONE;
-
-  // --- Summer / anti-seize lockout ----------------------------------------
-  if (state.mode == MODE_SUMMER || state.mode == MODE_ANTI_SEIZE) {
-    req_heater = false;
-    req_floor = false;
-    req_rad1 = false;
-    req_rad2 = false;
-  }
-
-  // --- Keep-alive timeout --------------------------------------------------
-  if (state.heater_intended && state.keepalive_age_s >= config.demand_timeout_s) {
-    req_heater = false;
+  if (any_stale) {
     div = DIV_DEMAND_LOSS;
     if (state.system_error_code == ERR_OK) {
       state.system_error_code = ERR_HA_KEEPALIVE_TIMEOUT;
     }
   }
 
-  // --- After-heating pump shutdown ----------------------------------------
-  if (!req_heater && pumps_intended &&
-      state.after_heating_timer_s >= config.pump_stop_after_heating_s) {
-    req_floor = false;
-    req_rad1 = false;
-    req_rad2 = false;
-    div = DIV_AFTER_HEATING_TIMEOUT;
-    if (state.system_error_code == ERR_OK) {
-      state.system_error_code = ERR_AFTER_HEAT_TIMEOUT;
-    }
+  // --- Summer / anti-seize lockout ----------------------------------------
+  if (state.mode == MODE_SUMMER || state.mode == MODE_ANTI_SEIZE) {
+    demand_floor = false;
+    demand_rad1 = false;
+    demand_rad2 = false;
+    state.pump_floor_demand = false;
+    state.pump_rad1_demand = false;
+    state.pump_rad2_demand = false;
   }
 
+  bool req_floor = demand_floor;
+  bool req_rad1 = demand_rad1;
+  bool req_rad2 = demand_rad2;
+  bool req_heater = req_floor || req_rad1 || req_rad2;
+
   // --- Floor warm-up flush -------------------------------------------------
-  if (req_floor && !g_floor_was_on) {
+  if (demand_floor && !g_floor_was_on) {
     g_floor_flush_active = true;
     g_floor_flush_end_ms = now + config.start_flush_ms;
     state.flush_state = FLUSH_ACTIVE;
     state.t_ret_flush_valid = false;
-  } else if (!req_floor) {
+  } else if (!demand_floor) {
     g_floor_flush_active = false;
     if (!g_floor_pause_active) {
       state.flush_state = FLUSH_IDLE;
@@ -460,9 +512,6 @@ void tick(const Config& config, SystemState& state) {
         g_floor_pause_active = true;
         g_floor_pause_end_ms = now + config.floor_pause_duration_s * 1000u;
         g_delta_low_since_ms = 0;
-        if (!req_rad1 && !req_rad2) {
-          req_heater = false;
-        }
       }
     } else {
       g_delta_low_since_ms = 0;
@@ -473,12 +522,16 @@ void tick(const Config& config, SystemState& state) {
 
   if (g_floor_pause_active && static_cast<int32_t>(now - g_floor_pause_end_ms) >= 0) {
     g_floor_pause_active = false;
-    req_floor = state.pump_floor_intended;
+    req_floor = demand_floor;
     state.flush_state = FLUSH_IDLE;
   }
 
-  // --- Long pause with heater on and no pumps ------------------------------
-  if (req_heater && !req_floor && !req_rad1 && !req_rad2) {
+  // The heater call is board-owned: it follows the coordinated circuit
+  // requests. A pump after-run never keeps the heater on.
+  req_heater = req_floor || req_rad1 || req_rad2;
+
+  // --- Long pause with heater on and no pump physically running -----------
+  if (req_heater && !state.pump_floor_phys && !state.pump_rad1_phys && !state.pump_rad2_phys) {
     if (g_long_pause_since_ms == 0) {
       g_long_pause_since_ms = now;
     } else if (now - g_long_pause_since_ms >= config.long_pause_s * 1000u) {
@@ -489,19 +542,31 @@ void tick(const Config& config, SystemState& state) {
     g_long_pause_since_ms = 0;
   }
 
-  // --- DHW priority -------------------
-
+  // --- DHW priority --------------------------------------------------------
   // The boiler relay stays as requested; the mixer and integrator are handled
   // by service_mixer_control(). Reflect the priority in the divergence field.
   if (state.dhw_active) {
     div = DIV_DHW_PRIORITY_ACTIVE;
   }
 
+  // --- Board-managed pump after-run ---------------------------------------
+  // The base requests above decide the heater call. After that, a circuit
+  // whose demand just ended keeps its pump requested for the configured
+  // after-run time so residual heat is dissipated by the board, not by HA.
+  bool after_run = false;
+  after_run |= service_after_run(config, state, CIRCUIT_FLOOR, req_floor,
+                                 state.pump_floor_requested, state.pump_floor_phys, dt_s);
+  after_run |= service_after_run(config, state, CIRCUIT_RAD1, req_rad1,
+                                 state.pump_rad1_requested, state.pump_rad1_phys, dt_s);
+  after_run |= service_after_run(config, state, CIRCUIT_RAD2, req_rad2,
+                                 state.pump_rad2_requested, state.pump_rad2_phys, dt_s);
+  if (after_run && div == DIV_NONE && !any_stale) {
+    div = DIV_AFTER_RUN;
+  }
+
   // --- Apply coordination requests ----------------------------------------
+  state.heater_intended = req_heater;
   state.heater_requested = req_heater;
-  state.pump_floor_requested = req_floor;
-  state.pump_rad1_requested = req_rad1;
-  state.pump_rad2_requested = req_rad2;
 
   // --- Mixer position loop ------------------------------------------------
   service_mixer_control(config, state, req_floor, state.dhw_active, g_floor_flush_active);
@@ -516,12 +581,9 @@ void tick(const Config& config, SystemState& state) {
     state.divergence_reason = div;
   }
 
-  g_floor_was_on = req_floor;
+  g_floor_was_on = demand_floor;
 
-  if (!state.heater_intended && state.system_error_code == ERR_HA_KEEPALIVE_TIMEOUT) {
-    state.system_error_code = ERR_OK;
-  }
-  if (req_floor && state.system_error_code == ERR_AFTER_HEAT_TIMEOUT) {
+  if (!any_stale && state.system_error_code == ERR_HA_KEEPALIVE_TIMEOUT) {
     state.system_error_code = ERR_OK;
   }
 }

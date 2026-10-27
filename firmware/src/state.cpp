@@ -52,9 +52,7 @@ const char* error_code_name(uint16_t code) {
     case ERR_SENSOR_BOILER_LOST:
       return "boiler supply sensor lost";
     case ERR_HA_KEEPALIVE_TIMEOUT:
-      return "HA heater keep-alive timeout";
-    case ERR_AFTER_HEAT_TIMEOUT:
-      return "pump after-heating timeout";
+      return "heating switch keep-alive timeout";
     case ERR_RELAY_FAULT_WELDED:
       return "welded relay contact";
     case ERR_NVS_DATA_CORRUPTED:
@@ -184,10 +182,7 @@ void format_error_text(const SystemState& state, char* out, size_t out_size) {
       append(out, out_size, " (boiler supply reading invalid)");
       break;
     case ERR_HA_KEEPALIVE_TIMEOUT:
-      append(out, out_size, " (heater demand not refreshed by HA)");
-      break;
-    case ERR_AFTER_HEAT_TIMEOUT:
-      append(out, out_size, " (after-heating circulation expired)");
+      append(out, out_size, " (heating switch not refreshed by HA)");
       break;
     case ERR_RELAY_FAULT_WELDED:
       append(out, out_size, " (pump current with relay commanded off)");
