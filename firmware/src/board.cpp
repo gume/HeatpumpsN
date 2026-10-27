@@ -22,9 +22,10 @@ const BoardConfig kHhn1 = {
 
 // --- HomeNet Heating control v1.x -----------------------------------------
 // Current board. The relay board is reached through a PCF8574; current is
-// measured by an ADS1115 (A0/A1/A3 do exist; A4 is not an ADS1115 input) whose
-// TLV9064 sensor assembly is an
-// optional external part. Pins are defaults; confirm them against the board
+// measured by an ADS1115 whose TLV9064 sensor assembly is an optional external
+// part. The mixer uses one sensor ring around both motor wires: open and close
+// are interlocked and never energised together, so a single channel (A2) always
+// reads the active current. Pins are defaults; confirm them against the board
 // schematic before flashing a real unit.
 const BoardConfig kHhn1x = {
     "HomeNet Heating control v1.x",
@@ -33,7 +34,7 @@ const BoardConfig kHhn1x = {
     /* mux s2        */ HPN_GPIO_UNASSIGNED,
     /* mux s3        */ HPN_GPIO_UNASSIGNED,
     /* mux channels  */ {0xFF, 0xFF, 0xFF, 0xFF},
-    /* ads channels  */ {3, 0, 1, 4},  // floor=A3, rad1=A0, rad2=A1, mixer=A4
+    /* ads channels  */ {3, 0, 1, 2},  // floor=A3, rad1=A0, rad2=A1, mixer=A2
 };
 
 // --- Boardless development -------------------------------------------------

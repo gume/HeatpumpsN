@@ -255,7 +255,8 @@ struct Config {
 
   // --- Current measurement -------------------------------------------------
   // v0.1: four current sensors through a 74HC4051 into one ADC pin.
-  // v1.x: ADS1115 A0/A1/A3/A4. The TLV9064 sensor assembly is external and
+  // v1.x: ADS1115 A0/A1/A2/A3 (the mixer uses one ring for both motor wires).
+  // The TLV9064 sensor assembly is external and
   // optional; when it is absent the firmware must not use current protection.
   uint8_t current_sense;        // CURRENT_SENSE_* enum
   uint8_t ads1115_address;      // 7-bit I2C address (default 0x48)

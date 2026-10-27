@@ -1679,7 +1679,7 @@ function renderSettingsHardware() {
             ${fieldHex('ads1115_address', 'ADS1115 I2C address (7-bit)', cfg.ads1115_address, '0x48–0x4B for the four address straps.')}
             ${fieldCheckbox('tlv9064_present', 'TLV9064 sensor assembly fitted', cfg.tlv9064_present, 'The TLV9064 current-sensor assembly is an optional external part. When it is absent, current-based protection stays off.')}
           </div>
-          <p class="small faint" data-current-sense-section="2" style="margin-top:8px">ADS1115 inputs: A0 pump 1, A1 pump 2, A3 pump 3 / floor, A4 mixer. A2 is unused.</p>
+          <p class="small faint" data-current-sense-section="2" style="margin-top:8px">ADS1115 inputs: A0 pump 1, A1 pump 2, A2 mixer, A3 pump 3 / floor. The mixer uses one sensor ring around both motor wires.</p>
         </div>
 
         <div class="form-section" data-expander-section="1 2" data-current-sense-section="1">

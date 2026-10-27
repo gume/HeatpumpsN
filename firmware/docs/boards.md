@@ -355,17 +355,18 @@ over the same I²C bus:
 | --- | --- |
 | A0 | `PumpRad1` (pump 1) |
 | A1 | `PumpRad2` (pump 2) |
-| A2 | unused |
+| A2 | `Mixer` (mixer motor) |
 | A3 | `PumpFloor` (pump 3 / floor) |
-| A4 | `Mixer` (mixer motor) |
 
-> The ADS1115 is a four-channel device (A0–A3). The mapping above is the one
-> requested for the v1.x board and is stored in
-> `BoardConfig::current_ads_channel[]`; `A4` therefore needs a second device or
-> an external multiplexer on the physical board. Confirm this against the
-> schematic before enabling current protection. The firmware currently maps
-> `A0/A1/A3` and uses channel `3` (A3) for the floor pump; a channel `4` entry
-> is treated as invalid until the hardware is confirmed.
+The mixer has **one** current sensor: a single ring carries the open and the
+close motor wire together. Because the two relays are interlocked and never
+energised at the same time, that one channel always measures whichever
+direction is running. All four ADS1115 inputs are therefore in use.
+
+The mapping is stored in `BoardConfig::current_ads_channel[]` and is indexed by
+`CurrentChannel` (`floor, rad1, rad2, mixer`). If the final board routes the
+sensors differently, change that array in `firmware/src/board.cpp`; an entry
+above `3` is not a valid ADS1115 input and reads 0 W.
 
 The TLV9064 current-sensor assembly is an **optional external component**. Its
 presence is declared with `tlv9064_present`; when it is false the firmware keeps
@@ -427,7 +428,8 @@ other driver. The Hardware page hides the unrelated settings but keeps them in
 4. Force an interlock fault on the relay board and confirm the mixer stops and
    the portal shows error 402.
 5. Declare `tlv9064_present` only after the assembly is fitted; verify the
-   A0/A1/A3 mapping against a known load before enabling current protection.
+   A0/A1/A2/A3 mapping against a known load before enabling current protection.
+   Run the mixer in both directions and confirm A2 reads the moving motor.
 6. Calibrate the current channels with a clamp meter.
 7. Repeat the v0.1 steps 7–8.
 

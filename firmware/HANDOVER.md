@@ -348,8 +348,9 @@ configuration instead of naming assumptions:
   `esp32dev_hhn1x_sim` (emulated). The default bit map is P0 pump 1, P1 pump 2,
   P2 pump 3/floor, P3 open, P4 close, P5 heat, P6 unused, P7 fault.
 * `BoardConfig` gained `current_ads_channel[]`; the v1.x map is
-  `floor=A3, rad1=A0, rad2=A1, mixer=A4` (see the A4 caveat in
-  `firmware/docs/boards.md` §3.4).
+  `floor=A3, rad1=A0, rad2=A1, mixer=A2`. The mixer has one sensor ring around
+  the open and close motor wires; the relays are interlocked, so a single
+  channel always reads the active direction.
 * The portal exposes only the settings that belong to the selected driver and
   current-sense mode, while storing every value. Mixer options are labelled
   `Direction + motion (HomeNet Heating control v0.1)` and
@@ -409,6 +410,6 @@ configuration instead of naming assumptions:
 
 **Still open:** the schematic PDFs referenced for v1.x were not present in this
 checkout. The I²C pins (SDA 8 / SCL 9), PCF8574 address (`0x20`), ADS1115
-address (`0x48`), active-low relay polarity and the A4 mixer input must be
+address (`0x48`), active-low relay polarity and the ADS1115 channel map must be
 confirmed before a physical v1.x board is energised. No v1.x hardware or
 ADS1115/TLV9064 assembly has been available for validation.
