@@ -12,20 +12,6 @@ namespace {
 // See firmware/docs/hhn-1.0.md for the full pin and bit map.
 const BoardConfig kHhn1 = {
     "HomeNet Heatpumps 1.0",
-    OutputBackend::ShiftRegister,
-    /* sr_data_pin   */ 12,
-    /* sr_clock_pin  */ 11,
-    /* sr_latch_pin  */ 9,
-    /* sr_oe_pin     */ 7,
-    /* oe active low */ true,
-    /* heater        */ 0,
-    /* pump_rad1     */ 5,
-    /* pump_rad2     */ 6,
-    /* pump_floor    */ 7,
-    /* mix direction */ 3,
-    /* mix motion    */ 4,
-    /* mux s0        */ 2,
-    /* mux s1        */ 1,
     /* has current   */ true,
     /* adc pin       */ 3,
     /* mux s2        */ 5,
@@ -39,20 +25,6 @@ const BoardConfig kHhn1 = {
 // against an emulated carrier instead.
 const BoardConfig kBoardless = {
     "boardless devkit",
-    OutputBackend::DirectGpio,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    true,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
-    HPN_GPIO_UNASSIGNED,
     false,
     HPN_GPIO_UNASSIGNED,
     HPN_GPIO_UNASSIGNED,
@@ -79,6 +51,25 @@ const BoardConfig& board_config() {
 
 void board_apply_defaults(Config& config) {
 #if defined(HPN_CARRIER_HHN1)
+  // Legacy carrier wiring. The output extender is runtime-selectable, so the
+  // 74HC595 values below are defaults rather than the only possible setup.
+  config.output_expander = OUTPUT_EXPANDER_74HC595;
+  config.expander_address = 0x20;  // unused by the shift register
+  config.expander_data_pin = 12;
+  config.expander_clock_pin = 11;
+  config.expander_latch_pin = 9;
+  config.expander_oe_pin = 7;
+  config.expander_oe_active_low = true;
+  config.output_active_low = false;  // relay board is active-high on HHN 1.0
+  config.expander_bit_heater = 0;
+  config.expander_bit_pump_rad1 = 5;
+  config.expander_bit_pump_rad2 = 6;
+  config.expander_bit_pump_floor = 7;
+  config.expander_bit_mix_direction = 3;
+  config.expander_bit_mix_motion = 4;
+  config.expander_bit_mux_s0 = 2;
+  config.expander_bit_mux_s1 = 1;
+
   config.gpio_onewire = 18;   // D4 / 1-Wire bus
   config.gpio_led_data = 16;  // 5 x WS2812B/SK6812, GRB
   config.num_leds = 5;

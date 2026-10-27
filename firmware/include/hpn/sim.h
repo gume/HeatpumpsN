@@ -45,8 +45,8 @@ struct Snapshot {
 
   // Observed outputs (L0 writes these through the I/O backend).
   uint8_t mux_channel;  // 0xFF when the carrier has no current MUX
-  uint8_t output_byte;  // last 74HC595 latch value (0 for direct-GPIO carriers)
-  bool output_enabled;  // 74HC595 OE state
+  uint8_t output_byte;  // last expander byte (0 for direct-GPIO carriers)
+  bool output_enabled;  // 74HC595 OE state; always true for PCF8574/direct
   uint16_t led_count;
   uint8_t led_rgb[kMaxLeds * 3];
 };

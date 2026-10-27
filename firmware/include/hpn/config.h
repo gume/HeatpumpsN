@@ -12,6 +12,15 @@ enum MixerWiring : uint8_t {
   MIX_WIRING_OPEN_CLOSE = 1,        // new: separate open and close relays
 };
 
+// Output driver for the relay and mixer channels. Direct GPIO keeps the
+// per-channel pins below; both expander variants share one output byte, whose
+// bit assignment and polarity are also configurable.
+enum OutputExpander : uint8_t {
+  OUTPUT_EXPANDER_NONE = 0,    // direct GPIO pins
+  OUTPUT_EXPANDER_74HC595 = 1, // serial shift register
+  OUTPUT_EXPANDER_PCF8574 = 2, // I2C quasi-bidirectional port expander
+};
+
 // Canonical configuration contract.
 //
 // Source of truth: plans/controller node/01_config_and_contracts.md (§1).
@@ -190,6 +199,32 @@ struct Config {
   uint32_t dhw_infer_window_s;
   float dhw_infer_recovery_c;
   uint32_t dhw_infer_max_s;
+
+  // --- Output driver / port expander --------------------------------------
+  // The legacy carrier drives its relays through a 74HC595-compatible serial
+  // extender; the next carrier uses a PCF8574. Both are runtime-selectable so
+  // the same firmware can drive either board (and a custom I2C address)
+  // without a rebuild.
+  uint8_t output_expander;       // OUTPUT_EXPANDER_* enum
+  uint8_t expander_address;      // 7-bit I2C address for PCF8574 (e.g. 0x20)
+  uint8_t expander_data_pin;     // 74HC595 SER / DS
+  uint8_t expander_clock_pin;    // 74HC595 SRCLK / SHCP
+  uint8_t expander_latch_pin;    // 74HC595 RCLK / STCP
+  uint8_t expander_oe_pin;       // 74HC595 /OE, 255 when hard-wired
+  bool expander_oe_active_low;   // true: /OE low enables the outputs
+  // Logical ON drives the physical output low. This covers relay boards with
+  // active-low inputs, including the PCF8574 board whose pins idle high.
+  bool output_active_low;
+  // Expander output bit (0-7) for each logical channel. Direction and motion
+  // are the two mixer channels described by MixerWiring.
+  uint8_t expander_bit_heater;
+  uint8_t expander_bit_pump_rad1;
+  uint8_t expander_bit_pump_rad2;
+  uint8_t expander_bit_pump_floor;
+  uint8_t expander_bit_mix_direction;
+  uint8_t expander_bit_mix_motion;
+  uint8_t expander_bit_mux_s0;
+  uint8_t expander_bit_mux_s1;
 };
 
 // Mixer opening ceiling as a fraction (0.01-1.0). Single source of truth for

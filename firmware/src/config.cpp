@@ -109,6 +109,25 @@ Config config_defaults() {
   copy_str(c.sensor_id_mix, "");
   c.mixer_wiring = MIX_WIRING_OPEN_CLOSE;
 
+  // Output driver defaults. A carrier profile may replace these in
+  // board_apply_defaults(); a saved configuration always wins.
+  c.output_expander = OUTPUT_EXPANDER_NONE;
+  c.expander_address = 0x20;
+  c.expander_data_pin = HPN_GPIO_UNASSIGNED;
+  c.expander_clock_pin = HPN_GPIO_UNASSIGNED;
+  c.expander_latch_pin = HPN_GPIO_UNASSIGNED;
+  c.expander_oe_pin = HPN_GPIO_UNASSIGNED;
+  c.expander_oe_active_low = true;
+  c.output_active_low = false;
+  c.expander_bit_heater = 0;
+  c.expander_bit_pump_rad1 = 1;
+  c.expander_bit_pump_rad2 = 2;
+  c.expander_bit_pump_floor = 3;
+  c.expander_bit_mix_direction = 4;
+  c.expander_bit_mix_motion = 5;
+  c.expander_bit_mux_s0 = 6;
+  c.expander_bit_mux_s1 = 7;
+
   copy_str(c.mixer_meter_device, "");
   copy_str(c.mixer_meter_field, "");
   c.mixer_meter_scale = 0;

@@ -41,6 +41,12 @@ void write_pin(uint8_t pin, uint8_t level);
 // Shift one byte into a 74HC595 and pulse the latch.
 void shift_out_msb(uint8_t data_pin, uint8_t clock_pin, uint8_t latch_pin, uint8_t value);
 
+// Start the I2C bus for a PCF8574-style port expander and write an initial
+// output byte. Returns false when the bus/address did not acknowledge.
+bool pcf8574_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address, uint8_t initial);
+// Write the expander port. Returns false when the transfer failed.
+bool pcf8574_write(uint8_t value);
+
 void adc_begin(uint8_t pin);
 void adc_set_resolution(uint8_t bits);
 uint16_t adc_read(uint8_t pin);

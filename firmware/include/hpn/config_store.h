@@ -8,15 +8,15 @@
 // struct size, a format version and a CRC32 checksum. Settings are written only
 // on an explicit Save from the portal, not on every tick.
 //
-// There is exactly one migration: v1 -> v2 copies the unchanged 1288-byte v1
-// Config prefix onto current defaults so existing settings survive while the
-// appended fields receive their default values. Any other version is treated
-// as stale and discarded.
+// Older formats are migrated by copying their unchanged Config prefix onto
+// current defaults, so existing settings survive while appended fields receive
+// their default values. v1 (1288-byte prefix) and v2 (1348 bytes) are
+// supported. Any other version is treated as stale and discarded.
 namespace hpn {
 
 enum class ConfigLoadResult : uint8_t {
   Loaded,    // valid current-format blob restored
-  Migrated,  // valid v1 blob upgraded in memory; caller should save it
+  Migrated,  // valid older blob upgraded in memory; caller should save it
   Missing,   // no saved blob; compiled defaults are in effect
   Stale,     // blob from another format version; discarded without migration
   Corrupt,   // current-format blob failed size/CRC validation

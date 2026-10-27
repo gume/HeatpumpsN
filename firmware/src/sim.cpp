@@ -24,7 +24,7 @@ struct Model {
   BoardConfig board;
 
   uint8_t pin_level[kMaxGpio];  // 0 = low, 1 = high
-  uint8_t output_byte;          // 74HC595 latch value
+  uint8_t output_byte;          // last expander output byte
 
   float temperature_set_c[kTempRoleCount];
   bool temperature_valid[kTempRoleCount];
@@ -54,16 +54,16 @@ bool is_assigned(uint8_t pin) {
   return pin != HPN_GPIO_UNASSIGNED;
 }
 
-uint8_t relay_bit(const BoardConfig& board, Relay relay) {
+uint8_t relay_bit(const Config& config, Relay relay) {
   switch (relay) {
     case Relay::Heater:
-      return board.sr_bit_heater;
+      return config.expander_bit_heater;
     case Relay::PumpRad1:
-      return board.sr_bit_pump_rad1;
+      return config.expander_bit_pump_rad1;
     case Relay::PumpRad2:
-      return board.sr_bit_pump_rad2;
+      return config.expander_bit_pump_rad2;
     case Relay::PumpFloor:
-      return board.sr_bit_pump_floor;
+      return config.expander_bit_pump_floor;
     default:
       return HPN_GPIO_UNASSIGNED;
   }
@@ -91,22 +91,34 @@ bool bit_is_set(uint8_t value, uint8_t bit) {
   return (value & static_cast<uint8_t>(1u << bit)) != 0;
 }
 
+bool uses_expander(const Config& config) {
+  return config.output_expander == OUTPUT_EXPANDER_74HC595 ||
+         config.output_expander == OUTPUT_EXPANDER_PCF8574;
+}
+
+bool output_bit_on(const Config& config, uint8_t byte, uint8_t bit) {
+  const bool high = bit_is_set(byte, bit);
+  return config.output_active_low ? !high : high;
+}
+
 bool pin_is_high(const Model& model, uint8_t pin) {
   return is_assigned(pin) && pin < kMaxGpio && model.pin_level[pin] != 0;
 }
 
 bool controller_relay_state(const Model& model, Relay relay) {
-  if (model.board.output_backend == OutputBackend::ShiftRegister) {
-    return bit_is_set(model.output_byte, relay_bit(model.board, relay));
+  if (uses_expander(model.config)) {
+    return output_bit_on(model.config, model.output_byte, relay_bit(model.config, relay));
   }
   return pin_is_high(model, relay_pin(model.config, relay));
 }
 
 bool controller_mixer_motion(const Model& model) {
   const bool open_close = model.config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
-  if (model.board.output_backend == OutputBackend::ShiftRegister) {
-    const bool first = bit_is_set(model.output_byte, model.board.sr_bit_mix_direction);
-    const bool second = bit_is_set(model.output_byte, model.board.sr_bit_mix_motion);
+  if (uses_expander(model.config)) {
+    const bool first =
+        output_bit_on(model.config, model.output_byte, model.config.expander_bit_mix_direction);
+    const bool second =
+        output_bit_on(model.config, model.output_byte, model.config.expander_bit_mix_motion);
     return open_close ? (first || second) : second;
   }
   const bool first = pin_is_high(model, model.config.gpio_mix_open);
@@ -117,8 +129,9 @@ bool controller_mixer_motion(const Model& model) {
 }
 
 bool controller_mixer_open(const Model& model) {
-  if (model.board.output_backend == OutputBackend::ShiftRegister) {
-    return bit_is_set(model.output_byte, model.board.sr_bit_mix_direction);
+  if (uses_expander(model.config)) {
+    return output_bit_on(model.config, model.output_byte,
+                         model.config.expander_bit_mix_direction);
   }
   return pin_is_high(model, model.config.gpio_mix_open);
 }
@@ -218,32 +231,42 @@ float effective_power(const Model& model, CurrentChannel channel) {
 }
 
 uint8_t mux_channel(const Model& model) {
-  if (!model.board.has_current_mux || model.board.output_backend != OutputBackend::ShiftRegister) {
+  if (!model.board.has_current_mux || !uses_expander(model.config)) {
     return 0xFF;
   }
   uint8_t channel = 0;
-  if (bit_is_set(model.output_byte, model.board.sr_bit_mux_s0)) {
+  if (bit_is_set(model.output_byte, model.config.expander_bit_mux_s0)) {
     channel |= 0x01;
   }
-  if (bit_is_set(model.output_byte, model.board.sr_bit_mux_s1)) {
+  if (bit_is_set(model.output_byte, model.config.expander_bit_mux_s1)) {
     channel |= 0x02;
   }
   return channel;
 }
 
 bool output_enabled(const Model& model) {
-  if (model.board.output_backend != OutputBackend::ShiftRegister) {
-    return true;
+  if (model.config.output_expander != OUTPUT_EXPANDER_74HC595) {
+    return true;  // direct GPIO, or a PCF8574 without an OE pin
   }
-  if (!is_assigned(model.board.sr_oe_pin) || model.board.sr_oe_pin >= kMaxGpio) {
+  if (!is_assigned(model.config.expander_oe_pin) || model.config.expander_oe_pin >= kMaxGpio) {
     return true;  // OE hard-wired on the carrier
   }
-  const bool oe_high = model.pin_level[model.board.sr_oe_pin] != 0;
-  return model.board.sr_oe_active_low ? !oe_high : oe_high;
+  const bool oe_high = model.pin_level[model.config.expander_oe_pin] != 0;
+  return model.config.expander_oe_active_low ? !oe_high : oe_high;
 }
 
 void reset_locked(Model& model) {
-  model.output_byte = 0;
+  // Mirror the power-on state of the selected driver. An active-low relay
+  // board (PCF8574) idles high, which is the safe OFF level, so the initial
+  // byte is 0xFF with the MUX select bits low.
+  uint8_t initial_output = model.config.output_active_low ? 0xFF : 0x00;
+  if (model.config.expander_bit_mux_s0 < 8) {
+    initial_output &= static_cast<uint8_t>(~(1u << model.config.expander_bit_mux_s0));
+  }
+  if (model.config.expander_bit_mux_s1 < 8) {
+    initial_output &= static_cast<uint8_t>(~(1u << model.config.expander_bit_mux_s1));
+  }
+  model.output_byte = initial_output;
   memset(model.pin_level, 0, sizeof(model.pin_level));
 
   for (uint8_t i = 0; i < kTempRoleCount; ++i) {
@@ -276,9 +299,10 @@ void reset_locked(Model& model) {
 
   // Mirror the power-on state of an un-driven 74HC595 carrier: outputs are
   // disabled until L0 pulls OE to its enable level.
-  if (model.board.output_backend == OutputBackend::ShiftRegister &&
-      is_assigned(model.board.sr_oe_pin) && model.board.sr_oe_pin < kMaxGpio) {
-    model.pin_level[model.board.sr_oe_pin] = model.board.sr_oe_active_low ? 1 : 0;
+  if (model.config.output_expander == OUTPUT_EXPANDER_74HC595 &&
+      is_assigned(model.config.expander_oe_pin) && model.config.expander_oe_pin < kMaxGpio) {
+    model.pin_level[model.config.expander_oe_pin] =
+        model.config.expander_oe_active_low ? 1 : 0;
   }
 
   ++model.revision;

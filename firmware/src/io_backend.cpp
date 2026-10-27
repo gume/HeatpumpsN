@@ -32,6 +32,19 @@ void shift_out_msb(uint8_t data_pin, uint8_t clock_pin, uint8_t latch_pin, uint8
   sim::record_shift_register(value);
 }
 
+bool pcf8574_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address, uint8_t initial) {
+  (void)sda_pin;
+  (void)scl_pin;
+  (void)address;
+  sim::record_shift_register(initial);
+  return true;
+}
+
+bool pcf8574_write(uint8_t value) {
+  sim::record_shift_register(value);
+  return true;
+}
+
 void adc_begin(uint8_t pin) {
   (void)pin;
 }
@@ -80,6 +93,7 @@ uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_cou
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
+#include <Wire.h>
 
 // -----------------------------------------------------------------------------
 // Hardware backend: real pins, real shift register, real ADC and LED strip.
@@ -93,6 +107,8 @@ Adafruit_NeoPixel g_leds;
 bool g_leds_ready = false;
 uint16_t g_led_count = 0;
 uint8_t g_onewire_pin = HPN_GPIO_UNASSIGNED;
+uint8_t g_pcf8574_address = 0x20;
+bool g_pcf8574_ready = false;
 const Config* g_config = nullptr;
 OneWire* g_onewire = nullptr;
 DallasTemperature* g_dallas = nullptr;
@@ -209,6 +225,34 @@ void shift_out_msb(uint8_t data_pin, uint8_t clock_pin, uint8_t latch_pin, uint8
   shiftOut(data_pin, clock_pin, MSBFIRST, value);
   digitalWrite(latch_pin, HIGH);
   digitalWrite(latch_pin, LOW);
+}
+
+bool pcf8574_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address, uint8_t initial) {
+  if (!pin_assigned(sda_pin) || !pin_assigned(scl_pin)) {
+    g_pcf8574_ready = false;
+    return false;
+  }
+  Wire.begin(sda_pin, scl_pin);
+  Wire.setClock(100000);
+  g_pcf8574_address = address;
+  g_pcf8574_ready = true;
+  // A PCF8574 has no register pointer: the first byte after the address is
+  // the port value. Write the safe state before returning so the caller can
+  // rely on the relays being off.
+  Wire.beginTransmission(g_pcf8574_address);
+  Wire.write(initial);
+  const bool ok = Wire.endTransmission() == 0;
+  g_pcf8574_ready = ok;
+  return ok;
+}
+
+bool pcf8574_write(uint8_t value) {
+  if (!g_pcf8574_ready) {
+    return false;
+  }
+  Wire.beginTransmission(g_pcf8574_address);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
 }
 
 void adc_begin(uint8_t pin) {

@@ -7,11 +7,15 @@
 
 // Board-level wiring abstraction.
 //
-// The controller logic is board-agnostic. A BoardConfig describes how the
-// active carrier reaches the actuators and sensors. Carriers:
+// The controller logic is board-agnostic. A BoardConfig describes the fixed
+// parts of a carrier: its name, the analogue current-measurement front end and
+// the MUX channel map. The output driver (direct GPIO, 74HC595 or PCF8574) is
+// runtime configuration, because the same carrier can be fitted with different
+// extender boards. See firmware/docs/hhn-1.0.md.
+//
+// Carriers:
 //
 //   HomeNet Heatpumps 1.0   legacy carrier, currently a LOLIN S2 Mini inside.
-//                           See firmware/docs/hhn-1.0.md.
 //   HomeNet Heatpumps 2.0   next carrier, under planning. Primary MCUs are
 //                           ESP32-C3 and ESP32-S3. No profile yet.
 //   boardless               bare devkit, no carrier. Direct GPIO with all
@@ -21,31 +25,8 @@
 // be run against real pins or against the emulation model (HPN_IO_EMULATION).
 namespace hpn {
 
-enum class OutputBackend : uint8_t {
-  DirectGpio = 0,
-  ShiftRegister = 1,  // 74HC595, one byte
-};
-
 struct BoardConfig {
   const char* name;
-  OutputBackend output_backend;
-
-  // 74HC595 pins (ignored for DirectGpio)
-  uint8_t sr_data_pin;
-  uint8_t sr_clock_pin;
-  uint8_t sr_latch_pin;
-  uint8_t sr_oe_pin;
-  bool sr_oe_active_low;
-
-  // 74HC595 output bit assignment (Q0..Q7)
-  uint8_t sr_bit_heater;
-  uint8_t sr_bit_pump_rad1;
-  uint8_t sr_bit_pump_rad2;
-  uint8_t sr_bit_pump_floor;
-  uint8_t sr_bit_mix_direction;  // 1 = open, 0 = close
-  uint8_t sr_bit_mix_motion;     // 1 = motor energised
-  uint8_t sr_bit_mux_s0;
-  uint8_t sr_bit_mux_s1;
 
   // Analogue current-measurement front end (ACS712 + mux)
   bool has_current_mux;

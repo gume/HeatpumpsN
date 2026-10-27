@@ -14,13 +14,17 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 2;
+constexpr uint16_t kVersion = 3;
 
 // v1 blobs contain the unchanged 1288-byte Config prefix (the first version
-// already used the former tail padding for mix_max_open_pct). v2 appends the
+// already used the former tail padding for mix_max_open_pct). v2 appended the
 // pump-calibration, operating-window, overshoot, sensor-role and inferred-DHW
-// fields, so a v1 blob can be migrated by copying its prefix over defaults.
+// fields. v3 appends the output-driver/port-expander block. Each migration
+// starts from current defaults and copies the unchanged old prefix, so the new
+// fields receive a valid value.
 constexpr size_t kV1ConfigSize = 1288;
+constexpr size_t kV2ConfigSize = 1348;
+constexpr size_t kCurrentConfigSize = 1364;
 
 struct ConfigBlobHeader {
   uint32_t magic;
@@ -42,11 +46,12 @@ struct ConfigBlob {
 
 static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
-static_assert(sizeof(Config) > kV1ConfigSize,
-              "v2 fields must be appended after the v1 Config prefix");
+static_assert(sizeof(Config) > kV2ConfigSize,
+              "v3 fields must be appended after the v2 Config prefix");
 // Any future field addition must bump kVersion and extend the migration path
 // instead of silently invalidating stored settings.
-static_assert(sizeof(Config) == 1348, "Config layout changed; review the NVS format");
+static_assert(sizeof(Config) == kCurrentConfigSize,
+              "Config layout changed; review the NVS format");
 
 Preferences g_prefs;
 
@@ -59,6 +64,10 @@ uint32_t blob_crc_bytes(uint8_t* bytes, size_t size) {
   const uint32_t crc = crc32_ieee(bytes, size);
   header->crc = saved;
   return crc;
+}
+
+void sanitize_output_bit(uint8_t& bit, uint8_t fallback) {
+  if (bit > 7) bit = fallback;
 }
 
 void sanitize_config(Config& config) {
@@ -118,6 +127,25 @@ void sanitize_config(Config& config) {
     config.dhw_infer_max_s = 1800;
   }
 
+  // Output-driver block (v3). Reject an unknown driver and keep the expander
+  // bit map inside the one-byte range. A standard PCF8574 address is
+  // 0x20-0x27 (PCF8574) or 0x38-0x3F (PCF8574A); other 7-bit addresses are
+  // allowed for compatible custom expanders.
+  if (config.output_expander > OUTPUT_EXPANDER_PCF8574) {
+    config.output_expander = OUTPUT_EXPANDER_NONE;
+  }
+  if (config.expander_address < 0x08 || config.expander_address > 0x77) {
+    config.expander_address = 0x20;
+  }
+  sanitize_output_bit(config.expander_bit_heater, 0);
+  sanitize_output_bit(config.expander_bit_pump_rad1, 1);
+  sanitize_output_bit(config.expander_bit_pump_rad2, 2);
+  sanitize_output_bit(config.expander_bit_pump_floor, 3);
+  sanitize_output_bit(config.expander_bit_mix_direction, 4);
+  sanitize_output_bit(config.expander_bit_mix_motion, 5);
+  sanitize_output_bit(config.expander_bit_mux_s0, 6);
+  sanitize_output_bit(config.expander_bit_mux_s1, 7);
+
   // A minimum above the usable ceiling is contradictory. Clamp it rather than
   // rejecting stored settings; normal API writes validate the combination.
   uint8_t ceiling = config.mix_max_open_pct;
@@ -141,8 +169,9 @@ ConfigLoadResult config_load(Config& config) {
 
   if (stored != 0) {
     // Preferences::getBytes() requires a buffer large enough for the whole
-    // blob. v2 is the largest recorded format, so anything that still fits is
-    // read in full and the header decides how to interpret it.
+    // blob. The current format is the largest recorded format, so anything
+    // that still fits is read in full and the header decides how to
+    // interpret it.
     if (stored < sizeof(ConfigBlobPrefix)) {
       result = ConfigLoadResult::Corrupt;
     } else if (stored > sizeof(ConfigBlob)) {
@@ -182,6 +211,19 @@ ConfigLoadResult config_load(Config& config) {
           } else {
             result = ConfigLoadResult::Corrupt;
           }
+        } else if (header->version == 2) {
+          const size_t v2_blob_size = sizeof(ConfigBlobHeader) + kV2ConfigSize;
+          if (stored != v2_blob_size || header->size != kV2ConfigSize) {
+            result = ConfigLoadResult::Corrupt;
+          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
+            Config migrated = config_defaults();
+            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV2ConfigSize);
+            sanitize_config(migrated);
+            config = migrated;
+            result = ConfigLoadResult::Migrated;
+          } else {
+            result = ConfigLoadResult::Corrupt;
+          }
         } else {
           // A newer format written by a different firmware build.
           result = ConfigLoadResult::Stale;
@@ -197,8 +239,8 @@ ConfigLoadResult config_load(Config& config) {
       Serial.println("[config] loaded saved configuration from NVS");
       break;
     case ConfigLoadResult::Migrated:
-      Serial.printf("[config] migrated v1 configuration to v%u (%u bytes preserved)\n",
-                    static_cast<unsigned>(kVersion), static_cast<unsigned>(kV1ConfigSize));
+      Serial.printf("[config] migrated older configuration to v%u\n",
+                    static_cast<unsigned>(kVersion));
       break;
     case ConfigLoadResult::Stale:
       Serial.printf("[config] saved configuration format differs (%u bytes); using compiled defaults\n",
