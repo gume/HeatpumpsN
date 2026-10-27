@@ -70,6 +70,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 h1, h2, h3, h4, p { margin: 0; }
 .hidden { display: none !important; }
+/* Conditional settings blocks are toggled with the hidden attribute, which the
+   display rules below would otherwise override. */
+[hidden] { display: none !important; }
 .mono { font-family: var(--mono); }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
@@ -448,9 +451,26 @@ td.mono, th.mono { font-family: var(--mono); }
 
 /* Forms */
 .settings-form { display: flex; flex-direction: column; gap: 16px; }
-.form-section { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
-.form-section + .form-section { border-top: 1px solid var(--line-soft); padding-top: 16px; }
-.form-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+/* Every section is its own box. A thin divider was easy to miss on a long
+   settings page, so the section carries a border, a panel background and its
+   own padding instead. */
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.form-section + .form-section { margin-top: 12px; }
+.form-section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+}
+.form-section > p:last-child { margin-bottom: 0; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .form-grid.one { grid-template-columns: 1fr; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -473,6 +493,23 @@ td.mono, th.mono { font-family: var(--mono); }
 .field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .field small { color: var(--faint); font-size: 11px; }
 .field .inline { display: flex; align-items: center; gap: 8px; }
+/* Number field with its polarity tick on the same row */
+.pin-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pin-row input[type="number"] {
+  width: 96px;
+  flex: none;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  outline: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pin-row input[type="number"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pin-row .checkbox-row span { color: var(--muted); font-size: 12px; }
 .range-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px auto; gap: 8px; align-items: center; }
 .range-row input[type="range"] { width: 100%; accent-color: var(--accent); }
 .range-row input[type="number"] {

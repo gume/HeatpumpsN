@@ -683,10 +683,10 @@ function eventRowCompact(entry) {
 
 function sensorTable(sensors) {
   if (!Array.isArray(sensors) || sensors.length === 0) {
-    return emptyCard('No sensor data yet.');
+    return emptyCard('No temperature sensor data yet.');
   }
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Sensor</th><th>Value</th><th>Age</th><th>State</th><th>Errors</th></tr></thead>
+    <thead><tr><th>Temperature sensor</th><th>Value</th><th>Age</th><th>State</th><th>Errors</th></tr></thead>
     <tbody>${sensors.map((s) => {
       const tone = s.state === 'ok' ? 'chip-ok' : s.state === 'stale' ? 'chip-warn' : 'chip-err';
       return `<tr>
@@ -894,7 +894,7 @@ function renderDashboard() {
 }
 
 /* ------------------------------------------------------------------------- */
-/* Sensor health                                                              */
+/* Temperature sensor health                                                 */
 /* ------------------------------------------------------------------------- */
 
 function renderSensors() {
@@ -906,11 +906,11 @@ function renderSensors() {
 
   return `<div class="stack">
     <div class="banner ${bad ? 'warn' : 'ok'}">
-      ${bad ? `${bad} sensor${bad === 1 ? '' : 's'} are stale, disconnected or in error.` : 'All configured sensors are valid.'}
+      ${bad ? `${bad} temperature sensor${bad === 1 ? ' is' : 's are'} stale, disconnected or in error.` : 'All configured temperature sensors are valid.'}
     </div>
     <section class="card readonly accent-top">
       <div class="card-head">
-        <div><h2>Sensor health</h2><p>Last value, age and consecutive error count</p></div>
+        <div><h2>Temperature sensor health</h2><p>Last value, age and consecutive error count per 1-Wire sensor</p></div>
         <span class="chip ${bad ? 'chip-warn' : 'chip-ok'}">${sensors.length - bad}/${sensors.length} healthy</span>
       </div>
       ${sensorTable(sensors)}
@@ -920,11 +920,85 @@ function renderSensors() {
 }
 
 /* ------------------------------------------------------------------------- */
-/* Diagnostics: sensor health and relay counters                              */
+/* Diagnostics: link state, sensor health and relay counters                   */
 /* ------------------------------------------------------------------------- */
+
+function linkChip(text, ok, warn = false) {
+  const cls = ok ? 'chip-ok' : (text === 'disabled' ? '' : (warn ? 'chip-warn' : 'chip-err'));
+  return `<span class="chip ${cls}">${esc(text)}</span>`;
+}
+
+function renderConnectivity() {
+  const status = state.status;
+  if (!status) return loadingCard('Waiting for controller status…');
+
+  const wifi = status.wifi || {};
+  const mqtt = status.mqtt || {};
+  const ntp = status.ntp || {};
+
+  const wifiState = wifi.connected ? 'connected' : (wifi.configured ? (wifi.state || 'disconnected') : 'disabled');
+  const mqttState = mqtt.enabled ? (mqtt.state || (mqtt.connected ? 'connected' : 'disconnected')) : 'disabled';
+  const ntpState = ntp.synced ? 'synchronized' : (ntp.enabled ? 'waiting for sync' : 'disabled');
+
+  const wifiDetail = wifi.connected
+    ? `${esc(wifi.ip || '—')} · ${fmtNum(wifi.rssi, 0)} dBm`
+    : (wifi.configured ? 'station not associated' : 'no SSID configured');
+  const mqttDetail = mqtt.enabled
+    ? `${esc(mqtt.broker || '—')}:${esc(mqtt.port ?? '—')}`
+    : 'broker not configured';
+  const mqttCounters = `${num(mqtt.connectCount, 0)} connect(s) · ${num(mqtt.disconnectCount, 0)} disconnect(s) · ${num(mqtt.errors, 0)} error(s)`;
+  const mqttError = mqtt.lastError ? ` · last error ${esc(mqtt.lastError)}` : '';
+  const ntpDetail = ntp.enabled
+    ? `${esc(ntp.server || '—')}${ntp.synced ? ` · ${esc(fmtEpoch(ntp.epoch))}` : ''}`
+    : 'time is not synchronised';
+
+  return `<section class="card readonly accent-top">
+    <div class="card-head">
+      <div><h2>Connectivity</h2><p>Wi-Fi, MQTT broker and time source</p></div>
+    </div>
+    <div class="kv">
+      <dt>Wi-Fi</dt>
+      <dd>${linkChip(wifiState, !!wifi.connected)} ${wifiDetail}</dd>
+      <dt>MQTT</dt>
+      <dd>${linkChip(mqttState, !!mqtt.connected)} ${mqttDetail}</dd>
+      <dt>MQTT counters</dt>
+      <dd class="${mqtt.connected ? '' : 'muted'}">${mqttCounters}${mqttError}</dd>
+      <dt>NTP</dt>
+      <dd>${linkChip(ntpState, !!ntp.synced, true)} ${ntpDetail}</dd>
+      <dt>Time zone</dt>
+      <dd>${esc(ntp.timezone || '—')}</dd>
+    </div>
+    <p class="small faint" style="margin-top:10px">The badge in the header shows the live Wi-Fi and MQTT state; this card refreshes with the 30-second status poll.</p>
+  </section>`;
+}
+
+function renderControllerInfo() {
+  const status = state.status;
+  if (!status) return loadingCard('Waiting for controller status…');
+  return `<section class="card readonly">
+    <div class="card-head">
+      <div><h2>Controller</h2><p>Runtime information and the last reset cause</p></div>
+      <span class="chip">READ ONLY</span>
+    </div>
+    <div class="kv">
+      <dt>Uptime</dt>
+      <dd>${fmtUptime(status.uptime || 0)}</dd>
+      <dt>Last reset</dt>
+      <dd>${esc(status.resetReason || '—')}</dd>
+      <dt>Free heap</dt>
+      <dd>${fmtBytes(status.freeHeap)}${status.minFreeHeap !== undefined ? ` · min ${fmtBytes(status.minFreeHeap)}` : ''}</dd>
+      <dt>CPU load</dt>
+      <dd>${status.cpuLoad !== undefined ? `${num(status.cpuLoad, 0).toFixed(2)} %` : 'n/a'}${status.taskCount !== undefined ? ` · ${status.taskCount} tasks` : ''}</dd>
+      <dt>Firmware</dt>
+      <dd>${esc(status.version || '?')} · ${esc(status.build || '?')}</dd>
+    </div>
+  </section>`;
+}
 
 function renderDiagnostics() {
   return `<div class="stack">
+    ${renderConnectivity()}
+    ${renderControllerInfo()}
     ${renderSensors()}
     ${renderCounters()}
   </div>`;
@@ -1336,6 +1410,24 @@ function fieldNumber(name, label, value, min, max, step, help, dataType = 'int',
   </div>`;
 }
 
+// A number field with its polarity tick on the same row. Used for the output
+// GPIOs and the expander bits so "active low" sits next to the pin it applies
+// to instead of in a separate block.
+function fieldNumberPolarity(name, polarityName, label, value, activeLow, help, min = 0, max = 255) {
+  return `<div class="field">
+    <label for="f_${esc(name)}">${esc(label)}</label>
+    <div class="pin-row">
+      <input id="f_${esc(name)}" data-field="${esc(name)}" data-type="int" type="number"
+             min="${min}" max="${max}" step="1" value="${num(value, max)}">
+      <label class="checkbox-row">
+        <input type="checkbox" data-field="${esc(polarityName)}" ${activeLow ? 'checked' : ''}>
+        <span>active low</span>
+      </label>
+    </div>
+    <small>${esc(help || '')}</small>
+  </div>`;
+}
+
 function fieldText(name, label, value, help, type = 'text', placeholder = '') {
   return `<div class="field">
     <label for="f_${esc(name)}">${esc(label)}</label>
@@ -1402,7 +1494,7 @@ function sensorDiscoveryTable() {
     return `<div class="empty">No discovery result yet. Press “Discover sensors” to scan the bus.</div>`;
   }
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Sensor ID</th><th>Temperature</th><th>State</th></tr></thead>
+    <thead><tr><th>Temperature sensor ID</th><th>Temperature</th><th>State</th></tr></thead>
     <tbody>${sensors.map((sensor) => `<tr>
       <td class="mono">${esc(sensor.id)}</td>
       <td class="mono">${fmtTemp(sensor.temperature)}</td>
@@ -1543,115 +1635,134 @@ function renderSettingsHardware() {
   if (!cfg) return loadingCard('Loading hardware settings…');
 
   const pinHelp = 'GPIO number, or 255 for unassigned.';
+  const bitHelp = 'Output bit 0–7. Every assigned bit must be unique.';
+  const muxHelp = 'Expander bit 0–7, or 255 when the line is not connected.';
   const pumpPower = Array.isArray(cfg.has_pump_power) ? cfg.has_pump_power : [false, false, false];
 
   return `<div class="stack">
-    <div class="banner warn">Writable configuration. GPIO and wiring changes require a reboot to take effect. Timing and control constants live under <a href="#settings/control">Control &amp; Timing</a>.</div>
+    <div class="banner warn">Writable configuration. GPIO, driver and wiring changes require a reboot to take effect. Timing and control constants live under <a href="#settings/control">Control &amp; Timing</a>.</div>
     <form class="settings-form writable" data-section="hardware">
       <section class="card writable accent-top">
-        <div class="card-head"><div><h2>Hardware &amp; pins</h2><p>Board wiring, GPIO map and sensor identities</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
+        <div class="card-head"><div><h2>Board wiring</h2><p>How the two mixer channels are wired</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
 
         <div class="form-section">
-          <h3>Board wiring</h3>
+          <h3>Mixer</h3>
           <div class="form-grid">
             ${fieldSelect('mixer_wiring', 'Mixer wiring', cfg.mixer_wiring, [
               { value: 0, label: 'Direction + motion (HomeNet Heating control v0.1)' },
               { value: 1, label: 'Open + close (HomeNet Heating control v1.x)' }
             ], 'The first mixer channel is open/direction; the second is close/motion.')}
           </div>
-          <p class="small faint" style="margin-top:8px">HomeNet Heating control v0.1 uses a direction bit plus a motion enable. HomeNet Heating control v1.x uses separate, interlocked open and close relays. Both map to the same two logical channels.</p>
+          <p class="small faint">HomeNet Heating control v0.1 uses a direction bit plus a motion enable. HomeNet Heating control v1.x uses separate, interlocked open and close relays. Both map to the same two logical channels.</p>
         </div>
+      </section>
+
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Output driver</h2><p>How the relay and mixer channels are reached</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
 
         <div class="form-section">
-          <h3>Output driver</h3>
           <div class="form-grid">
             ${fieldSelect('output_expander', 'Output driver', cfg.output_expander, [
               { value: 0, label: 'Direct GPIO' },
               { value: 1, label: '74HC595 (HomeNet Heating control v0.1)' },
               { value: 2, label: 'PCF8574 (HomeNet Heating control v1.x)' }
-            ], 'Selects how the relay and mixer channels are reached. Expander outputs share one byte.')}
+            ], 'Only the sections that belong to the selected driver are shown. Values for the other drivers are kept.')}
           </div>
-          <p class="small faint" style="margin-top:8px">Only the settings that belong to the selected driver are shown. Values for the other drivers are kept.</p>
         </div>
 
-        <div class="form-section">
-          <h3>Output polarity</h3>
+        <div class="form-section" data-driver-section="0">
+          <h3>Relay and mixer GPIOs</h3>
           <div class="form-grid">
-            ${fieldCheckbox('output_active_low_heater', 'Heater is active low', cfg.output_active_low_heater, 'A logical ON drives this output low.')}
-            ${fieldCheckbox('output_active_low_pump_rad1', 'Heating loop 1 pump is active low', cfg.output_active_low_pump_rad1, 'A logical ON drives this output low.')}
-            ${fieldCheckbox('output_active_low_pump_rad2', 'Heating loop 2 pump is active low', cfg.output_active_low_pump_rad2, 'A logical ON drives this output low.')}
-            ${fieldCheckbox('output_active_low_pump_floor', 'Floor pump is active low', cfg.output_active_low_pump_floor, 'A logical ON drives this output low.')}
-            ${fieldCheckbox('output_active_low_mix_direction', 'Mixer channel 1 (open / direction) is active low', cfg.output_active_low_mix_direction, 'A logical ON drives this output low.')}
-            ${fieldCheckbox('output_active_low_mix_motion', 'Mixer channel 2 (close / motion) is active low', cfg.output_active_low_mix_motion, 'A logical ON drives this output low.')}
-          </div>
-          <p class="small faint" style="margin-top:8px">Each output has its own polarity because a board may mix active-high and active-low relay drivers. The current-MUX select bits always stay active high.</p>
-        </div>
-
-        <div class="form-section" data-expander-section="0">
-          <h3>Direct GPIO map</h3>
-          <div class="form-grid">
-            ${fieldNumber('gpio_pump_floor', 'Floor pump GPIO', cfg.gpio_pump_floor, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_pump_rad1', 'Heating loop 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_pump_rad2', 'Heating loop 2 pump GPIO', cfg.gpio_pump_rad2, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_heater', 'Heater GPIO', cfg.gpio_heater, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_open', 'Mixer channel 1 (open / direction) GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_close', 'Mixer channel 2 (close / motion) GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumberPolarity('gpio_heater', 'output_active_low_heater', 'Heater GPIO', cfg.gpio_heater, cfg.output_active_low_heater, pinHelp)}
+            ${fieldNumberPolarity('gpio_pump_rad1', 'output_active_low_pump_rad1', 'Heating loop 1 pump GPIO', cfg.gpio_pump_rad1, cfg.output_active_low_pump_rad1, pinHelp)}
+            ${fieldNumberPolarity('gpio_pump_rad2', 'output_active_low_pump_rad2', 'Heating loop 2 pump GPIO', cfg.gpio_pump_rad2, cfg.output_active_low_pump_rad2, pinHelp)}
+            ${fieldNumberPolarity('gpio_pump_floor', 'output_active_low_pump_floor', 'Floor pump GPIO', cfg.gpio_pump_floor, cfg.output_active_low_pump_floor, pinHelp)}
+            ${fieldNumberPolarity('gpio_mix_open', 'output_active_low_mix_direction', 'Mixer channel 1 (open / direction) GPIO', cfg.gpio_mix_open, cfg.output_active_low_mix_direction, pinHelp)}
+            ${fieldNumberPolarity('gpio_mix_close', 'output_active_low_mix_motion', 'Mixer channel 2 (close / motion) GPIO', cfg.gpio_mix_close, cfg.output_active_low_mix_motion, pinHelp)}
           </div>
         </div>
 
-        <div class="form-section" data-expander-section="1">
+        <div class="form-section" data-driver-section="1">
           <h3>74HC595 wiring</h3>
           <div class="form-grid">
             ${fieldNumber('expander_data_pin', 'Serial data (SER/DS) GPIO', cfg.expander_data_pin, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('expander_clock_pin', 'Shift clock (SRCLK/SHCP) GPIO', cfg.expander_clock_pin, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('expander_latch_pin', 'Latch clock (RCLK/STCP) GPIO', cfg.expander_latch_pin, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('expander_oe_pin', 'Output enable (/OE) GPIO', cfg.expander_oe_pin, 0, 255, 1, '255 when /OE is hard-wired on the board.', 'int')}
-            ${fieldCheckbox('expander_oe_active_low', '/OE is active low', cfg.expander_oe_active_low, 'Most 74HC595 boards enable the outputs with a low level; HomeNet Heating control v0.1 pulls /OE up to disable them at boot.')}
+            ${fieldNumberPolarity('expander_oe_pin', 'expander_oe_active_low', 'Output enable (/OE) GPIO', cfg.expander_oe_pin, cfg.expander_oe_active_low, '255 when /OE is hard-wired on the board.')}
           </div>
         </div>
 
-        <div class="form-section" data-expander-section="2">
+        <div class="form-section" data-driver-section="2">
           <h3>PCF8574 wiring</h3>
           <div class="form-grid">
             ${fieldHex('expander_address', 'I2C address (7-bit)', cfg.expander_address, '0x20–0x27 for a PCF8574, 0x38–0x3F for a PCF8574A. Other 0x08–0x77 addresses are accepted for compatible expanders.')}
             ${fieldNumber('i2c_sda', 'I2C SDA GPIO', cfg.i2c_sda, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('i2c_scl', 'I2C SCL GPIO', cfg.i2c_scl, 0, 255, 1, pinHelp, 'int')}
           </div>
-          <p class="small faint" style="margin-top:8px">The I2C bus is also reserved for the future local mixer encoder.</p>
+          <p class="small faint">The I2C bus is also reserved for the future local mixer encoder.</p>
         </div>
 
-        <div class="form-section" data-expander-section="1 2">
-          <h3>Expander bit map</h3>
+        <div class="form-section" data-driver-section="1 2">
+          <h3>Output bit map</h3>
           <div class="form-grid">
-            ${fieldNumber('expander_bit_pump_floor', 'Floor pump bit', cfg.expander_bit_pump_floor, 0, 7, 1, 'Output bit 0–7. Each logical channel must use a distinct bit.', 'int')}
-            ${fieldNumber('expander_bit_pump_rad1', 'Heating loop 1 pump bit', cfg.expander_bit_pump_rad1, 0, 7, 1, 'Output bit 0–7.', 'int')}
-            ${fieldNumber('expander_bit_pump_rad2', 'Heating loop 2 pump bit', cfg.expander_bit_pump_rad2, 0, 7, 1, 'Output bit 0–7.', 'int')}
-            ${fieldNumber('expander_bit_heater', 'Heater bit', cfg.expander_bit_heater, 0, 7, 1, 'Output bit 0–7.', 'int')}
-            ${fieldNumber('expander_bit_mix_direction', 'Mixer channel 1 (open / direction) bit', cfg.expander_bit_mix_direction, 0, 7, 1, 'First mixer channel.', 'int')}
-            ${fieldNumber('expander_bit_mix_motion', 'Mixer channel 2 (close / motion) bit', cfg.expander_bit_mix_motion, 0, 7, 1, 'Second mixer channel.', 'int')}
+            ${fieldNumberPolarity('expander_bit_heater', 'output_active_low_heater', 'Heater bit', cfg.expander_bit_heater, cfg.output_active_low_heater, bitHelp, 0, 7)}
+            ${fieldNumberPolarity('expander_bit_pump_rad1', 'output_active_low_pump_rad1', 'Heating loop 1 pump bit', cfg.expander_bit_pump_rad1, cfg.output_active_low_pump_rad1, bitHelp, 0, 7)}
+            ${fieldNumberPolarity('expander_bit_pump_rad2', 'output_active_low_pump_rad2', 'Heating loop 2 pump bit', cfg.expander_bit_pump_rad2, cfg.output_active_low_pump_rad2, bitHelp, 0, 7)}
+            ${fieldNumberPolarity('expander_bit_pump_floor', 'output_active_low_pump_floor', 'Floor pump bit', cfg.expander_bit_pump_floor, cfg.output_active_low_pump_floor, bitHelp, 0, 7)}
+            ${fieldNumberPolarity('expander_bit_mix_direction', 'output_active_low_mix_direction', 'Mixer channel 1 (open / direction) bit', cfg.expander_bit_mix_direction, cfg.output_active_low_mix_direction, bitHelp, 0, 7)}
+            ${fieldNumberPolarity('expander_bit_mix_motion', 'output_active_low_mix_motion', 'Mixer channel 2 (close / motion) bit', cfg.expander_bit_mix_motion, cfg.output_active_low_mix_motion, bitHelp, 0, 7)}
           </div>
+          <p class="small faint">Each output has its own polarity because a board may mix active-high and active-low relay drivers. The current-MUX select bits always stay active high.</p>
         </div>
 
-        <div class="form-section" data-expander-section="2">
+        <div class="form-section" data-driver-section="1 2">
+          <h3>Current MUX select bits</h3>
+          <div class="form-grid">
+            ${fieldNumber('expander_bit_mux_s0', 'Current MUX S0 bit', cfg.expander_bit_mux_s0, 0, 255, 1, muxHelp, 'int')}
+            ${fieldNumber('expander_bit_mux_s1', 'Current MUX S1 bit', cfg.expander_bit_mux_s1, 0, 255, 1, muxHelp, 'int')}
+          </div>
+          <p class="small faint">Only the analogue MUX front end uses these bits. 255 means the line is not connected.</p>
+        </div>
+
+        <div class="form-section" data-driver-section="2">
           <h3>Interlock fault input</h3>
           <div class="form-grid">
-            ${fieldNumber('expander_bit_mix_fault', 'Fault input bit (255 = not connected)', cfg.expander_bit_mix_fault, 0, 255, 1, 'HomeNet Heating control v1.x uses P7 as an input that signals an open/close interlock failure.', 'int')}
-            ${fieldCheckbox('mix_fault_active_low', 'Fault input is active low', cfg.mix_fault_active_low, 'When set, a low level means the board reports the interlock fault.')}
+            ${fieldNumberPolarity('expander_bit_mix_fault', 'mix_fault_active_low', 'Fault input bit', cfg.expander_bit_mix_fault, cfg.mix_fault_active_low, 'Bit 0–7, or 255 when the board has no fault output.', 0, 255)}
           </div>
+          <p class="small faint">HomeNet Heating control v1.x drives P7 high when both mixer channels are requested. A healthy interlock therefore reads low, so <span class="mono">active low</span> stays unticked.</p>
         </div>
+      </section>
+
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Status LEDs</h2><p>Addressable LED chain</p></div><span class="chip">READ ONLY COUNT</span></div>
 
         <div class="form-section">
-          <h3>Sensors &amp; LEDs</h3>
+          <h3>LED chain</h3>
           <div class="form-grid">
-            ${fieldNumber('gpio_onewire', 'OneWire GPIO', cfg.gpio_onewire, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_led_data', 'LED data GPIO', cfg.gpio_led_data, 0, 255, 1, pinHelp, 'int')}
+            <div class="field">
+              <label>LED count</label>
+              <div class="metric-row"><span class="k">Fitted by the board profile</span><span class="v">${esc(cfg.num_leds ?? 0)} LEDs</span></div>
+              <small>The LED count is fixed by the carrier profile and is not user-selectable.</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Temperature sensor identities</h2><p>1-Wire bus and the three temperature roles</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
+
+        <div class="form-section">
+          <h3>1-Wire bus</h3>
+          <div class="form-grid">
+            ${fieldNumber('gpio_onewire', '1-Wire data GPIO', cfg.gpio_onewire, 0, 255, 1, pinHelp, 'int')}
           </div>
         </div>
 
         <div class="form-section">
-          <h3>Sensor identities</h3>
+          <h3>Temperature sensor roles</h3>
           <div class="row between" style="margin-bottom:10px">
-            <p class="small faint">Scan the bus, then assign each role from the discovered list.</p>
+            <p class="small faint">Scan the 1-Wire bus, then assign each temperature role from the discovered list.</p>
             <span>
               <button class="btn btn-sm" type="button" data-action="discover-sensors" ${state.sensorDiscoveryLoading ? 'disabled' : ''}>${state.sensorDiscoveryLoading ? 'Scanning…' : 'Discover sensors'}</button>
               <button class="btn btn-sm" type="button" data-action="verify-sensor-roles" ${state.sensorRoleLoading ? 'disabled' : ''}>${state.sensorRoleLoading ? 'Checking…' : 'Verify roles'}</button>
@@ -1660,14 +1771,18 @@ function renderSettingsHardware() {
           ${sensorDiscoveryTable()}
           ${sensorRoleTable()}
           <div class="form-grid" style="margin-top:12px">
-            ${fieldSelect('sensor_id_boiler', 'Mixer hot in sensor', cfg.sensor_id_boiler, sensorIdOptions(cfg.sensor_id_boiler), 'Sensor mounted on the boiler side of the mixer.', 'string')}
-            ${fieldSelect('sensor_id_ret', 'Mixer cold in / return sensor', cfg.sensor_id_ret, sensorIdOptions(cfg.sensor_id_ret), 'Sensor on the cold inlet / return side.', 'string')}
-            ${fieldSelect('sensor_id_mix', 'Mixer forward sensor', cfg.sensor_id_mix, sensorIdOptions(cfg.sensor_id_mix), 'Sensor on the mixed flow outlet.', 'string')}
+            ${fieldSelect('sensor_id_boiler', 'Mixer hot in temperature sensor', cfg.sensor_id_boiler, sensorIdOptions(cfg.sensor_id_boiler), 'Temperature sensor mounted on the boiler side of the mixer.', 'string')}
+            ${fieldSelect('sensor_id_ret', 'Mixer cold in / return temperature sensor', cfg.sensor_id_ret, sensorIdOptions(cfg.sensor_id_ret), 'Temperature sensor on the cold inlet / return side.', 'string')}
+            ${fieldSelect('sensor_id_mix', 'Mixer forward temperature sensor', cfg.sensor_id_mix, sensorIdOptions(cfg.sensor_id_mix), 'Temperature sensor on the mixed flow outlet.', 'string')}
           </div>
         </div>
+      </section>
+
+      <section class="card writable accent-top">
+        <div class="card-head"><div><h2>Current measurement</h2><p>Pump and mixer current front end</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
 
         <div class="form-section">
-          <h3>Current measurement</h3>
+          <h3>Front end</h3>
           <div class="form-grid">
             ${fieldSelect('current_sense', 'Current sensing', cfg.current_sense, [
               { value: 0, label: 'None' },
@@ -1675,19 +1790,16 @@ function renderSettingsHardware() {
               { value: 2, label: 'ADS1115 (HomeNet Heating control v1.x)' }
             ], 'Selects the current-sensor front end. Settings for the other options are kept.')}
           </div>
-          <div class="form-grid" data-current-sense-section="2">
+          <p class="small faint" data-current-sense-section="1">The MUX select bits are configured with the output driver above.</p>
+        </div>
+
+        <div class="form-section" data-current-sense-section="2">
+          <h3>ADS1115</h3>
+          <div class="form-grid">
             ${fieldHex('ads1115_address', 'ADS1115 I2C address (7-bit)', cfg.ads1115_address, '0x48–0x4B for the four address straps.')}
             ${fieldCheckbox('tlv9064_present', 'TLV9064 sensor assembly fitted', cfg.tlv9064_present, 'The TLV9064 current-sensor assembly is an optional external part. When it is absent, current-based protection stays off.')}
           </div>
-          <p class="small faint" data-current-sense-section="2" style="margin-top:8px">ADS1115 inputs: A0 pump 1, A1 pump 2, A2 mixer, A3 pump 3 / floor. The mixer uses one sensor ring around both motor wires.</p>
-        </div>
-
-        <div class="form-section" data-expander-section="1 2" data-current-sense-section="1">
-          <h3>Current MUX select bits</h3>
-          <div class="form-grid">
-            ${fieldNumber('expander_bit_mux_s0', 'Current MUX S0 bit', cfg.expander_bit_mux_s0, 0, 7, 1, 'Only used with the analogue current MUX.', 'int')}
-            ${fieldNumber('expander_bit_mux_s1', 'Current MUX S1 bit', cfg.expander_bit_mux_s1, 0, 7, 1, 'Only used with the analogue current MUX.', 'int')}
-          </div>
+          <p class="small faint">ADS1115 inputs: A0 pump 1, A1 pump 2, A2 mixer, A3 pump 3 / floor. The mixer uses one sensor ring around both motor wires.</p>
         </div>
 
         <div class="form-section" data-current-sense-section="1 2">
@@ -1697,20 +1809,16 @@ function renderSettingsHardware() {
             ${fieldNumber('pump_current_w_per_v', 'Watts per volt', cfg.pump_current_w_per_v, 1, 5000, 0.1, 'Slope of the current-sense front end.', 'number', 'W/V')}
             ${fieldNumber('pump_current_offset_v', 'Zero-current offset', cfg.pump_current_offset_v, 0, 1, 0.001, 'RMS voltage reported with no pump current.', 'number', 'V')}
             ${fieldCheckbox('pump_power_check_enabled', 'Enable current-based protection', cfg.pump_power_check_enabled, 'Use the measured current for dry-run and welded-relay detection. Disable while the sensor is uncalibrated or absent.')}
+            <div class="field">
+              <label>Power sensors</label>
+              <div class="metric-row"><span class="k">Fitted by the board profile</span><span class="v">${pumpPower.filter(Boolean).length}/3 pumps</span></div>
+              <small>Defined by the carrier profile and not user-selectable.</small>
+            </div>
           </div>
         </div>
-
-        <div class="form-section">
-          <h3>Fixed board features</h3>
-          <div class="grid cols-2">
-            <div class="metric-row"><span class="k">LED ring</span><span class="v">${esc(cfg.num_leds ?? 0)} LEDs (fixed)</span></div>
-            <div class="metric-row"><span class="k">Pump power</span><span class="v">${pumpPower.some(Boolean) ? 'Current sensors fitted' : 'Not present'}</span></div>
-          </div>
-          <p class="small faint" style="margin-top:8px">The LED count and pump-power sensors are defined by the board profile and are not user-selectable.</p>
-        </div>
-
-        ${formActions('Save hardware settings')}
       </section>
+
+      ${formActions('Save hardware settings')}
     </form>
   </div>`;
 }
@@ -2070,22 +2178,40 @@ function bindFormBehaviors(root) {
     target.addEventListener('input', () => { range.value = target.value; });
   });
 
-  const expanderSelect = root.querySelector('[data-field="output_expander"]');
+  const driverSelect = root.querySelector('[data-field="output_expander"]');
   const senseSelect = root.querySelector('[data-field="current_sense"]');
-  if (expanderSelect || senseSelect) {
+  if (driverSelect || senseSelect) {
+    // The same polarity flag is shown next to the GPIO number (direct driver)
+    // and next to the bit number (expander drivers). Only one of those blocks
+    // is visible at a time, so carry the ticks across when the driver changes.
+    const polarityFields = '[data-field^="output_active_low_"]';
+    const mirrorPolarity = () => {
+      const values = new Map();
+      $$(polarityFields, root).forEach((box) => {
+        if (!box.closest('[hidden]') && !values.has(box.dataset.field)) {
+          values.set(box.dataset.field, box.checked);
+        }
+      });
+      $$(polarityFields, root).forEach((box) => {
+        if (values.has(box.dataset.field)) box.checked = values.get(box.dataset.field);
+      });
+    };
+
     const syncConditionalSections = () => {
-      $$('[data-expander-section], [data-current-sense-section]', root).forEach((section) => {
+      mirrorPolarity();
+      $$('[data-driver-section], [data-current-sense-section]', root).forEach((section) => {
         let visible = true;
-        if (section.dataset.expanderSection && expanderSelect) {
-          visible = visible && section.dataset.expanderSection.split(' ').includes(expanderSelect.value);
+        if (section.dataset.driverSection && driverSelect) {
+          visible = visible && section.dataset.driverSection.split(' ').includes(driverSelect.value);
         }
         if (section.dataset.currentSenseSection && senseSelect) {
           visible = visible && section.dataset.currentSenseSection.split(' ').includes(senseSelect.value);
         }
         section.hidden = !visible;
       });
+      mirrorPolarity();
     };
-    expanderSelect?.addEventListener('change', syncConditionalSections);
+    driverSelect?.addEventListener('change', syncConditionalSections);
     senseSelect?.addEventListener('change', syncConditionalSections);
     syncConditionalSections();
   }
@@ -2108,6 +2234,10 @@ function bindFormBehaviors(root) {
 function collectForm(form) {
   const data = {};
   $$('[data-field]', form).forEach((input) => {
+    // Fields inside a collapsed conditional section are not submitted. The
+    // backend keeps the stored value for any key that is absent, so switching
+    // the output driver or the current front end never clears the other mode.
+    if (input.closest('[hidden]')) return;
     const key = input.dataset.field;
     if (key === 'has_pump_power') {
       if (!Array.isArray(data.has_pump_power)) data.has_pump_power = [false, false, false];
@@ -2645,12 +2775,11 @@ const routes = {
   },
   diagnostics: {
     title: 'Diagnostics',
-    subtitle: 'Sensor health and relay counters',
+    subtitle: 'Link state, temperature sensors and relay counters',
     render: renderDiagnostics,
-    enter: () => {
-      refreshCounters().then(() => {
-        if (state.route === 'diagnostics') renderCurrent();
-      });
+    enter: async () => {
+      await Promise.all([refreshCounters(), refreshStatus()]);
+      if (state.route === 'diagnostics') renderCurrent();
     }
   },
   test: {
@@ -2666,7 +2795,7 @@ const routes = {
   },
   'settings/hardware': {
     title: 'Hardware & Pins',
-    subtitle: 'Board wiring, GPIO map and sensor identities',
+    subtitle: 'Board wiring, GPIO map, LEDs and temperature sensors',
     render: renderSettingsHardware,
     enter: async () => { await refreshConfig('hardware'); }
   },
