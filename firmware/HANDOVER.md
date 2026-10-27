@@ -150,15 +150,26 @@ physical sensors are the only pump/heater state entities.
 
 ## 4. Verification performed
 
-Local only; the remote board/agent was not available for this change set:
+Verified on the bench board (`esp32dev_sim`, 2026-10-27):
+
+* remote flash of the firmware and the LittleFS image
+  (`HPN_UPLOAD_FS=1 tests/flash_and_check.sh`);
+* `python3 tests/runtime_check.py --serial` → **PASSED: 85 passed, 0 failed,
+  0 skipped**, including the reboot/boot-log checks;
+* the same suite without `--serial` → **PASSED: 78 passed, 0 failed,
+  0 skipped**.
+
+Local checks:
 
 * `pio run -d firmware -e esp32dev_sim` → **SUCCESS**.
+* `pio run -d firmware -e esp32s2` → **SUCCESS** (compile only, not flashed).
 * `python3 -m py_compile tests/runtime_check.py` → **OK**.
 * `node --check firmware/data/js/app.js` → **OK**.
 * `gzip -9 -c firmware/data/js/app.js > firmware/data/js/app.js.gz` → regenerated.
-* Not yet run: `esp32s2` compile, remote flash, `tests/runtime_check.py`, and
-  the serial boot check. The new keep-alive/after-run/discovery assertions have
-  therefore not been exercised against hardware.
+
+The first `--serial` attempt hit a transient HTTP timeout in the LED checks;
+an immediate rerun passed every check, so treat a single timeout as retryable
+before assuming a regression.
 
 The runtime suite now covers, in addition to the existing checks:
 

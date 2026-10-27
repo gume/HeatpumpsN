@@ -22,8 +22,8 @@ tests/flash_and_check.sh --serial
 A successful run ends with a summary line, for example:
 
 ```
-PASSED: 71 passed, 0 failed, 0 skipped   # with --serial
-PASSED: 64 passed, 0 failed, 0 skipped   # without --serial
+PASSED: 85 passed, 0 failed, 0 skipped   # with --serial
+PASSED: 78 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.

@@ -2,8 +2,8 @@
 
 **Status date:** 2026-10-27
 **Repository:** `/home/gume/Work/HeatpumpsN`, branch `main`
-**HEAD:** board-managed heater change set (`11e8dc9`, `bd2b3e1`, plus the
-accompanying tests/docs commit)
+**HEAD:** board-managed heater change set (`11e8dc9`, `bd2b3e1`, `689719a`,
+`ed6b6a1`, `a31fb5a`, `df47eaa`)
 **Firmware version string:** `0.3.0-web`
 
 This is the entry point for whoever continues the project. It describes what
@@ -19,8 +19,9 @@ the design specifications live in [`plans/`](plans/).
   boots, runs a fixed FreeRTOS task set, drives the emulated HHN 1.0 carrier,
   serves a web portal, talks to MQTT/Home Assistant, and passes its runtime
   suite on a real ESP32 (`esp32dev_sim`; the exact check count is in
-  `tests/README.md`). The current board-managed-heater change set has only been
-  compiled locally, not yet flashed.
+  `tests/README.md`). The current board-managed-heater change set was flashed
+  to that bench board (firmware + LittleFS) and passes the full suite:
+  `85 passed, 0 failed, 0 skipped` with `--serial` on 2026-10-27.
 * The **only flashed board so far is a plain ESP32 devkit running the emulated
   carrier**. The real ESP32-S2 + HomeNet Heatpumps 1.0 carrier has never been
   flashed or validated. That is the single largest open risk.
@@ -554,10 +555,12 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
 
 ## 10. Uncommitted local work
 
-At this handover the working tree contains **only** the board-managed-heater
-change set (firmware, portal, tests and plans). There are no unrelated local
-edits in `simulation/` or untracked review files; the earlier SysID/HIL workspace
-was either committed or cleaned up separately.
+At this handover the working tree is **clean**. The board-managed-heater change
+set is committed in small steps: `11e8dc9` (core firmware), `bd2b3e1` (portal),
+`689719a` (runtime tests), `ed6b6a1` (version bump), `a31fb5a` (docs/plans) and
+`df47eaa` (after-run test timing). There are no unrelated local edits in
+`simulation/` or untracked review files; the earlier SysID/HIL workspace was
+either committed or cleaned up separately.
 
 **Analysis workstream:** `analysis/handover.md` explains the old-system
 telemetry, DuckDB build (`build_duckdb.py`), data conventions and derived

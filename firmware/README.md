@@ -382,8 +382,8 @@ python3 tests/runtime_check.py --base-url http://192.168.2.14
 tests/flash_and_check.sh --serial        # build + flash esp32dev_sim + checks
 ```
 
-Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-26):
-`PASSED: 65 passed, 0 failed, 0 skipped` with `--serial`, and `58/58` without
+Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-27):
+`PASSED: 85 passed, 0 failed, 0 skipped` with `--serial`, and `78/78` without
 the reboot. The boot log showed the saved config loading, no Preferences
 errors, no `501` latch, no crash markers, the `[l1] mixer opening limit` line
 and the new dynamic-maximum/minimum lines.
