@@ -10,21 +10,27 @@ What it checks
 * controller reachability, uptime, RAM log capacities and cadence;
 * portal static assets and the config API contract;
 * RAM event/slow logs and the absence of a latched NVS corruption (501);
-* Home Assistant discovery plus the retained ``system_error_code`` /
-  ``system_error_text`` state topics;
+* Home Assistant discovery of the three heating-loop switches, the four
+  physical binary sensors and the retirement of the old heater/virtual
+  entities, plus the retained ``system_error_code`` / ``system_error_text``
+  state topics;
 * MQTT log streaming, including the two full-topic overrides;
 * error-sensor transitions for a warning, warning recovery, a sensor fault
   (202) and a critical mixer sensor fault (201);
 * the five-LED mapping in the emulation build;
 * that ordinary relay transitions do not update the error sensors;
+* the per-circuit keep-alive: a missed repeat command drops the demand while
+  keeping the raw intent, raises error 301 and recovers on the next ON;
+* the board-owned pump after-run after a heating demand ends;
 * optionally, a serial boot check (``--serial``) with the NVS load and
   start-up integrity checks.
 
 The test restores the controller configuration, emulation temperatures and
 manual relay overrides it temporarily changes. It never changes Wi-Fi
-settings. The only safety limit it touches is `boiler_min_off_ms`, briefly
-zeroed in the emulation build so the heater LED can be verified, then
-restored.
+settings. In the emulation build it briefly zeroes `boiler_min_off_ms` so the
+heater can be verified, disables the pump after-run for the relay/LED checks,
+and shortens `demand_timeout_s` for the keep-alive check; every one of those
+values is restored.
 
 Requirements
 ------------
@@ -386,6 +392,12 @@ class Controller:
             # Manual relay overrides would keep an LED lit regardless of the
             # simulated HA intent, so clear them for the LED checks.
             http_request(self.base, "/api/sim/overrides/clear", "POST")
+            # The board now owns the pump after-run. Disable it while the
+            # relay/LED checks expect an immediate return to idle; the
+            # dedicated after-run check re-enables it and the final restore
+            # puts the original value back.
+            if int(self.safety.get("pump_stop_after_heating_s", 0) or 0) != 0:
+                self._put_safety({"pump_stop_after_heating_s": 0})
             for role, value in SAFE_TEMPERATURES.items():
                 self._set_temperature(role, value, True, quiet=True)
             self._set_intents({}, quiet=True)
@@ -473,10 +485,9 @@ class Controller:
 
     def _set_intents(self, intents: dict[str, Any], quiet: bool = False) -> dict[str, Any]:
         payload = {
-            "heater": False,
-            "pump_floor": False,
-            "pump_rad1": False,
-            "pump_rad2": False,
+            "heating_loop_1": False,
+            "heating_loop_2": False,
+            "floor_heating": False,
             "dhw_active": False,
         }
         payload.update(intents)
@@ -484,6 +495,20 @@ class Controller:
         if not quiet:
             self.checker.ok("sim intents applied", json.dumps(payload, sort_keys=True))
         return result
+
+    def _set_test_output(self, output: str, on: bool, quiet: bool = False) -> dict[str, Any]:
+        result = http_json(
+            self.base, "/api/test/command", "POST", {"output": output, "on": on}
+        )
+        if not quiet:
+            self.checker.ok(f"test output {output}={'on' if on else 'off'}")
+        return result
+
+    def _live_state(self) -> dict[str, Any]:
+        return http_json(self.base, "/api/state")
+
+    def _circuit(self, state: dict[str, Any], name: str) -> dict[str, Any]:
+        return state.get("circuits", {}).get(name, {})
 
     def _leds(self) -> list[list[int]]:
         snapshot = http_json(self.base, "/api/sim")
@@ -508,11 +533,15 @@ class Controller:
         if self.emulation:
             self.check_error_sensors()
             self.check_leds()
+            self.check_keepalive()
+            self.check_after_run()
             self.check_mixer_cap()
             self.check_sensor_roles()
         else:
             self.checker.skip("error-sensor fault transitions", "requires HPN_IO_EMULATION")
             self.checker.skip("LED mapping", "requires HPN_IO_EMULATION")
+            self.checker.skip("keep-alive timeout", "requires HPN_IO_EMULATION")
+            self.checker.skip("board after-run", "requires HPN_IO_EMULATION")
             self.checker.skip("mixer opening cap enforcement", "requires HPN_IO_EMULATION")
             self.checker.skip("sensor role verification", "requires HPN_IO_EMULATION")
 
@@ -653,33 +682,113 @@ class Controller:
 
     def check_mqtt_discovery(self) -> None:
         assert self.mqtt is not None
-        topics = [
-            "homeassistant/+/+/system_error_code/config",
-            "homeassistant/+/+/system_error_text/config",
-        ]
-        messages = self.mqtt.retained(topics, wait=4.0)
-        found: dict[str, dict[str, Any]] = {}
+        # Discover every entity and filter by our own state-topic prefix. The
+        # broker may also carry retained discovery from other devices.
+        messages = self.mqtt.retained(["homeassistant/+/+/+/config"], wait=5.0)
+        state_prefix = self.base_topic + "/state/"
+        entities: dict[tuple[str, str], dict[str, Any]] = {}
         for topic, payload in messages:
-            if not topic.endswith(("system_error_code/config", "system_error_text/config")):
+            parts = topic.split("/")
+            if len(parts) != 5 or parts[0] != "homeassistant" or parts[4] != "config":
+                continue
+            key = (parts[1], parts[3])
+            if not payload.strip():
+                # Empty retained payload = Home Assistant deletes the entity.
                 continue
             try:
                 entity = json.loads(payload)
             except json.JSONDecodeError:
                 continue
             state_topic = str(entity.get("state_topic", ""))
-            if not state_topic.startswith(self.base_topic + "/state/system_error_"):
-                continue
-            object_id = topic.split("/")[-2]
-            found[object_id] = entity
+            if state_topic.startswith(state_prefix):
+                entities[key] = entity
+
+        switches = {
+            "heating_loop_1": "Heating loop 1",
+            "heating_loop_2": "Heating loop 2",
+            "floor_heating": "Floor heating",
+        }
+        for object_id, name in switches.items():
+            entity = entities.get(("switch", object_id))
+            ok = (
+                bool(entity)
+                and entity.get("name") == name
+                and entity.get("state_topic") == f"{state_prefix}{object_id}"
+                and entity.get("command_topic") == f"{self.base_topic}/cmd/{object_id}"
+            )
+            self.checker.expect(
+                f"HA discovery switch {object_id}",
+                ok,
+                str(entity.get("name", "")) if entity else "retained config not found",
+            )
+
+        binary_sensors = {
+            "pump_1": ("Pump 1", "pump_1_physical"),
+            "pump_2": ("Pump 2", "pump_2_physical"),
+            "floor_pump": ("Floor pump", "floor_pump_physical"),
+            "heater": ("Heater", "heater_physical"),
+        }
+        for object_id, (name, state_key) in binary_sensors.items():
+            entity = entities.get(("binary_sensor", object_id))
+            ok = (
+                bool(entity)
+                and entity.get("name") == name
+                and entity.get("state_topic") == f"{state_prefix}{state_key}"
+            )
+            self.checker.expect(
+                f"HA discovery binary sensor {object_id}",
+                ok,
+                str(entity.get("name", "")) if entity else "retained config not found",
+            )
+
+        switch_ids = {key for key in entities if key[0] == "switch"}
+        binary_ids = {key for key in entities if key[0] == "binary_sensor"}
+        self.checker.expect(
+            "HA exposes exactly three switches (no heater switch)",
+            switch_ids == {("switch", object_id) for object_id in switches},
+            ", ".join(sorted(object_id for _, object_id in switch_ids)),
+        )
+        self.checker.expect(
+            "HA exposes exactly four physical binary sensors",
+            binary_ids == {("binary_sensor", object_id) for object_id in binary_sensors},
+            ", ".join(sorted(object_id for _, object_id in binary_ids)),
+        )
 
         for object_id in ("system_error_code", "system_error_text"):
-            entity = found.get(object_id)
-            ok = bool(entity) and bool(entity.get("name")) and bool(entity.get("state_topic"))
+            entity = entities.get(("sensor", object_id))
+            ok = (
+                bool(entity)
+                and bool(entity.get("name"))
+                and entity.get("state_topic") == f"{state_prefix}{object_id}"
+            )
             self.checker.expect(
                 f"HA discovery {object_id}",
                 ok,
                 str(entity.get("name", "")) if entity else "retained config not found",
             )
+
+        obsolete = [
+            ("switch", "heater"),
+            ("switch", "pump_floor"),
+            ("switch", "pump_rad1"),
+            ("switch", "pump_rad2"),
+            ("binary_sensor", "heater_virtual"),
+            ("binary_sensor", "heater_physical"),
+            ("binary_sensor", "pump_floor_virtual"),
+            ("binary_sensor", "pump_floor_physical"),
+            ("binary_sensor", "pump_rad1_physical"),
+            ("binary_sensor", "pump_rad2_physical"),
+        ]
+        stale = [
+            f"{component}/{object_id}"
+            for component, object_id in obsolete
+            if (component, object_id) in entities
+        ]
+        self.checker.expect(
+            "retired heater/virtual entities removed from discovery",
+            not stale,
+            ", ".join(stale),
+        )
 
     def check_mqtt_error_states(self) -> None:
         assert self.mqtt is not None
@@ -877,7 +986,7 @@ class Controller:
                 str(idle),
             )
 
-            self._set_intents({"pump_rad1": True, "pump_rad2": True}, quiet=True)
+            self._set_intents({"heating_loop_1": True, "heating_loop_2": True}, quiet=True)
             time.sleep(3.5)
             rads = self._leds()
             self.checker.expect(
@@ -906,7 +1015,7 @@ class Controller:
                         "anti-short-cycle window paused for LED test", str(error)
                     )
 
-            self._set_intents({"heater": True, "pump_floor": True}, quiet=True)
+            self._set_intents({"floor_heating": True}, quiet=True)
             deadline = time.monotonic() + 12.0
             heating = self._leds()
             while time.monotonic() < deadline:
@@ -954,6 +1063,171 @@ class Controller:
             len(messages) == 2,
             f"{len(messages)} messages: {[topic for topic, _ in messages]}",
         )
+
+    # -- heating-switch keep-alive ----------------------------------------
+
+    def check_keepalive(self) -> None:
+        """A missed repeat command drops the demand and raises error 301."""
+        original_timeout = int(self.safety.get("demand_timeout_s", 0) or 0)
+        if original_timeout == 0:
+            self.checker.skip("keep-alive timeout", "demand_timeout_s is disabled")
+            return
+
+        test_timeout = 10
+        try:
+            self._put_safety({"demand_timeout_s": test_timeout})
+            self._set_intents({}, quiet=True)
+            time.sleep(1.5)
+            self._set_intents({"heating_loop_1": True}, quiet=True)
+
+            deadline = time.monotonic() + 8.0
+            armed: dict[str, Any] = {}
+            while time.monotonic() < deadline:
+                armed = self._circuit(self._live_state(), "rad1")
+                if int(armed.get("demand", 0)) == 1:
+                    break
+                time.sleep(0.3)
+            self.checker.expect(
+                "keep-alive arms the circuit demand",
+                int(armed.get("demand", 0)) == 1,
+                json.dumps(armed, sort_keys=True),
+            )
+
+            # Stop refreshing the switch. The raw intent must stay set while
+            # the effective demand drops once the timeout expires.
+            deadline = time.monotonic() + test_timeout + 8.0
+            stale: dict[str, Any] = {}
+            state: dict[str, Any] = {}
+            while time.monotonic() < deadline:
+                state = self._live_state()
+                stale = self._circuit(state, "rad1")
+                if int(stale.get("intended", 0)) == 1 and int(stale.get("demand", 1)) == 0:
+                    break
+                time.sleep(0.5)
+            self.checker.expect(
+                "missed keep-alive drops the demand but keeps the intent",
+                int(stale.get("intended", 0)) == 1 and int(stale.get("demand", 1)) == 0,
+                json.dumps(stale, sort_keys=True),
+            )
+            code = int(state.get("safety", {}).get("errorCode", -1))
+            self.checker.expect("stale demand raises error 301", code == 301, str(code))
+
+            # A fresh ON re-arms the same intent and clears the error.
+            self._set_intents({"heating_loop_1": True}, quiet=True)
+            deadline = time.monotonic() + 6.0
+            refreshed: dict[str, Any] = {}
+            state = {}
+            while time.monotonic() < deadline:
+                state = self._live_state()
+                refreshed = self._circuit(state, "rad1")
+                if int(refreshed.get("demand", 0)) == 1:
+                    break
+                time.sleep(0.3)
+            self.checker.expect(
+                "fresh ON re-arms the demand",
+                int(refreshed.get("demand", 0)) == 1,
+                json.dumps(refreshed, sort_keys=True),
+            )
+            self.checker.expect(
+                "keep-alive error clears after a refresh",
+                int(state.get("safety", {}).get("errorCode", -1)) == 0,
+                str(state.get("safety", {}).get("errorCode")),
+            )
+        finally:
+            self._set_intents({}, quiet=True)
+            try:
+                self._put_safety({"demand_timeout_s": original_timeout}, record=False)
+                self.changed_safety.discard("demand_timeout_s")
+            except Exception as error:  # noqa: BLE001
+                print(f"[ WARN ] could not restore demand_timeout_s: {error}")
+
+    # -- board-owned pump after-run ---------------------------------------
+
+    def check_after_run(self) -> None:
+        """The board keeps the pump running briefly after demand ends."""
+        start_run = int(self.safety.get("pump_stop_after_heating_s", 0) or 0)
+        test_run = 5
+        original_window = int(self.safety.get("boiler_min_off_ms", 0) or 0)
+        paused_window = False
+        try:
+            self._put_safety({"pump_stop_after_heating_s": test_run})
+            if original_window > 0:
+                self._put_safety({"boiler_min_off_ms": 0})
+                paused_window = True
+            self._set_intents({}, quiet=True)
+            time.sleep(1.0)
+            self._set_intents({"floor_heating": True}, quiet=True)
+
+            deadline = time.monotonic() + 12.0
+            running: dict[str, Any] = {}
+            heater: dict[str, Any] = {}
+            state: dict[str, Any] = {}
+            while time.monotonic() < deadline:
+                state = self._live_state()
+                running = self._circuit(state, "floor")
+                heater = state.get("heater", {})
+                if (
+                    int(running.get("demand", 0)) == 1
+                    and int(running.get("phys", 0)) == 1
+                    and int(heater.get("phys", 0)) == 1
+                ):
+                    break
+                time.sleep(0.4)
+            self.checker.expect(
+                "floor demand runs the pump and the heater",
+                int(running.get("demand", 0)) == 1
+                and int(running.get("phys", 0)) == 1
+                and int(heater.get("phys", 0)) == 1,
+                f"floor={json.dumps(running, sort_keys=True)} heater={json.dumps(heater, sort_keys=True)}",
+            )
+
+            self._set_intents({}, quiet=True)
+            time.sleep(1.5)
+            state = self._live_state()
+            after: dict[str, Any] = self._circuit(state, "floor")
+            heater = state.get("heater", {})
+            self.checker.expect(
+                "demand ends immediately while the board after-run starts",
+                int(after.get("demand", 1)) == 0
+                and int(after.get("afterRun", 0)) > 0,
+                json.dumps(after, sort_keys=True),
+            )
+            self.checker.expect(
+                "pump keeps running during the board after-run",
+                int(after.get("phys", 0)) == 1,
+                json.dumps(after, sort_keys=True),
+            )
+            self.checker.expect(
+                "heater stops with the demand (after-run is pump-only)",
+                int(heater.get("phys", 1)) == 0,
+                json.dumps(heater, sort_keys=True),
+            )
+
+            deadline = time.monotonic() + test_run + 10.0
+            stopped: dict[str, Any] = after
+            while time.monotonic() < deadline:
+                stopped = self._circuit(self._live_state(), "floor")
+                if int(stopped.get("phys", 1)) == 0:
+                    break
+                time.sleep(0.5)
+            self.checker.expect(
+                "after-run stops the pump when it expires",
+                int(stopped.get("phys", 1)) == 0
+                and int(stopped.get("afterRun", 0)) == 0,
+                json.dumps(stopped, sort_keys=True),
+            )
+        finally:
+            self._set_intents({}, quiet=True)
+            try:
+                self._put_safety({"pump_stop_after_heating_s": start_run}, record=False)
+            except Exception as error:  # noqa: BLE001
+                print(f"[ WARN ] could not restore pump_stop_after_heating_s: {error}")
+            if paused_window:
+                try:
+                    self._put_safety({"boiler_min_off_ms": original_window}, record=False)
+                    self.changed_safety.discard("boiler_min_off_ms")
+                except Exception as error:  # noqa: BLE001
+                    print(f"[ WARN ] could not restore boiler_min_off_ms: {error}")
 
     # -- mixer opening ceiling --------------------------------------------
 
@@ -1120,7 +1394,11 @@ class Controller:
 
             for role, value in SAFE_TEMPERATURES.items():
                 self._set_temperature(role, value, True, quiet=True)
-            self._set_intents({"heater": True, "pump_floor": True}, quiet=True)
+            # Test Mode drives the heater manually; the HA contract has no
+            # heater switch any more. The heater command requires an active
+            # pump, so start the floor pump first.
+            self._set_test_output("pump_floor", True, quiet=True)
+            self._set_test_output("heater", True, quiet=True)
 
             deadline = time.monotonic() + 15.0
             roles = http_json(self.base, "/api/sensors/roles")
@@ -1156,6 +1434,8 @@ class Controller:
             )
         finally:
             try:
+                self._set_test_output("heater", False, quiet=True)
+                self._set_test_output("pump_floor", False, quiet=True)
                 self._set_intents({}, quiet=True)
                 for role, value in SAFE_TEMPERATURES.items():
                     self._set_temperature(role, value, True, quiet=True)

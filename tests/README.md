@@ -3,8 +3,8 @@
 End-to-end checks against a **running** controller. They complement the native
 unit tests in `firmware/test/`: these exercise the real HTTP API, the versioned
 config contract, the RAM log rings, MQTT discovery/state publishing, the
-emulation build's LED mapping, the mixer opening window and sensor-role
-verification.
+emulation build's LED mapping, the per-circuit keep-alive, the board-owned
+pump after-run, the mixer opening window and sensor-role verification.
 
 `runtime_check.py` prints one line per check and finishes with either
 `PASSED: ...` (exit code 0) or `FAILED: ...` (exit code 1).
@@ -19,11 +19,11 @@ python3 tests/runtime_check.py --base-url http://192.168.2.14
 tests/flash_and_check.sh --serial
 ```
 
-A successful run ends with:
+A successful run ends with a summary line, for example:
 
 ```
-PASSED: 65 passed, 0 failed, 0 skipped   # with --serial
-PASSED: 58 passed, 0 failed, 0 skipped   # without --serial
+PASSED: 71 passed, 0 failed, 0 skipped   # with --serial
+PASSED: 64 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.
@@ -85,9 +85,13 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
 4. **RAM logs** — `/api/log/events` and `/api/log/slow` are populated, stay
    within capacity, have the documented record shape, and no NVS-corruption
    event (501) was latched.
-5. **HA discovery** — retained `system_error_code` and `system_error_text`
-   discovery payloads exist and the state topics match the configured base
-   topic.
+5. **HA discovery** — exactly three switch entities (`Heating loop 1`,
+   `Heating loop 2`, `Floor heating`, with matching `cmd/...` command topics)
+   and exactly four physical binary sensors (`Pump 1`, `Pump 2`, `Floor pump`,
+   `Heater`). The retired heater/pump switches and the virtual/physical
+   duplicates must not still be present as non-empty discovery payloads.
+   Retained `system_error_code` and `system_error_text` discovery payloads and
+   state topics must also match the configured base topic.
 6. **MQTT log streaming** — enables streaming with the two full-topic
    overrides, receives a JSON event line and a JSON slow-sample line, then
    restores the original settings.
@@ -99,24 +103,34 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    for 2.5 s so the 1 s RAM-logger tick records the `201` transition, which is
    then asserted through `/api/log/events`.
 8. **LED mapping** — idle, radiator pumps (LED 3/4 orange), DHW (LED 1 cyan),
-   heater (LED 1 orange) and floor flush (LED 2 cyan) states. A critical
-   alarm must make LED 0 blink red.
+   automatic heater from floor demand (LED 1 orange) and floor flush (LED 2
+   cyan) states. A critical alarm must make LED 0 blink red.
 9. **No false diagnostics** — relay/pump transitions must not republish the
    error state topics.
-10. **Mixer opening ceiling** (emulation build) — `/api/config/safety` carries
+10. **Keep-alive** (emulation build) — with `demand_timeout_s` briefly set to
+    10 s, turning on `Heating loop 1` arms the demand. Without a repeat
+    command the effective demand drops while the raw intent stays set, error
+    `301` is reported, and a fresh ON re-arms the demand and clears the error.
+11. **Board after-run** (emulation build) — with a short
+    `pump_stop_after_heating_s`, a floor demand runs the pump and automatic
+    heater. When the demand ends the heater stops immediately, but the pump
+    stays physically on with a decreasing `afterRun` value until the board's
+    after-run expires.
+12. **Mixer opening ceiling** (emulation build) — `/api/config/safety` carries
     a valid `mix_max_open_pct` and `/api/state` reports the same value as
     `circuits.floor.mixerMaxPct`. In Test Mode with a short travel time, the
     script parks the valve at 0 %, starts a 100 % move and lowers the ceiling
     to 40 % mid-move; L1 must stop at 40 % with the motor off, the live value
     must follow, and the portal must reject a target above the ceiling with
     HTTP 400.
-11. **Sensor role verification** (emulation build) — with Test Mode heating
+13. **Sensor role verification** (emulation build) — with Test Mode heating
     active and valid safe temperatures, `/api/sensors/roles` must report
     `measurable` and `plausible`. Inverting boiler and return temperatures must
     keep the check measurable but report `plausible=false` with the
-    boiler ≥ forward comparison false. The check is only possible while the
-    heater and floor pump are physically running.
-12. **Serial boot (optional)** — the board boots with the saved config, logs
+    boiler ≥ forward comparison false. Test Mode drives the heater manually
+    through `/api/test/command`; the check is only possible while the heater
+    and floor pump are physically running.
+14. **Serial boot (optional)** — the board boots with the saved config, logs
     no Preferences errors, no NVS corruption and no crash markers, then
     reconnects Wi-Fi and MQTT.
 
@@ -125,24 +139,30 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
 The script is written to be re-runnable on a shared bench:
 
 - It sets safe emulation temperatures (`boiler 45`, `return 30`, `mix 35` °C)
-  and all HA intents off, then restores the previous temperatures.
+  and all heating-switch demands off, then restores the previous temperatures.
 - It clears manual relay overrides for the LED checks and re-applies the ones
   that were manually on.
 - It toggles `mqtt_log_enabled` and the two log-topic overrides, then writes
   the original values back (the controller's live setting is what it was
   before the run).
+- In the emulation build it sets `pump_stop_after_heating_s=0` for the
+  relay/LED checks so a stopped demand returns to idle immediately. The
+  after-run check temporarily sets a short run-on, then restores the prepared
+  value; the final cleanup restores the original configuration.
 - In the emulation build it briefly sets `boiler_min_off_ms` to `0` so the
   heater can energise immediately, then restores the original value. This is
   the anti-short-cycle protection and is safe to pause on the bench because no
   real heater is attached.
+- The keep-alive check briefly sets `demand_timeout_s=10` and restores it in a
+  `finally` block, so later checks still use the configured timeout.
 - The mixer-ceiling check temporarily sets `mix_max_open_pct=100` and
   `travel_time_ms=4000`, activates Test Mode, moves the valve, then restores
   both values and the previous Test Mode state.
 - The sensor-role check temporarily enables `sensor_role_check_enabled`, pauses
   `boiler_min_off_ms`, activates Test Mode, drives the heater + floor pump with
-  safe temperatures, inverts the boiler/return simulator answers, then restores
-  the flag, the window, the temperatures, the intents and the previous Test
-  Mode state.
+  `/api/test/command` and safe temperatures, inverts the boiler/return
+  simulator answers, then restores the flag, the window, the temperatures, the
+  outputs and the previous Test Mode state.
 - `--broker` changes `mqtt_host`/`mqtt_port` only for the duration of the run.
 - `--serial` **reboots the controller**; run it last.
 
@@ -151,9 +171,9 @@ save performed by the normal config PUT endpoint.
 
 ## Notes and limitations
 
-- Error-sensor, LED, mixer-ceiling and sensor-role checks require
-  `HPN_IO_EMULATION` (the `esp32dev_sim` environment); they are reported as
-  skipped otherwise.
+- Error-sensor, LED, keep-alive, after-run, mixer-ceiling and sensor-role
+  checks require `HPN_IO_EMULATION` (the `esp32dev_sim` environment); they are
+  reported as skipped otherwise.
 - Counter persistence and anti-seize CRC writes are not exercised on the
   bench board; those are covered by code review and the NVS integrity checks
   in the boot log.
