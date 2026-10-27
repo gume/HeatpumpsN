@@ -397,8 +397,8 @@ configuration instead of naming assumptions:
   `[l0] board HomeNet Heating control v0.1 (74HC595 output driver)`,
   `[l0] backend emulation`.
 * The v1.x P7 fault path was verified by hand on the same emulated build: with
-  the PCF8574 driver, fault bit P7, active-low fault input and the v1.x bit map
-  stored and rebooted, the port byte at boot is `0xFF` (P7 released).
+  the PCF8574 driver, fault bit P7, the v1.x bit map and the active-high fault
+  polarity stored and rebooted, the port byte at boot is `0xFF` (P7 released).
   `POST /api/sim/interlock {"fault":true}` makes `/api/sim` report
   `interlockFault=true` and `/api/state` report
   `safety.errorCode=402` / *"mixer interlock fault (board reports open and close
@@ -408,8 +408,12 @@ configuration instead of naming assumptions:
   drives the simulated P7 input; the Emulation page has a matching
   *Board interlock fault* checkbox and an *Interlock fault* readout.
 
-**Still open:** the schematic PDFs referenced for v1.x were not present in this
-checkout. The I²C pins (SDA 8 / SCL 9), PCF8574 address (`0x20`), ADS1115
-address (`0x48`), active-low relay polarity and the ADS1115 channel map must be
-confirmed before a physical v1.x board is energised. No v1.x hardware or
-ADS1115/TLV9064 assembly has been available for validation.
+**Still open:** the schematic PDFs were added later (see `plans/schematics/`).
+The v1.1 drawing confirms the PCF8574 address (`0x20` with A0–A2 to GND), the
+ADS1115 address (`0x48`), the active-low relay inputs, P7 as the **active-high**
+fault input, the bit map and the ADS1115 channel map. The v1.1 board is still
+under construction: it has no mains protection, the TLV9064 front end has no
+bias reference, three pump-SSR control nets are mislabelled, and the MCU will be
+an ESP32-S3 with a pin map that does not exist yet. `firmware/docs/boards.md`
+§3.6 keeps the full list. No v1.x hardware, ADS1115 or TLV9064 assembly has been
+available for validation.

@@ -7,8 +7,8 @@ build time; the output driver and current front end are runtime configuration.
 
 | Board | Output driver | Current sensing | MCU (current build) | PlatformIO env | Profile macro |
 | --- | --- | --- | --- | --- | --- |
-| HomeNet Heating control v0.1 | 74HC595 serial extender | 74HC4051 MUX + ACS712, one ADC pin | ESP32-S2 (LOLIN S2 Mini) | `esp32s2` | `HPN_CARRIER_HHN1` |
-| HomeNet Heating control v1.x | PCF8574 I²C expander | ADS1115, optional TLV9064 sensor assembly | ESP32-C3 | `esp32c3_hhn1x` | `HPN_CARRIER_HHN1X` |
+| HomeNet Heating control v0.1 | 74HC595 serial extender | 74HC4051 MUX + 4 × MT9221CT-06BR5 Hall sensors, one ADC pin | ESP32-S2 (LOLIN S2 Mini) | `esp32s2` | `HPN_CARRIER_HHN1` |
+| HomeNet Heating control v1.x | PCF8574 I²C expander | ADS1115, optional TLV9064 sensor assembly | ESP32-C3 (build), ESP32-S3 planned for v1.1 | `esp32c3_hhn1x` | `HPN_CARRIER_HHN1X` |
 | boardless devkit | direct GPIO | none | any devkit | `esp32dev`, `esp32s3`, `esp32c3` | `HPN_CARRIER_BOARDLESS` |
 
 The boardless profile is not a board: it is a bare devkit with every pin
@@ -23,12 +23,20 @@ The emulated bench builds use the same board profiles and the same L0 code:
 
 See [`io-emulation.md`](io-emulation.md) for the emulation model.
 
-> **Schematic note.** The schematic PDFs are expected in `plans/` but were not
-> present in this checkout. The v0.1 electrical details come from the legacy
-> ESPHome configuration in [`../../analysis/OLD-CODE/`](../../analysis/OLD-CODE/).
-> The v1.x I²C pin choice (SDA GPIO8, SCL GPIO9), the PCF8574 address (`0x20`)
-> and the active-low relay polarity are firmware defaults and **must be
-> confirmed against the schematic before a physical v1.x board is energised**.
+> **Schematic references.** The drawings are in `plans/schematics/`:
+>
+> - `SCH_HomeNet Pumper Schematic v0.1.pdf` — the board that runs the plant. It
+>   has been in continuous service for over a year, so the pin map, 74HC595 bit
+>   map and MUX channel map below are **confirmed by operation**.
+> - `SCH_HomeNet Pumper Schematic v1.1.pdf` — the v1.x board. It is **still under
+>   construction and not finalised**: protection and several pins are missing,
+>   and the drawing may still change. The PCF8574/ADS1115 addresses and the
+>   output bit map are confirmed by the drawn straps; the MCU pin map is not.
+>
+> The v1.1 drawing shows a **Wemos D1 mini footprint for mechanical
+> compatibility only**. No ESP8266 build exists or is planned. The v1.1 MCU is
+> intended to be an ESP32-S3 module (more pins, larger footprint), so the v1.x
+> GPIO assignments in this file stay provisional until that board is finalised.
 
 ## 1. Runtime configuration model
 
@@ -61,9 +69,11 @@ two expander variants do **not** share a fixed map.
 
 ## 2. HomeNet Heating control v0.1
 
-**Status:** legacy board, still the one the plant runs on. It accepts several
-MCUs in the LOLIN S2 Mini footprint; the unit in the field has an ESP32-S2
-(LOLIN S2 Mini).
+**Status:** the board the plant runs on, in continuous service for over a year.
+It accepts several MCUs in the LOLIN S2 Mini / D1-mini footprint; the unit in the
+field has an ESP32-S2 (LOLIN S2 Mini). The schematic is
+`plans/schematics/SCH_HomeNet Pumper Schematic v0.1.pdf` and the firmware
+defaults match it.
 
 ### 2.1 MCU
 
@@ -107,16 +117,17 @@ The board has no direct relay GPIOs. One serial output extender drives the
 relay board and the analogue-MUX select lines. All logical outputs therefore
 share one 8-bit shift register and one latch.
 
-The part is **not a bare 74HC595**. It is a 74HC595-compatible serial output
-extender whose selected outputs pull to **GND** at power-on/reset. The relay
-board inputs are active-high, so a pulled-down (GND) output means the relay is
+The chain is `74HC595D` (U18) → `ULN2003ADR` (U7) → five `SRD-05VDC-SL-C`
+relays. The 595 outputs are low after reset, the ULN2003 inverts them, and the
+relay drivers are active-high, so a pulled-down (GND) output means the relay is
 **off**. That is why the `0x00` safe byte is correct for this board with every
 `output_active_low_*` flag false. Do not change the on/off levels based on a 595
-datasheet alone; the polarity depends on the extender and the relay board
-together.
+datasheet alone; the polarity depends on the 595, the ULN2003 and the relay
+coil driver together.
 
 Shift order is `MSBFIRST` with **bit 0 on Q0 (QA)**, matching the legacy
-ESPHome `sn74hc595` component. These are the v0.1 defaults:
+ESPHome `sn74hc595` component. These are the v0.1 defaults, confirmed against
+U18 in the v0.1 drawing:
 
 | Bit | Q pin | Signal | Meaning | Active low by default |
 | --- | --- | --- | --- | --- |
@@ -175,23 +186,26 @@ write the output driver from any other task.
 
 ### 2.5 Current measurement (74HC4051 + ADC)
 
-Four ACS712-style current sensors are multiplexed onto one ADC pin by a
-74HC4051 (the legacy YAML uses the `cd74hc4067` component, but the comment and
-wiring are for a 4051). `S2` and `S3` are tied to the dummy pin GPIO5, which the
-firmware holds low, so only channels 0–3 are reachable.
+Four **MT9221CT-06BR5** Hall-effect sensors (NOVOSENSE, ±6 A, 333 mV/A, 5 V
+supply, 2.5 V at zero current) are multiplexed onto one ADC pin by a
+`74HC4051D` (U14). The MUX runs from 5 V, so its output is divided by R8/R9
+(1 k series, 2 k to GND, ×0.667) before it reaches the ESP32 ADC. That gives
+about **222 mV/A** at the ADC pin. `S2` is tied low; the firmware drives `S1`/`S0`
+from Q1/Q2 of the shift register, so only channels 0–3 are used.
 
-| MUX channel (S1 S0) | Legacy signal | Firmware channel (`CurrentChannel`) |
+| MUX channel (S1 S0) | Sensor | Firmware channel (`CurrentChannel`) |
 | --- | --- | --- |
-| 0 (`00`) | `acs712_2_raw` — Pump 2 | `PumpRad2` |
-| 1 (`01`) | `acs712_3_raw` — Pump 3 | `PumpFloor` |
-| 2 (`10`) | `acs712_m_raw` — Mixer | `Mixer` |
-| 3 (`11`) | `acs712_1_raw` — Pump 1 | `PumpRad1` |
+| 0 (`00`) | `VP2` — Pump 2 | `PumpRad2` |
+| 1 (`01`) | `VP3` — Pump 3 | `PumpFloor` |
+| 2 (`10`) | `VM1` — Mixer motor | `Mixer` |
+| 3 (`11`) | `VP1` — Pump 1 | `PumpRad1` |
 
+This map is confirmed against the v0.1 drawing and matches the firmware.
 The channel numbers are stored in `BoardConfig::current_mux_channel[]`, indexed
 by `CurrentChannel`. This map is fixed by the board; the select bits are runtime
 configuration (`expander_bit_mux_s0`, `expander_bit_mux_s1`).
 
-#### Legacy sampling and scaling
+#### Sampling and scaling
 
 Legacy ESPHome behaviour, for reference:
 
@@ -202,28 +216,41 @@ Legacy ESPHome behaviour, for reference:
 - Calibration: `calibrate_linear` with `0.004 -> 0 W` and `0.072 -> 40 W`,
   i.e. roughly `588 W/V` above the zero point, plus a dead zone that reports
   `0 W` below `5 W`.
-- The old comment notes the ACS712 is a 333 mV/A variant, and that the "real
-  ADC value is multiplied by 0.19".
+- The old comment describes the sensor as a 333 mV/A variant and notes that the
+  "real ADC value is multiplied by 0.19".
 
-That calibration is empirical and tied to the v0.1 divider and burden resistor.
-The firmware now samples current and computes power in
+That `588 W/V` is an empirical ESPHome fit from the previous CT-clamp wiring.
+For the four MT9221 sensors on the drawing it is not the right slope: 333 mV/A
+through the 1 k/2 k divider is ~222 mV/A, and a resistive 230 V load of 1 A is
+roughly 230 W, i.e. about **1.0 kW/V**. Treat the default as a placeholder.
+
+The firmware samples current and computes power in
 `l0::read_power_w(const Config&, CurrentChannel)`:
 
 ```
 watts = (rms_volts - pump_current_offset_v) * pump_current_w_per_v
 ```
 
-Both parameters are editable under **Settings → Hardware → Pump current
-calibration** and are shared by every channel. The defaults reproduce the
-legacy fit (offset `0.004 V`, slope `588.2 W/V`), so **re-derive them with a
-clamp meter before trusting the values**, and re-derive again for v1.x. The
-firmware keeps `has_pump_power[i]` flags so a channel that is not populated can
-be disabled.
+Both parameters are editable under **Settings → Hardware → Current measurement**
+and are shared by every channel. The defaults reproduce the legacy fit (offset
+`0.004 V`, slope `588.2 W/V`), so **re-derive them with a clamp meter before
+trusting the values**, and re-derive again for v1.x. The firmware keeps
+`has_pump_power[i]` flags so a channel that is not populated can be disabled.
 
 Current-based dry-run and welded-relay protection can be switched off with
-`pump_power_check_enabled` while the shunt is uncalibrated. Measurements remain
+`pump_power_check_enabled` while the sensor is uncalibrated. Measurements remain
 visible in the UI and MQTT; only the protection logic is skipped. Turn it back
 on once the calibration is verified.
+
+#### Known v0.1 limitations
+
+- The 74HC4051 runs at 5 V while the shift register drives its select inputs at
+  3.3 V. That is below the 4051's specified `VIH` (≈3.5 V at 5 V supply) and
+  works only because the actual threshold is lower. Any respin should power the
+  MUX from 3.3 V or level-shift the two select lines.
+- There is **no mains protection** on the board: no fuse, no varistor/MOV, no
+  X2 capacitor, no PE terminal. This is accepted for the installed unit but must
+  not be repeated on v1.1.
 
 ### 2.6 1-Wire temperature sensors
 
@@ -285,29 +312,47 @@ verify it on the strip before relying on the mapping.
 
 ## 3. HomeNet Heating control v1.x
 
-**Status:** current board design. The firmware profile is complete and builds
-for an ESP32-C3, but no physical v1.x unit is available for validation.
+**Status:** the next board, currently **under construction and not finalised**
+(`plans/schematics/SCH_HomeNet Pumper Schematic v1.1.pdf`). The firmware profile
+builds and is fully emulated, but no physical v1.1 board exists yet. The drawing
+still misses mains protection and several pin assignments, and it may change
+before fabrication. Do not flash a real v1.1 board without working through the
+open items in §3.6.
 
 ### 3.1 MCU and assumptions
 
 | Item | Value |
 | --- | --- |
 | Board | HomeNet Heating control v1.x |
-| MCU | ESP32-C3 (default build target) |
-| PlatformIO env | `esp32c3_hhn1x` (`-DHPN_CARRIER_HHN1X`) |
+| MCU | ESP32-S3 planned for v1.1; the current build target is an ESP32-C3 |
+| PlatformIO env | `esp32c3_hhn1x` (`-DHPN_CARRIER_HHN1X`), `esp32s3` for the future board |
 | Board profile | `hpn::board_config()` → `HomeNet Heating control v1.x` |
 | Output driver default | PCF8574, address `0x20` |
 | Relay polarity default | every output active low |
 | Current sensing default | ADS1115 at `0x48`, TLV9064 assembly declared absent |
+| Fault input default | P7, active high (`FAULT` low = healthy) |
 
-Assumptions that need schematic confirmation:
+The v1.1 drawing shows a **Wemos D1 mini footprint** so the board can reuse the
+mechanical outline. That is compatibility only: there is no ESP8266 build, and
+none is planned. The firmware pin map is the ESP32-C3 map for now; the ESP32-S3
+module has a different pinout, so treat every GPIO below as provisional.
 
-- I²C SDA on GPIO8 and SCL on GPIO9.
-- PCF8574 base address `0x20` (no strap fitted).
-- ADS1115 address `0x48` (ADDR tied to GND).
-- All relay-driver inputs are active low.
-- The interlock fault input is active high: `FAULT` is low while the mixer
-  interlock is healthy.
+Confirmed against the drawing:
+
+- PCF8574 base address `0x20` (A0–A2 strapped to GND, `#INT` and P6 open).
+- ADS1115 address `0x48` (ADDR strapped to GND).
+- All six relay-driver inputs are active low (P0–P5 through series resistors
+  to the SSR/relay LED cathodes).
+- P7 is the fault output of the U13 NOR network, active high.
+- ADS1115 inputs `AIN0=VP1, AIN1=VP2, AIN2=VM, AIN3=VP3`.
+
+Provisional or unconfirmed:
+
+- I²C SDA/SCL on GPIO8/GPIO9 (an ESP32-C3 default; the drawing names the
+  D1-mini pins `D2`/`D1` instead).
+- 1-Wire temperature input: the drawing has a DS18B20 jack (U6) with a 4k7
+  pull-up, but no MCU pin is assigned in the firmware profile yet.
+- LED data: five TX1812 LEDs are drawn, but `num_leds` is 0 on this profile.
 
 ### 3.2 PCF8574 output bit map
 
@@ -396,6 +441,41 @@ If the PCF8574 does not acknowledge, the write error is logged once and the
 outputs stay in the last known safe state. If the ADS1115 does not
 acknowledge, current readings stay 0 W.
 
+### 3.6 Open items on the v1.1 drawing
+
+These are hardware/drawing issues found while auditing the v1.1 PDF against the
+firmware. None of them can be fixed in software, so they are recorded here for
+the next revision.
+
+1. **Pump SSR control nets do not connect.** The PCF8574 outputs are labelled
+   `#PD1`, `#PD2`, `#PD3`; the pump SSR inputs are labelled `PD1`, `PD2`, `PD3`.
+   There is no gate between them, so in the netlist the three pump SSRs have a
+   floating control input. Either rename one side or draw the intended buffer.
+2. **The TLV9064 front end has no bias reference.** `Vref` appears exactly once
+   on the sheet (U8.1 pin 3) and nothing generates it; U8.2–U8.4 `+` inputs
+   float. A single-supply transimpedance stage needs a mid-rail reference
+   (≈1.65 V) on every channel before the ADS1115 readings mean anything.
+   Enable `tlv9064_present` only after this is fixed.
+3. **Per-channel current gain is not uniform.** U8.1–U8.3 use 15 k feedback
+   (R14, R3, R9), U8.4 uses 47 k (R6), i.e. ≈3.1× more gain on `VP3`
+   (pump 3 / floor). The firmware currently has one shared
+   `pump_current_w_per_v`; either make the resistors equal or add a per-channel
+   factor.
+4. **No mains protection.** No fuse, varistor/MOV, X2 capacitor or PE terminal is
+   drawn. Add them before fabrication.
+5. **`APY274AEH` could not be matched to a datasheet.** Confirm that it is a
+   mains-rated SSR/opto-triac suitable for inductive pump and motor loads, and
+   that the 300 Ω LED resistor gives enough drive at 3.3 V.
+6. **Stale sheet note.** The header note ("8574 sets output high initially,
+   which switches on the relay") contradicts the drawn active-low drivers: with
+   active-low inputs a high level is OFF, so the `0xFF` boot byte is the safe
+   state. Delete the note so nobody "fixes" the polarity later.
+7. **Pump-power supervision is armed without a sensor.** The profile sets
+   `has_pump_power[] = true` and `pump_power_check_enabled` defaults to true
+   while `tlv9064_present` is false. On real hardware every running pump would
+   be reported as dry after 20 ticks. Either tie `has_pump_power[]` to
+   `current_sense_available()` or disable the check until the front end works.
+
 ## 4. Driver selection and reboot rules
 
 The output driver, the expander wiring and bit map, the per-output polarity,
@@ -424,19 +504,20 @@ other driver. The Hardware page hides the unrelated settings but keeps them in
 
 ### HomeNet Heating control v1.x
 
-1. Confirm SDA/SCL, the PCF8574 address and the ADS1115 address against the
-   schematic.
-2. Confirm the relay inputs are active low, then verify one output at a time
+1. Close the open items in §3.6 first; the drawing is not final.
+2. Confirm SDA/SCL against the final ESP32-S3 pin map, then the PCF8574 address.
+3. Confirm the relay inputs are active low, then verify one output at a time
    with the PCF8574 (start with pumps, end with the mixer).
-3. Verify P6 stays high and P7 reads low (not asserted) with the interlock
+4. Verify P6 stays high and P7 reads low (not asserted) with the interlock
    healthy.
-4. Force an interlock fault on the relay board and confirm P7 goes high, the
+5. Force an interlock fault on the relay board and confirm P7 goes high, the
    mixer stops and the portal shows error 402.
-5. Declare `tlv9064_present` only after the assembly is fitted; verify the
-   A0/A1/A2/A3 mapping against a known load before enabling current protection.
-   Run the mixer in both directions and confirm A2 reads the moving motor.
-6. Calibrate the current channels with a clamp meter.
-7. Repeat the v0.1 steps 7–8.
+6. Declare `tlv9064_present` only after the assembly is fitted and the bias
+   reference exists; verify the A0/A1/A2/A3 mapping against a known load before
+   enabling current protection. Run the mixer in both directions and confirm A2
+   reads the moving motor.
+7. Calibrate the current channels with a clamp meter.
+8. Repeat the v0.1 steps 7–8.
 
 ## 6. Firmware map
 
