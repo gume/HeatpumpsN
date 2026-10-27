@@ -271,6 +271,9 @@ void begin(const Config& config, SystemState& state) {
   }
   Serial.printf("[l1] normal floor opening minimum %u%%\n",
                 static_cast<unsigned>(config.mix_min_open_pct));
+  if (config.pump_power_check_enabled && !l0::power_measurement_available(config)) {
+    Serial.println("[l1] pump power supervision skipped: current front end not available");
+  }
   g_mix_last_dir = 0;
   g_mixer_last_ms = 0;
   g_heater_off_ms = millis();  // hold anti-short-cycle at cold boot
@@ -447,7 +450,10 @@ void tick(const Config& config, SystemState& state) {
   const bool pump_on[3] = {state.pump_floor_phys, state.pump_rad1_phys, state.pump_rad2_phys};
   bool dry_run = false;
   bool welded = false;
-  if (config.pump_power_check_enabled) {
+  // A front end that cannot measure current reads 0 W on every channel. Acting
+  // on that would report every running pump as dry, so supervision is skipped
+  // until a usable measurement exists (v1.x: TLV9064 assembly declared fitted).
+  if (config.pump_power_check_enabled && l0::power_measurement_available(config)) {
     for (uint8_t i = 0; i < 3; ++i) {
       if (!config.has_pump_power[i]) {
         g_dry_run_count[i] = 0;
@@ -469,9 +475,9 @@ void tick(const Config& config, SystemState& state) {
       welded = welded || g_welded_count[i] >= 20;
     }
   } else {
-    // The owner explicitly disabled current-based protection, usually because
-    // the shunt is not calibrated yet. Keep the measurements for display, but
-    // never act on them.
+    // Protection is off: either the owner disabled it (shunt not calibrated
+    // yet) or no usable measurement exists. Keep the measurements for display,
+    // but never act on them.
     for (uint8_t i = 0; i < 3; ++i) {
       g_dry_run_count[i] = 0;
       g_welded_count[i] = 0;

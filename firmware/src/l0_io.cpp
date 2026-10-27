@@ -565,6 +565,18 @@ float read_ads_power_w(const Config& config, CurrentChannel channel) {
   return calibrated_power_w(config, sqrtf(m2 / static_cast<float>(count)));
 }
 
+bool power_measurement_available(const Config& config) {
+  if (config.current_sense == CURRENT_SENSE_NONE) {
+    return false;  // no channel is wired at all
+  }
+  if (io::kEmulated) {
+    // The model in hpn::sim produces pump watts directly, independent of the
+    // carrier front end.
+    return true;
+  }
+  return current_sense_available(config);
+}
+
 float read_power_w(const Config& config, CurrentChannel channel) {
   if (io::kEmulated) {
     return io::read_power_w(channel);

@@ -444,7 +444,9 @@ above `3` is not a valid ADS1115 input and reads 0 W.
 The TLV9064 current-sensor assembly is an **optional external component**. Its
 presence is declared with `tlv9064_present`; when it is false the firmware keeps
 the ADS1115 settings but returns 0 W for every channel and current-based
-protection stays off. `current_sense_available()` encodes this rule.
+protection stays off. `current_sense_available()` encodes this rule, and
+`l0::power_measurement_available()` is what L1 consults before acting on a
+reading.
 
 The ADS1115 is driven directly over `Wire` (no extra library): single-shot
 conversions, single-ended inputs against GND, ±4.096 V range, 860 SPS. The

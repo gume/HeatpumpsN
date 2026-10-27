@@ -479,7 +479,9 @@ is a Python SConscript despite its extension; see the remote upload section.
 - `pump_power_check_enabled` gates dry-run and welded-relay detection. Leave it
   off until the shared current calibration (`pump_current_w_per_v`,
   `pump_current_offset_v`) has been checked with a clamp meter; measurements
-  stay visible either way.
+  stay visible either way. It is also inert when the configured front end cannot
+  measure at all (no current sensing selected, or a v1.x ADS1115 build with
+  `tlv9064_present` false), so a missing sensor is never read as dry pumps.
 - Mixer anomalies (motion longer than a full stroke, or no encoder response
   during a commanded move) and sensor-role/DHW inference problems are
   **warning-only**. They do not stop the plant; L1's hard over-temperature rule

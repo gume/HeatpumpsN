@@ -37,6 +37,12 @@ bool read_temperature(TempRole role, float& celsius);
 // `config` (pump_current_w_per_v, pump_current_offset_v).
 float read_power_w(const Config& config, CurrentChannel channel);
 
+// True when read_power_w() returns a signal the controller can trust: the
+// configured front end is populated and enabled, or the emulation backend
+// models pump power directly. L1 uses this to keep current-based protection
+// inert instead of acting on a front end that reads 0 W by construction.
+bool power_measurement_available(const Config& config);
+
 // Discover the sensors physically present on the temperature bus. The hardware
 // backend blocks for one conversion cycle; use it only for explicit discovery.
 uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count);

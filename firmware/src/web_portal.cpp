@@ -518,6 +518,7 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   system["dhwInferred"] = st.dhw_inferred;
   system["dhwMeterActive"] = st.dhw_meter_active;
   system["pumpPowerCheck"] = cfg.pump_power_check_enabled;
+  system["pumpPowerSenseAvailable"] = l0::power_measurement_available(cfg);
   system["mixerIntegrator"] = st.integrator_val;
 
   JsonObject wifi_obj = doc["wifi"].to<JsonObject>();

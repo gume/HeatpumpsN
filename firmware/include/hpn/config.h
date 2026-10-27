@@ -163,7 +163,9 @@ struct Config {
   // All current channels use the same ACS712/CT front end and are therefore
   // calibrated together. watts = (rms_volts - offset_v) * w_per_v. Set
   // pump_power_check_enabled=false to run without dry-run/welded protection
-  // (for example before the shunt has been calibrated on the plant).
+  // (for example before the shunt has been calibrated on the plant). The
+  // protection is also skipped automatically when no front end can produce a
+  // measurement; see l0::power_measurement_available().
   float pump_current_w_per_v;
   float pump_current_offset_v;
   bool pump_power_check_enabled;
