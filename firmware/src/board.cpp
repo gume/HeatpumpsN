@@ -156,12 +156,27 @@ void board_apply_defaults(Config& config) {
   config.current_sense = CURRENT_SENSE_ADS1115;
   config.ads1115_address = 0x48;
   config.tlv9064_present = false;
-  config.i2c_sda = 8;
-  config.i2c_scl = 9;
 
+  // Carrier nets are named after the D1-mini footprint on the v1.1 drawing:
+  // D1 = SCL, D2 = SDA, D3 = TEMP (DS18B20), D4 = LED (TX1812 chain), TX/RX
+  // = J1 programming header. The GPIO numbers below are the pins those nets
+  // are expected to reach on the ESP32-S3 module; confirm them on the final
+  // module before flashing a real v1.x board.
+  config.i2c_sda = 8;  // D2
+  config.i2c_scl = 9;  // D1
+#if defined(HPN_TARGET_ESP32S3)
+  // Planned ESP32-S3 v1.1 target: the full carrier is fitted, so the
+  // temperature jack and the five status LEDs are wired.
+  config.gpio_onewire = 4;   // D3 -> DS18B20
+  config.gpio_led_data = 5;  // D4 -> five TX1812 LEDs, GRB
+  config.num_leds = 5;
+#else
+  // ESP32-C3 bring-up build on a bare devkit: the temperature jack and the LED
+  // chain are not wired to the devkit, so both stay unassigned.
   config.gpio_onewire = HPN_GPIO_UNASSIGNED;
   config.gpio_led_data = HPN_GPIO_UNASSIGNED;
   config.num_leds = 0;
+#endif
   config.has_pump_power[0] = true;  // floor
   config.has_pump_power[1] = true;  // radiator 1
   config.has_pump_power[2] = true;  // radiator 2

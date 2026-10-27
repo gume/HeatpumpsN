@@ -35,7 +35,8 @@ fault input.
 | `esp32dev` | boardless | hardware, no pins assigned |
 | `esp32s2` | HomeNet Heating control v0.1 | hardware |
 | `esp32c3_hhn1x` | HomeNet Heating control v1.x | hardware |
-| `esp32s3` / `esp32c3` | boardless | hardware, future board |
+| `esp32s3_hhn1x` | HomeNet Heating control v1.x | hardware |
+| `esp32s3` / `esp32c3` | boardless | hardware, no pins assigned |
 
 ```bash
 pio run -e esp32dev_sim         # default environment

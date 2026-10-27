@@ -24,7 +24,8 @@ steps are described in
 | `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
 | `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heating control v0.1 | hardware, runtime output driver + MUX |
 | `esp32c3_hhn1x` | `esp32-c3-devkitm-1` | single-core RISC-V | HomeNet Heating control v1.x | hardware, PCF8574 + ADS1115 |
-| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, future board |
+| `esp32s3_hhn1x` | `esp32-s3-devkitc-1` | dual-core Xtensa | HomeNet Heating control v1.x | hardware, PCF8574 + ADS1115 |
+| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware (no pins assigned) |
 | `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, future board |
 
 Boards describe wiring; the backend describes whether writes reach pins. They

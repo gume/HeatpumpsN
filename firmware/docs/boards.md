@@ -8,7 +8,7 @@ build time; the output driver and current front end are runtime configuration.
 | Board | Output driver | Current sensing | MCU (current build) | PlatformIO env | Profile macro |
 | --- | --- | --- | --- | --- | --- |
 | HomeNet Heating control v0.1 | 74HC595 serial extender | 74HC4051 MUX + 4 × MT9221CT-06BR5 Hall sensors, one ADC pin | ESP32-S2 (LOLIN S2 Mini) | `esp32s2` | `HPN_CARRIER_HHN1` |
-| HomeNet Heating control v1.x | PCF8574 I²C expander | ADS1115, optional TLV9064 sensor assembly | ESP32-C3 (build), ESP32-S3 planned for v1.1 | `esp32c3_hhn1x` | `HPN_CARRIER_HHN1X` |
+| HomeNet Heating control v1.x | PCF8574 I²C expander | ADS1115, optional TLV9064 sensor assembly | ESP32-S3 (v1.1 target), ESP32-C3 (bring-up) | `esp32s3_hhn1x`, `esp32c3_hhn1x` | `HPN_CARRIER_HHN1X` |
 | boardless devkit | direct GPIO | none | any devkit | `esp32dev`, `esp32s3`, `esp32c3` | `HPN_CARRIER_BOARDLESS` |
 
 The boardless profile is not a board: it is a bare devkit with every pin
@@ -324,8 +324,8 @@ open items in §3.6.
 | Item | Value |
 | --- | --- |
 | Board | HomeNet Heating control v1.x |
-| MCU | ESP32-S3 planned for v1.1; the current build target is an ESP32-C3 |
-| PlatformIO env | `esp32c3_hhn1x` (`-DHPN_CARRIER_HHN1X`), `esp32s3` for the future board |
+| MCU | ESP32-S3 for v1.1; ESP32-C3 for bring-up on a bare devkit |
+| PlatformIO env | `esp32s3_hhn1x` (v1.1, `-DHPN_CARRIER_HHN1X`), `esp32c3_hhn1x` (bring-up, same profile) |
 | Board profile | `hpn::board_config()` → `HomeNet Heating control v1.x` |
 | Output driver default | PCF8574, address `0x20` |
 | Relay polarity default | every output active low |
@@ -334,8 +334,32 @@ open items in §3.6.
 
 The v1.1 drawing shows a **Wemos D1 mini footprint** so the board can reuse the
 mechanical outline. That is compatibility only: there is no ESP8266 build, and
-none is planned. The firmware pin map is the ESP32-C3 map for now; the ESP32-S3
-module has a different pinout, so treat every GPIO below as provisional.
+none is planned. The carrier nets therefore keep the D1-mini names, and the
+firmware maps them to the ESP32-S3 pins below.
+
+| Carrier net | Function | ESP32-S3 GPIO | Firmware field |
+| --- | --- | --- | --- |
+| `D1` | I²C SCL (PCF8574 + ADS1115) | **9** | `i2c_scl` |
+| `D2` | I²C SDA (PCF8574 + ADS1115) | **8** | `i2c_sda` |
+| `D3` | 1-Wire `TEMP`, DS18B20 at U6 (4k7 pull-up R1) | **4** | `gpio_onewire` |
+| `D4` | LED data, five TX1812 through R10 330 Ω | **5** | `gpio_led_data` |
+| `TX` / `RX` | J1 programming header | 43 / 44 | UART0 |
+| `A0` | dangling net label, no component | — | — |
+| `D0`, `D5`–`D8`, `RST` | not connected on the drawing | — | — |
+
+`num_leds = 5` on this profile. The LED chain is the same five status LEDs as on
+v0.1 (system, boiler, floor, radiator 1, radiator 2). No analogue input is used:
+current sensing is on the ADS1115, so the unconnected `A0` is irrelevant.
+
+The chosen GPIOs avoid the ESP32-S3 strapping pins (0, 3, 45, 46), the native
+USB pins (19, 20), UART0 (43, 44) and the in-package flash/PSRAM range (26–37).
+The ESP32-C3 bring-up build keeps the same I²C pins but leaves 1-Wire and the
+LED chain unassigned (`HPN_GPIO_UNASSIGNED`, `num_leds = 0`), because a bare
+devkit has neither.
+
+These numbers are a **firmware default, not a verified board fact**. The
+schematic names the carrier nets, not the S3 pad each net lands on, and no
+physical v1.x board exists yet.
 
 Confirmed against the drawing:
 
@@ -345,14 +369,14 @@ Confirmed against the drawing:
   to the SSR/relay LED cathodes).
 - P7 is the fault output of the U13 NOR network, active high.
 - ADS1115 inputs `AIN0=VP1, AIN1=VP2, AIN2=VM, AIN3=VP3`.
+- `D1` drives `SCL` (R4 4k7 pull-up), `D2` drives `SDA` (R5 4k7), `D3` feeds the
+  DS18B20 jack, `D4` feeds the LED chain, and `TX`/`RX` go only to J1.
 
-Provisional or unconfirmed:
+Still unconfirmed:
 
-- I²C SDA/SCL on GPIO8/GPIO9 (an ESP32-C3 default; the drawing names the
-  D1-mini pins `D2`/`D1` instead).
-- 1-Wire temperature input: the drawing has a DS18B20 jack (U6) with a 4k7
-  pull-up, but no MCU pin is assigned in the firmware profile yet.
-- LED data: five TX1812 LEDs are drawn, but `num_leds` is 0 on this profile.
+- The ESP32-S3 pad each carrier net lands on. The GPIO numbers above are the
+  one thing to check on the first physical module; if a net moves, change the
+  default in `firmware/src/board.cpp` (or the value on the Hardware page).
 
 ### 3.2 PCF8574 output bit map
 
@@ -475,6 +499,11 @@ the next revision.
    while `tlv9064_present` is false. On real hardware every running pump would
    be reported as dry after 20 ticks. Either tie `has_pump_power[]` to
    `current_sense_available()` or disable the check until the front end works.
+8. **The MCU pad map is not on the drawing.** U2 carries the D1-mini net names
+   only (`D1` = SCL, `D2` = SDA, `D3` = TEMP, `D4` = LED); no ESP32-S3 pad is
+   assigned. The firmware defaults in §3.1 (GPIO 9/8/4/5) are therefore an
+   assumption. Pin them down before fabrication and re-check them on the first
+   physical module.
 
 ## 4. Driver selection and reboot rules
 
