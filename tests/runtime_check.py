@@ -531,6 +531,7 @@ class Controller:
             self.checker.skip("MQTT log streaming", "mqtt_host is empty")
 
         if self.emulation:
+            self.check_output_driver()
             self.check_error_sensors()
             self.check_leds()
             self.check_keepalive()
@@ -634,6 +635,26 @@ class Controller:
             not missing_hardware,
             "missing " + ", ".join(missing_hardware) if missing_hardware else "",
         )
+        expander_fields = (
+            "output_expander",
+            "expander_address",
+            "expander_data_pin",
+            "expander_clock_pin",
+            "expander_latch_pin",
+            "expander_oe_pin",
+            "expander_oe_active_low",
+            "output_active_low",
+            "expander_bit_heater",
+            "expander_bit_pump_floor",
+            "expander_bit_mix_direction",
+            "expander_bit_mux_s1",
+        )
+        missing_expander = [key for key in expander_fields if key not in self.hardware]
+        self.checker.expect(
+            "output driver and polarity fields exposed",
+            not missing_expander,
+            "missing " + ", ".join(missing_expander) if missing_expander else "",
+        )
         roles_ok = False
         try:
             roles = http_json(self.base, "/api/sensors/roles")
@@ -651,6 +672,51 @@ class Controller:
                 continue
             found += [key for key in removed if key in payload]
         self.checker.expect("obsolete pulse fields removed", not found, ", ".join(found))
+
+    def check_output_driver(self) -> None:
+        """The port-expander selection, address and polarity round-trip."""
+        patch = {
+            "output_expander": 2,  # PCF8574
+            "expander_address": 0x27,
+            "i2c_sda": 8,
+            "i2c_scl": 10,
+            "output_active_low": True,
+            "expander_bit_heater": 0,
+            "expander_bit_pump_floor": 1,
+            "expander_bit_pump_rad1": 2,
+            "expander_bit_pump_rad2": 3,
+            "expander_bit_mix_direction": 4,
+            "expander_bit_mix_motion": 5,
+            "expander_bit_mux_s0": 6,
+            "expander_bit_mux_s1": 7,
+        }
+        response = self._put_hardware(patch)
+        stored = http_json(self.base, "/api/config/hardware")
+        mismatched = {
+            key: (stored.get(key), value)
+            for key, value in patch.items()
+            if stored.get(key) != value
+        }
+        self.checker.expect(
+            "PCF8574 driver and polarity round-trip",
+            not mismatched,
+            json.dumps(mismatched, sort_keys=True) if mismatched else "",
+        )
+        self.checker.expect(
+            "output-driver change requests a reboot",
+            bool(response.get("reboot_required")),
+            json.dumps(response, sort_keys=True),
+        )
+
+        duplicate = dict(patch)
+        duplicate["expander_bit_heater"] = 1  # already used by the floor pump
+        status, payload, _ = http_request(self.base, "/api/config/hardware", "PUT", duplicate)
+        text = payload.decode("utf-8", "replace")
+        self.checker.expect(
+            "duplicate expander bits rejected",
+            status == 400 and "unique" in text,
+            f"HTTP {status}: {text[:160]}",
+        )
 
     def check_ram_logs(self) -> None:
         events = http_json(self.base, "/api/log/events")
