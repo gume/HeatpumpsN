@@ -1,7 +1,9 @@
 # HeatpumpsN firmware
 
-> **Session handover:** [`HANDOVER.md`](HANDOVER.md) tracks in-progress work,
-> open issues and the exact device/build state. Read it before resuming.
+> **Project handover:** start at [`../HANDOVER.md`](../HANDOVER.md) for current
+> state, remote-agent access, workflow, architecture and next steps.
+> [`HANDOVER.md`](HANDOVER.md) is the engineering log of the last change set
+> (commit `bea823e`).
 
 PlatformIO project for the ESP32 controller node. It currently implements a
 FreeRTOS task set, the boot-safe **L0** output layer, a carrier abstraction for
@@ -399,13 +401,13 @@ firmware/
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
-│   ├── config_store.h    # NVS-backed config load/save (CRC32, no migration)
+│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1→v2)
 │   ├── crc32.h           # portable CRC32 helper
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health
 │   ├── l0_io.h           # L0 interface
-│   ├── l1_safety.h       # L1 interface (bench loopback; production TODO)
-│   ├── l2_control.h      # L2 interface (bench loopback; production TODO)
+│   ├── l1_safety.h       # L1 interface (arbitration, limits, mixer servo)
+│   ├── l2_control.h      # L2 interface (coordination, mixer target)
 │   ├── l4_comms.h        # L4 interface (Wi-Fi + MQTT + portal + LEDs)
 │   ├── led_status.h      # five-LED status animator
 │   ├── mqtt_client.h     # MQTT/HA discovery and command intake
@@ -422,8 +424,8 @@ firmware/
 │   ├── tasks.cpp         # task creation, priorities, core placement, WDT
 │   ├── state.cpp         # boot-safe SystemState and diagnostic text helpers
 │   ├── l0_io.cpp         # carrier logic, the only layer that drives I/O
-│   ├── l1_safety.cpp     # L1 bench loopback + heater interlock; TODO(L1)
-│   ├── l2_control.cpp    # L2 bench pass-through; TODO(L2)
+│   ├── l1_safety.cpp     # L1 arbitration, limits, mixer servo, pump supervision
+│   ├── l2_control.cpp    # L2 coordination, PI + Smith predictor, DHW/flush
 │   ├── l4_comms.cpp      # L4 integration (Wi-Fi + MQTT + portal + LEDs)
 │   ├── led_status.cpp    # status animation mapped to the five LEDs
 │   ├── mqtt_client.cpp   # MQTT transport, HA discovery, command intake

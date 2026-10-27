@@ -1,13 +1,19 @@
-# Firmware session handover — real-heating readiness
+# Firmware change log — real-heating readiness (commit `bea823e`)
 
 **Date:** 2026-10-26
 **Base commit:** `36f756d` ("firmware: add configurable mixer opening ceiling (85% default)")
+**Commit:** `bea823e` ("firmware: real-heating readiness (config v2, mixer window, supervision)")
 **Device:** remote ESP32-D0WDQ6 bench board flashed with `esp32dev_sim`
 (HHN 1.0 emulation), Wi-Fi `Testing`, controller `http://192.168.2.14`,
 broker `smcl.tmit.bme.hu:31883`.
 
-> **Read this first.** This session adds the remaining bench-verifiable pieces
-> for real-heating operation: shared pump-current calibration with a protection
+> **Scope.** This is the engineering log for one change set, not the project
+> handover. Start at [`../HANDOVER.md`](../HANDOVER.md) for current state, access,
+> workflow, architecture and next steps; come back here for the details of this
+> commit.
+
+> **Summary.** This session adds the remaining bench-verifiable pieces for
+> real-heating operation: shared pump-current calibration with a protection
 > switch, a configurable mixer minimum/dynamic maximum, a soft setpoint+Δ
 > reaction, warning-only mixer anomaly indications, sensor-role verification and
 > an optional inferred-DHW fallback. The configuration blob moved to **v2**; a
@@ -297,9 +303,9 @@ Always bound the serial monitor with `timeout`; never run an unbounded
 
 ---
 
-## 6. Working-tree state
+## 6. Files in this change
 
-Modified for this change:
+All files below are part of commit `bea823e`:
 
 ```
 firmware/HANDOVER.md
@@ -334,7 +340,7 @@ tests/runtime_check.py
 
 Untracked / unrelated and deliberately not part of this commit: `reviews/`,
 the `simulation/` edits and the `simulation/sim_run_hil_*`, `test_run_*` and
-`phys_sysid*` artefacts.
+`phys_sysid*` artefacts. They remain local; see `../HANDOVER.md` §10.
 
 ---
 

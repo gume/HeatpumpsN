@@ -8,11 +8,19 @@ The design is documented in [`plans/`](plans/). Start with
 [`plans/controller node/00_index_and_architecture.md`](plans/controller%20node/00_index_and_architecture.md)
 for the firmware layers.
 
+> **Continuing the project?** Read [`HANDOVER.md`](HANDOVER.md) first. It covers
+> the current state at commit `bea823e`, remote-agent access, the build/flash/test
+> workflow, a ten-minute architecture briefing, what is implemented vs missing,
+> prioritized next steps and the local uncommitted work.
+
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
+| `HANDOVER.md` | Project handover: state, access, workflow, architecture, next steps |
 | `firmware/` | PlatformIO firmware project (ESP32 family) |
+| `firmware/HANDOVER.md` | Engineering log of the last firmware change set |
+| `tests/` | Runtime integration checks against a running controller |
 | `plans/` | System, controller-node, and observer specifications |
 | `analysis/` | Python analysis, exported telemetry, and derived parameters |
 | `others/` | Local read-only reference code from other developers (ignored by git) |
