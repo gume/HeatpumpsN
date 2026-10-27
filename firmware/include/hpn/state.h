@@ -152,6 +152,21 @@ struct SystemState {
 // Boot-safe zero state: everything off, no valid sensors, no alarms.
 void state_init(SystemState& state);
 
+// ---------------------------------------------------------------------------
+// Cross-core state publication
+//
+// On dual-core targets L0/L1/L2 own SystemState on the real-time core while
+// comms, logging and the LED task read it from the other one. Reading fields in
+// place races with the writer: a 64-bit timestamp or a SensorReading (float plus
+// validity flags) can be captured half-updated. The owning side publishes a
+// whole-struct copy with state_publish(); every cross-core reader takes its own
+// copy with state_snapshot() and works from that.
+//
+// state_snapshot() returns false until the first publish and leaves `out`
+// untouched.
+void state_publish(const SystemState& state);
+bool state_snapshot(SystemState& out);
+
 // Human-readable names for the standardized error code, one alarm bit and the
 // current diagnostic posture. format_error_text() returns "No error" when the
 // code is ERR_OK and no warning/alarm flags are set; otherwise it combines the

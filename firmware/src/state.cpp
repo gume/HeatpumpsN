@@ -1,8 +1,40 @@
 #include "hpn/state.h"
 
+#include <Arduino.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+namespace {
+
+// Guards the published copy between the real-time publisher and the cross-core
+// readers. Both sides copy the whole struct inside the critical section, so a
+// reader can never observe a half-written 64-bit timestamp or SensorReading.
+// The copy is a few hundred bytes; holding the mux for that long is far below
+// one tick of jitter for the real-time tasks.
+portMUX_TYPE g_published_mux = portMUX_INITIALIZER_UNLOCKED;
+SystemState g_published = {};
+bool g_published_valid = false;
+
+}  // namespace
+
+void state_publish(const SystemState& state) {
+  taskENTER_CRITICAL(&g_published_mux);
+  g_published = state;
+  g_published_valid = true;
+  taskEXIT_CRITICAL(&g_published_mux);
+}
+
+bool state_snapshot(SystemState& out) {
+  bool valid = false;
+  taskENTER_CRITICAL(&g_published_mux);
+  valid = g_published_valid;
+  if (valid) {
+    out = g_published;
+  }
+  taskEXIT_CRITICAL(&g_published_mux);
+  return valid;
+}
 
 void state_init(SystemState& state) {
   state = SystemState{};

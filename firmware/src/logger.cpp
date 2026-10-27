@@ -103,7 +103,7 @@ void begin(const Config& config, SystemState& state) {
   (void)state;
 }
 
-void tick(const Config& config, SystemState& state) {
+void tick(const Config& config, const SystemState& state) {
   (void)config;
 
   publish_diagnostic_event(state);

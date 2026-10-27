@@ -55,7 +55,7 @@ bool blink(uint32_t now, uint32_t period) {
 
 }  // namespace
 
-void tick(const Config& config, SystemState& state) {
+void tick(const Config& config, const SystemState& state) {
   const uint32_t now = millis();
   if (now - g_last_tick_ms < 50 && g_have_frame) {
     return;

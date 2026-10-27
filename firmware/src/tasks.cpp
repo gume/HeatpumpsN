@@ -11,6 +11,7 @@
 #include "hpn/l2_control.h"
 #include "hpn/l4_comms.h"
 #include "hpn/logger.h"
+#include "hpn/state.h"
 
 namespace hpn {
 namespace tasks {
@@ -154,6 +155,9 @@ void task_io(void* arg) {
   for (;;) {
     l0::tick(*g_config, *g_board, *g_state);
     g_state->uptime_ms = millis();
+    // Publish a coherent copy for the Core 0 readers. T_io runs fastest and
+    // also picks up the L1/L2 writes, so the snapshot is at most 20 ms old.
+    state_publish(*g_state);
     mark(TaskId::Io);
 
     const TickType_t now = xTaskGetTickCount();
@@ -216,7 +220,10 @@ void task_comms(void* arg) {
 void task_logger(void* arg) {
   (void)arg;
   for (;;) {
-    logger::tick(*g_config, *g_state);
+    SystemState snapshot;
+    if (state_snapshot(snapshot)) {
+      logger::tick(*g_config, snapshot);
+    }
     mark(TaskId::Logger);
     vTaskDelay(pdMS_TO_TICKS(kLoggerPeriodMs));
   }
@@ -264,6 +271,10 @@ bool start(const Config& config, const BoardConfig& board, SystemState& state) {
   }
 
   g_control_period_ms = config.tick_ms >= 100 ? config.tick_ms : 100;
+
+  // Seed the cross-core snapshot before the Core 0 tasks exist, so the portal,
+  // MQTT and logger never fall back to reading the live struct.
+  state_publish(state);
 
   l1::begin(config, state);
   l2::begin(config, state);

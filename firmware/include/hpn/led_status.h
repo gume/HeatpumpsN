@@ -13,8 +13,9 @@
 namespace hpn {
 namespace led {
 
-// Called from T_comms after the MQTT/Wi-Fi status has been refreshed.
-void tick(const Config& config, SystemState& state);
+// Called from T_comms after the MQTT/Wi-Fi status has been refreshed, with a
+// published state snapshot rather than the live struct.
+void tick(const Config& config, const SystemState& state);
 
 }  // namespace led
 }  // namespace hpn

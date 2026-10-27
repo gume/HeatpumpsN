@@ -168,7 +168,7 @@ switched actuator uses a staged state model:
 
 ## 3. Shared Runtime State (`struct SystemState`)
 
-All tasks communicate through `SystemState` using lock-free atomic snapshot mailboxes across cores (`T_safety/T_control` on Core 1 publish snapshots to `T_comms/T_logger` on Core 0) so safety arbitration never blocks. Every sensor reading carries a monotonic timestamp and validity status.
+All tasks communicate through `SystemState`. Cross-core consumers (`T_comms`, `T_logger`, the LED animator and the HTTP/WebSocket handlers) work from a published snapshot taken with `state_snapshot()`, which the real-time core refreshes with `state_publish()` under a short critical section, so safety arbitration never blocks and no reader can observe a torn struct. Every sensor reading carries a monotonic timestamp and validity status.
 
 ```c
 typedef enum {

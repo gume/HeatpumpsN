@@ -2,6 +2,7 @@
 
 #include "hpn/led_status.h"
 #include "hpn/mqtt_client.h"
+#include "hpn/state.h"
 #include "hpn/web_portal.h"
 #include "hpn/wifi_client.h"
 
@@ -20,7 +21,12 @@ void tick(const Config& config, SystemState& state) {
   wifi::tick(config);
   mqtt::tick(config, state);
   web::tick(config, state);
-  led::tick(config, state);
+  // The LED animator only reads, so it gets the published snapshot instead of
+  // the struct the real-time core keeps updating.
+  SystemState snapshot;
+  if (state_snapshot(snapshot)) {
+    led::tick(config, snapshot);
+  }
 }
 
 }  // namespace l4

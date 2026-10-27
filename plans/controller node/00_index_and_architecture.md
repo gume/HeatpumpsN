@@ -102,7 +102,7 @@ The controller performs closed-loop control of the floor mixer output, coordinat
 
 ### 2.3 Shared State and Messaging Overview
 
-* **Real-Time Core Isolation:** To eliminate priority inversion hazards, `T_safety` and `T_control` on Core 1 **never block on Core 0 networking or logging tasks**. Cross-core state communication uses a lock-free snapshot mailbox or double-buffered `SystemState` (Core 1 publishes atomic state snapshots to Core 0 without waiting).
+* **Real-Time Core Isolation:** To eliminate priority inversion hazards, `T_safety` and `T_control` on Core 1 **never block on Core 0 networking or logging tasks**. Cross-core state communication uses a published state mailbox: `T_io` copies the whole `SystemState` under a short critical section (`state_publish()`), and `T_comms`/`T_logger`/the LED animator take their own copy (`state_snapshot()`) instead of reading fields in place. Readers never see a half-written 64-bit timestamp or `SensorReading`, and the real-time core never waits on networking or logging.
 * Core 1 internal messaging uses direct command queues (`T_control -> T_safety -> T_io`) and sensor snapshot mailboxes (`T_io -> T_safety/T_control`).
 * Sensor values are always published internally with monotonic timestamps and validity flags (detailed schema in `01_config_and_contracts.md`).
 

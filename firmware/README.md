@@ -82,6 +82,16 @@ Notes:
   resets the controller instead of leaving outputs latched. Each withheld feed
   is logged once per second with the supervised task ages, so a reset can be
   diagnosed from the captured boot log.
+- Cross-core state is published, never read live. `T_io` calls
+  `state_publish()` after every L0 tick (20 ms), copying the whole `SystemState`
+  under a short critical section; the Core 0 consumers (`T_comms`, `T_logger`,
+  the LED animator and the HTTP/WebSocket handlers) call `state_snapshot()` and
+  build their payloads from that copy. A 64-bit timestamp or a `SensorReading`
+  (float plus validity flags) can therefore not be observed half-written.
+  Command fields written from Core 0 (`*_intended`, Test Mode mixer commands)
+  still go to the live struct and reach the comms core with the next publish.
+  When a free-run is started, `mix_free_run_until_ms` is written before
+  `mix_free_run_dir` so L1 never sees a direction with a stale deadline.
 - Task bodies call the corresponding layer `tick()`. L0, the Wi-Fi client,
   MQTT/HA and the portal are implemented. L1 owns the safety supervision
   (limits, mixer window, pump/relay plausibility, role and DHW warnings) and L2

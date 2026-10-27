@@ -133,9 +133,6 @@ bool g_counters_persisted = false;
 bool g_counter_save_requested = false;
 uint32_t g_last_counter_save_ms = 0;
 
-portMUX_TYPE g_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
-Snapshot g_snapshot = {};
-
 constexpr size_t kWsIpSlots = 4;
 struct WsIpEntry {
   uint32_t id;
@@ -373,38 +370,43 @@ void log_access_request(AsyncWebServerRequest* request, int status) {
 // Snapshot and live state JSON
 // ---------------------------------------------------------------------------
 
-void capture_snapshot() {
-  Snapshot s{};
-  if (g_state != nullptr) {
-    s.state = *g_state;
+void get_snapshot(Snapshot& out) {
+  out = Snapshot{};
+  // The real-time core publishes a coherent copy; reading g_state in place from
+  // this task could capture a half-written SensorReading or wall clock.
+  if (!state_snapshot(out.state) && g_state != nullptr) {
+    // No publish yet: the owning tasks are not running, so a direct copy is
+    // safe and keeps the portal usable during early bring-up.
+    out.state = *g_state;
   }
-  s.captured_ms = millis();
+  out.captured_ms = millis();
+
   const wifi::Status& ws = wifi::status();
-  s.wifi_connected = ws.connected;
-  s.wifi_rssi = ws.rssi;
-  copy_str(s.wifi_ip, sizeof(s.wifi_ip), WiFi.localIP().toString().c_str());
-  copy_str(s.wifi_state, sizeof(s.wifi_state), wifi::state_name());
+  out.wifi_connected = ws.connected;
+  out.wifi_rssi = ws.rssi;
+  copy_str(out.wifi_ip, sizeof(out.wifi_ip), WiFi.localIP().toString().c_str());
+  copy_str(out.wifi_state, sizeof(out.wifi_state), wifi::state_name());
 
   const mqtt::Status& ms = mqtt::status();
-  s.mqtt_enabled = ms.enabled;
-  s.mqtt_connected = ms.connected;
-  copy_str(s.mqtt_state, sizeof(s.mqtt_state), ms.state);
-  copy_str(s.mqtt_broker, sizeof(s.mqtt_broker), ms.broker);
-  s.mqtt_port = ms.port;
-  s.mqtt_connect_count = ms.connect_count;
-  s.mqtt_disconnect_count = ms.disconnect_count;
-  s.mqtt_last_disconnect_ms = ms.last_disconnect_ms;
-  s.mqtt_errors = ms.errors;
-
-  taskENTER_CRITICAL(&g_snapshot_mux);
-  g_snapshot = s;
-  taskEXIT_CRITICAL(&g_snapshot_mux);
+  out.mqtt_enabled = ms.enabled;
+  out.mqtt_connected = ms.connected;
+  copy_str(out.mqtt_state, sizeof(out.mqtt_state), ms.state);
+  copy_str(out.mqtt_broker, sizeof(out.mqtt_broker), ms.broker);
+  out.mqtt_port = ms.port;
+  out.mqtt_connect_count = ms.connect_count;
+  out.mqtt_disconnect_count = ms.disconnect_count;
+  out.mqtt_last_disconnect_ms = ms.last_disconnect_ms;
+  out.mqtt_errors = ms.errors;
 }
 
-void get_snapshot(Snapshot& out) {
-  taskENTER_CRITICAL(&g_snapshot_mux);
-  out = g_snapshot;
-  taskEXIT_CRITICAL(&g_snapshot_mux);
+// Published state for request handlers that only need to read. The real-time
+// core keeps writing, so handlers must go through this instead of g_state.
+SystemState published_state() {
+  SystemState state;
+  if (!state_snapshot(state) && g_state != nullptr) {
+    state = *g_state;
+  }
+  return state;
 }
 
 void build_state_json(const Snapshot& s, JsonDocument& doc) {
@@ -1605,8 +1607,10 @@ void tick_sequence(uint32_t now_ms) {
   if (g_sequence == Sequence::EndstopHome) {
     switch (g_sequence_step) {
       case 0:
-        g_state->mix_free_run_dir = -1;
+        // Deadline first: L1 reads these fields from the real-time core, so a
+        // direction with a stale deadline would cancel the run immediately.
         g_state->mix_free_run_until_ms = now_ms + stroke_ms;
+        g_state->mix_free_run_dir = -1;
         g_state->mix_target_pos = 0.0f;
         log_event(0, 1420, "Endstop home: driving mixer fully closed");
         g_sequence_step = 1;
@@ -1628,8 +1632,8 @@ void tick_sequence(uint32_t now_ms) {
   if (g_sequence == Sequence::MixerSweep) {
     switch (g_sequence_step) {
       case 0:
-        g_state->mix_free_run_dir = 1;
         g_state->mix_free_run_until_ms = now_ms + stroke_ms;
+        g_state->mix_free_run_dir = 1;
         g_state->mix_target_pos =
             g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f;
         log_event(0, 1430, "Mixer sweep: opening to the configured limit");
@@ -1637,8 +1641,8 @@ void tick_sequence(uint32_t now_ms) {
         g_sequence_next_ms = now_ms + stroke_ms + 1000u;
         break;
       case 1:
-        g_state->mix_free_run_dir = -1;
         g_state->mix_free_run_until_ms = now_ms + stroke_ms;
+        g_state->mix_free_run_dir = -1;
         g_state->mix_target_pos = 0.0f;
         log_event(0, 1431, "Mixer sweep: driving fully closed");
         g_sequence_step = 2;
@@ -1765,7 +1769,7 @@ void anti_seize_flush_now(uint32_t now_ms) {
   anti_seize_flush(now_ms);
 }
 
-void anti_seize_service(const Config& config, SystemState& state, uint32_t now_ms) {
+void anti_seize_service(const Config& config, const SystemState& state, uint32_t now_ms) {
   if (!g_anti_seize_loaded) {
     anti_seize_load();
   }
@@ -2244,7 +2248,8 @@ void handle_sensor_roles(AsyncWebServerRequest* request) {
     return;
   }
 
-  const SensorRoleResult roles = verify_sensor_roles(*g_config, *g_state);
+  const SystemState state = published_state();
+  const SensorRoleResult roles = verify_sensor_roles(*g_config, state);
   JsonDocument doc;
   doc["ok"] = true;
   doc["summary"] = sensor_role_summary(roles);
@@ -2337,6 +2342,20 @@ void handle_counters_reset(AsyncWebServerRequest* request, JsonVariant& json) {
 // Test Mode handlers
 // ---------------------------------------------------------------------------
 
+// Remaining Test Mode time, rounded up to whole seconds. Derived from the
+// portal's own deadline instead of reading test_mode_rem_s back out of the
+// shared struct, which the real-time task also publishes.
+uint32_t test_remaining_s() {
+  if (!g_test_active) {
+    return 0;
+  }
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - g_test_end_ms) >= 0) {
+    return 0;
+  }
+  return (g_test_end_ms - now + 999u) / 1000u;
+}
+
 void handle_test_activate(AsyncWebServerRequest* request) {
   if (g_config == nullptr || g_state == nullptr) {
     send_error(request, 503, "controller not ready");
@@ -2350,7 +2369,7 @@ void handle_test_activate(AsyncWebServerRequest* request) {
   JsonDocument doc;
   doc["ok"] = true;
   doc["active"] = g_test_active;
-  doc["remaining"] = g_state->test_mode_rem_s;
+  doc["remaining"] = test_remaining_s();
   send_json(request, 200, doc);
 }
 
@@ -2439,19 +2458,21 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
   }
 
   if (mixer[0] != '\0') {
-    if (g_state->mix_emergency) {
+    // Inputs owned by L1 come from the published snapshot; the command itself
+    // is still written to the live struct below.
+    const SystemState st = published_state();
+    if (st.mix_emergency) {
       send_error(request, 409, "mixer is locked by an emergency close");
       return;
     }
-    const float ceiling =
-        g_state != nullptr && isfinite(g_state->mix_ceiling) && g_state->mix_ceiling > 0.0f
-            ? g_state->mix_ceiling
-            : (g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f);
+    const float ceiling = isfinite(st.mix_ceiling) && st.mix_ceiling > 0.0f
+                              ? st.mix_ceiling
+                              : (g_config != nullptr ? mixer_ceiling(*g_config) : 1.0f);
 
     if (strcmp(mixer, "stop") == 0) {
       // Freeze the servo where the valve is now so it does not chase the old
       // target again.
-      g_state->mix_target_pos = fminf(g_state->pos_est_dr, ceiling);
+      g_state->mix_target_pos = fminf(st.pos_est_dr, ceiling);
       log_event(0, 1102, "Test command: mixer stop");
       JsonDocument doc;
       doc["ok"] = true;
@@ -2467,7 +2488,7 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
       // a later "stop" or another nudge interrupts it.
       constexpr float kNudge = 0.02f;
       const bool open = strcmp(mixer, "open") == 0;
-      float target = g_state->pos_est_dr + (open ? kNudge : -kNudge);
+      float target = st.pos_est_dr + (open ? kNudge : -kNudge);
       if (target < 0.0f) target = 0.0f;
       if (target > ceiling) target = ceiling;
       g_state->mix_target_pos = target;
@@ -2618,11 +2639,12 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   mixer["position"] = snapshot.mixer_position;
 
   JsonObject controller = doc["controller"].to<JsonObject>();
-  controller["estimatedPosition"] = g_state != nullptr ? g_state->pos_est_dr * 100.0f : 0.0f;
-  controller["targetPosition"] = g_state != nullptr ? g_state->mix_target_pos * 100.0f : 0.0f;
-  controller["motion"] = g_state != nullptr && g_state->mix_motion;
-  controller["direction"] = g_state != nullptr ? g_state->mix_dir : 0;
-  controller["interlockFault"] = g_state != nullptr && g_state->mix_interlock_fault;
+  const SystemState st = published_state();
+  controller["estimatedPosition"] = st.pos_est_dr * 100.0f;
+  controller["targetPosition"] = st.mix_target_pos * 100.0f;
+  controller["motion"] = st.mix_motion;
+  controller["direction"] = st.mix_dir;
+  controller["interlockFault"] = st.mix_interlock_fault;
 
   doc["followController"] = snapshot.follow_controller;
   doc["realisticPower"] = snapshot.realistic_power;
@@ -3050,7 +3072,7 @@ void handle_status(AsyncWebServerRequest* request) {
 
   JsonObject test = doc["test"].to<JsonObject>();
   test["active"] = g_test_active;
-  test["remaining"] = g_state != nullptr ? g_state->test_mode_rem_s : 0;
+  test["remaining"] = test_remaining_s();
   test["sequence"] = sequence_name();
 
   JsonObject portal = doc["portal"].to<JsonObject>();
@@ -3471,7 +3493,6 @@ void begin(const Config& config, SystemState& state) {
   g_ws.onEvent(on_ws_event);
   register_routes();
   g_server.begin();
-  capture_snapshot();
 
   log_event(0, 1000, "Web portal started");
 #if defined(HPN_IO_EMULATION)
@@ -3515,9 +3536,12 @@ void tick(const Config& config, SystemState& state) {
     }
   }
 
-  anti_seize_service(config, state, now);
+  // Reads of real-time-owned fields go through the published snapshot; only
+  // the Test Mode writes below stay on the live struct.
+  const SystemState published = published_state();
+  anti_seize_service(config, published, now);
   tick_sequence(now);
-  update_counters(state, now);
+  update_counters(published, now);
 
   if (counter_persistence_enabled()) {
     const bool hourly_due =
@@ -3534,8 +3558,6 @@ void tick(const Config& config, SystemState& state) {
     log_event(0, wifi_connected ? 1010 : 1011,
               wifi_connected ? "Wi-Fi connected" : "Wi-Fi link lost");
   }
-
-  capture_snapshot();
 
   if (g_ws.count() > 0 && now - g_last_broadcast_ms >= kBroadcastIntervalMs) {
     g_last_broadcast_ms = now;

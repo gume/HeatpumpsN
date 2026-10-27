@@ -11,6 +11,7 @@
 #include "hpn/board.h"
 #include "hpn/build_target.h"
 #include "hpn/logger.h"
+#include "hpn/state.h"
 #include "hpn/web_portal.h"
 #include "hpn/wifi_client.h"
 
@@ -233,7 +234,12 @@ void publish_states() {
     return;
   }
 
-  const SystemState& st = *g_state;
+  // Work from the coherent cross-core copy: T_io on the real-time core keeps
+  // writing SystemState while this task publishes.
+  SystemState st;
+  if (!state_snapshot(st)) {
+    return;
+  }
 
   // Heating switches expose the effective circuit demand (the accepted HA
   // request, subject to the per-circuit keep-alive). Binary sensors expose the
@@ -536,6 +542,15 @@ void publish_logs(const Config& config) {
     return;
   }
 
+  // The wall clock is written by L0 on the real-time core; take one coherent
+  // copy for the whole batch instead of re-reading the live 64-bit field.
+  SystemState st;
+  if (!state_snapshot(st)) {
+    return;
+  }
+  const uint32_t wall_s =
+      st.wall_time_epoch_s > 1600000000ULL ? static_cast<uint32_t>(st.wall_time_epoch_s) : 0;
+
   char topic[128];
   char payload[768];
 
@@ -546,8 +561,8 @@ void publish_logs(const Config& config) {
       JsonDocument doc;
       doc["seq"] = events[i].seq;
       doc["ts"] = events[i].ms;
-      if (g_state->wall_time_epoch_s > 1600000000ULL) {
-        doc["wall"] = static_cast<uint32_t>(g_state->wall_time_epoch_s);
+      if (wall_s != 0) {
+        doc["wall"] = wall_s;
       }
       doc["severity"] = logger::severity_name(events[i].severity);
       doc["code"] = events[i].code;
@@ -579,8 +594,8 @@ void publish_logs(const Config& config) {
       JsonDocument doc;
       doc["seq"] = samples[i].seq;
       doc["ts"] = samples[i].ms;
-      if (g_state->wall_time_epoch_s > 1600000000ULL) {
-        doc["wall"] = static_cast<uint32_t>(g_state->wall_time_epoch_s);
+      if (wall_s != 0) {
+        doc["wall"] = wall_s;
       }
       if (isfinite(samples[i].boiler)) doc["boiler"] = samples[i].boiler;
       else doc["boiler"] = nullptr;

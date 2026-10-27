@@ -41,9 +41,11 @@ struct SlowSample {
 
 void begin(const Config& config, SystemState& state);
 
-// Called from T_logger. Samples the slow log and emits diagnostic events when
-// the error code or active warning/alarm mask changes.
-void tick(const Config& config, SystemState& state);
+// Called from T_logger with a published state snapshot (T_logger runs on the
+// protocol core and must not read the live struct). Samples the slow log and
+// emits diagnostic events when the error code or active warning/alarm mask
+// changes.
+void tick(const Config& config, const SystemState& state);
 
 // Append an entry to the in-RAM event log and the serial console.
 void log_event(uint8_t severity, uint16_t code, const char* detail);
