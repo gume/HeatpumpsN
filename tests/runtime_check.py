@@ -1182,12 +1182,26 @@ class Controller:
             )
 
             self._set_intents({}, quiet=True)
-            time.sleep(1.5)
-            state = self._live_state()
-            after: dict[str, Any] = self._circuit(state, "floor")
-            heater = state.get("heater", {})
+            # L2 runs every 2 s and L1 applies the relay change on its own
+            # tick, so wait for the OFF to propagate before sampling the
+            # after-run snapshot instead of assuming a fixed delay.
+            deadline = time.monotonic() + 8.0
+            after: dict[str, Any] = {}
+            heater: dict[str, Any] = {}
+            while time.monotonic() < deadline:
+                state = self._live_state()
+                after = self._circuit(state, "floor")
+                heater = state.get("heater", {})
+                if (
+                    int(after.get("demand", 1)) == 0
+                    and int(after.get("afterRun", 0)) > 0
+                    and int(after.get("phys", 0)) == 1
+                    and int(heater.get("phys", 1)) == 0
+                ):
+                    break
+                time.sleep(0.25)
             self.checker.expect(
-                "demand ends immediately while the board after-run starts",
+                "demand ends while the board after-run starts",
                 int(after.get("demand", 1)) == 0
                 and int(after.get("afterRun", 0)) > 0,
                 json.dumps(after, sort_keys=True),
