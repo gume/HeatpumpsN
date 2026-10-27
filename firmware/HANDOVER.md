@@ -306,6 +306,11 @@ polarity, `output_active_low`, and eight `expander_bit_*` values.
   active-low)` and no NVS/crash markers.
 * The suite round-tripped a PCF8574 selection (address, I2C pins, active-low),
   observed the reboot flag and confirmed duplicate expander bits are rejected.
+* A manual emulated PCF8574 boot (address `0x27`, SDA 8 / SCL 10, active-low)
+  logged `[l0] PCF8574 addr=0x27 sda=8 scl=10 (safe state written)` and
+  `/api/sim` reported `outputByte = 0xF9` — every relay bit high (off) with the
+  MUX select bits low. The 74HC595 default was restored and the full suite
+  reran green.
 
 **Still open:** no real PCF8574 board or ESP32-S2 carrier has been available, so
 the I²C backend and the active-low relay board are compile/emulation-verified
