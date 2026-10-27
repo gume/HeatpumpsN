@@ -1,7 +1,7 @@
 # 01 — Configuration, Parameter Ownership & State Contracts
 
 **Parent:** `00_index_and_architecture.md`  
-**Scope:** Canonical data structures, configuration parameters (`struct Config`), runtime state contracts (`struct SystemState`), dual-state reporting semantics (`_intended` vs. `_phys`), and standard divergence reason codes used across all modules (`02`–`06`).
+**Scope:** Canonical data structures, configuration parameters (`struct Config`), runtime state contracts (`struct SystemState`), staged demand reporting semantics (`_intended` / `_demand` / `_requested` / `_phys`), and standard divergence reason codes used across all modules (`02`–`06`).
 
 ---
 
@@ -64,8 +64,8 @@ struct Config {
   uint32_t dhw_infer_max_s;        // maximum plausible charge, default 1800 s
 
   uint32_t boiler_min_off_ms;      // anti-short-cycle backstop
-  uint32_t demand_timeout_s;       // heater keep-alive timeout (e.g., refresh_time + 1m or 2x + 1m)
-  uint32_t pump_stop_after_heating_s; // max pump run time after heating / when heater is off
+  uint32_t demand_timeout_s;       // per-circuit HA switch keep-alive timeout (e.g., refresh_time * 2)
+  uint32_t pump_stop_after_heating_s; // board-owned pump after-run per circuit after demand ends
   uint32_t long_pause_s;           // pause length before heater_phys off considered
   uint32_t anti_seize_interval_s;  // periodic summer exercise interval (~30 days)
   uint32_t test_mode_max_s;        // max duration for dashboard Test mode (e.g. 7200 s)
@@ -129,15 +129,19 @@ struct Config {
 
 ---
 
-## 2. Dual-State Contract (`*_intended` vs. `*_phys`)
+## 2. Demand/Request Contract (`*_intended` vs. `*_demand` vs. `*_requested` vs. `*_phys`)
 
-To maintain clean separation between external commands (L4), internal control optimizations (L2), safety overrides (L1), and hardware pins (L0), every switched actuator uses a **dual-state model**:
+To maintain clean separation between external commands (L4), the keep-alive and
+coordination logic (L2), safety overrides (L1), and hardware pins (L0), every
+switched actuator uses a staged state model:
 
 | State Variable | Owner / Writer | Meaning & HA Reporting Contract |
 | :--- | :--- | :--- |
-| `heater_intended`<br>`pump_floor_intended`<br>`pump_rad1_intended`<br>`pump_rad2_intended` | **L4** (HA Command Intake / Test Mode) | Reflects the accepted command intent. When HA commands `heater` or `pump_floor` ON, `*_intended` remains `ON` even if L2 or L1 temporarily pauses the physical relay (due to $\Delta T$ collapse, L1 overtemp, anti-short-cycle, or DHW priority). This prevents HA from falsely assuming a communication failure.<br>*Exception (Summer Mode):* If HA commands a switch ON while in Summer Mode, L4 rejects the command and keeps `*_intended = OFF` to intentionally trigger an error/mismatch in HA. |
-| `heater_requested`<br>`pump_floor_requested`<br>`pump_rad1_requested`<br>`pump_rad2_requested` | **L2** (Control & Coordination) | The state requested by L2 control logic after applying warm-up flush rules, $\Delta T$-collapse pauses, `long_pause_s` cutoffs, and timeout rules, passed down to L1. |
-| `heater_phys`<br>`pump_floor_phys`<br>`pump_rad1_phys`<br>`pump_rad2_phys` | **L1** (Safety Arbiter) $\rightarrow$ **L0** (GPIO) | The final safety-arbitrated physical relay command written to GPIO pins by L0 and reported back to HA via the `*_phys` binary sensors for true hardware monitoring. |
+| `pump_floor_intended`<br>`pump_rad1_intended`<br>`pump_rad2_intended` | **L4** (HA Command Intake / Test Mode) | The last accepted per-circuit command. When HA commands a heating loop ON, `*_intended` remains ON even if L2 or L1 temporarily pauses the physical relay (due to a missed keep-alive, $\Delta T$ collapse, L1 overtemp, anti-short-cycle, or DHW priority). This prevents HA from falsely assuming a communication failure.<br>*Exception (Summer Mode):* If HA commands a switch ON while in Summer Mode, L4 rejects the command and keeps `*_intended = OFF` to intentionally trigger an error/mismatch in HA. |
+| `pump_floor_demand`<br>`pump_rad1_demand`<br>`pump_rad2_demand` | **L2** (Keep-alive) | The effective heating demand: `*_intended &&` the circuit's repeated ON command is still fresh. A missed keep-alive drops the demand while leaving the raw intent set, so a later ON re-arms it. In Test Mode the demand equals the intent. |
+| `pump_floor_requested`<br>`pump_rad1_requested`<br>`pump_rad2_requested` | **L2** (Control & Coordination) | The state requested after warm-up flush rules, $\Delta T$-collapse pauses, `long_pause_s` cutoffs and the board-owned pump after-run, passed down to L1. |
+| `heater_intended`<br>`heater_requested` | **L2** (derived, normal mode) / **L4** (Test Mode) | In normal operation the heater has no HA command: L2 sets `heater_intended = requested` from `req_floor \|\| req_rad1 \|\| req_rad2` (after coordination, before the pump-only after-run). Test Mode may still drive `heater_intended` manually. |
+| `heater_phys`<br>`pump_floor_phys`<br>`pump_rad1_phys`<br>`pump_rad2_phys` | **L1** (Safety Arbiter) $\rightarrow$ **L0** (GPIO) | The final safety-arbitrated physical relay command written to GPIO pins by L0 and reported back to HA via the physical binary sensors for true hardware monitoring. |
 
 ---
 
@@ -171,9 +175,18 @@ typedef enum {
   DIV_LONG_PAUSE,
   DIV_ANTI_SHORT_CYCLE,
   DIV_DEMAND_LOSS,
-  DIV_AFTER_HEATING_TIMEOUT,
+  DIV_AFTER_RUN,             // board-managed pump overrun after a demand ends
   DIV_DHW_PRIORITY_ACTIVE
 } DivergenceReason;
+
+// Per-circuit runtime indexes. The order matches pump_power_w[3] and the
+// current channels (floor, radiator 1, radiator 2).
+typedef enum {
+  CIRCUIT_FLOOR = 0,
+  CIRCUIT_RAD1,
+  CIRCUIT_RAD2,
+  CIRCUIT_COUNT
+} CircuitIndex;
 
 // Bitmask constants for SystemState.active_alarms
 #define ALARM_OVERTEMP_HARD        (1u << 0) // T_mix_out >= t_max_hard trip
@@ -196,9 +209,10 @@ typedef enum {
 #define ERR_SENSOR_RET_LOST        202
 #define ERR_SENSOR_BOILER_LOST     203
 #define ERR_HA_KEEPALIVE_TIMEOUT   301
-#define ERR_AFTER_HEAT_TIMEOUT     302
 #define ERR_RELAY_FAULT_WELDED     401
 #define ERR_NVS_DATA_CORRUPTED     501
+#define ERR_SENSOR_ROLE_SUSPECT    603
+#define ERR_DHW_INFER_TIMEOUT      604
 
 struct SensorReading {
   float    value_c;
@@ -241,16 +255,17 @@ struct SystemState {
   int8_t   mix_free_run_dir;   // non-zero: homing/sweep, ignore target and limits
   uint32_t mix_free_run_until_ms; // free-run safety deadline
 
-  // --- Relays: Intended (L4), Requested (L2), Physical (L1 -> L0) ---
+  // --- Relays: Intended (L4), Demand/Requested (L2), Physical (L1 -> L0) ---
   bool     heater_intended,     heater_requested,     heater_phys;
-  bool     pump_floor_intended, pump_floor_requested, pump_floor_phys;
-  bool     pump_rad1_intended,  pump_rad1_requested,  pump_rad1_phys;
-  bool     pump_rad2_intended,  pump_rad2_requested,  pump_rad2_phys;
+  bool     pump_floor_intended, pump_floor_demand, pump_floor_requested, pump_floor_phys;
+  bool     pump_rad1_intended,  pump_rad1_demand,  pump_rad1_requested,  pump_rad1_phys;
+  bool     pump_rad2_intended,  pump_rad2_demand,  pump_rad2_requested,  pump_rad2_phys;
 
   // --- Optional Feedback & Supervision Timers ---
   float    pump_power_w[3];    // [floor, rad1, rad2] power in Watts (if present)
-  uint32_t keepalive_age_s;    // time elapsed since last HA heater ON keep-alive
-  uint32_t after_heating_timer_s; // elapsed time on pump_stop_after_heating_s
+  float    mixer_power_w;      // mixer motor power in Watts (if present)
+  uint32_t demand_age_s[CIRCUIT_COUNT];   // since last accepted circuit ON
+  uint32_t after_run_age_s[CIRCUIT_COUNT]; // board pump after-run per circuit
 
   // --- Diagnostics, Alarms & Divergence ---
   DivergenceReason divergence_reason;
@@ -264,16 +279,16 @@ struct SystemState {
 
 ## 4. Canonical Divergence Reason Codes & Priority
 
-Whenever `heater_intended != heater_phys` or `pump_*_intended != pump_*_phys` (or when heat delivery is suspended by external boiler state), `divergence_reason` must be set to one of the canonical values below and published to HA and the event log.
+Whenever a circuit's effective demand differs from its physical relay state (or when heat delivery is suspended by external boiler state), `divergence_reason` must be set to one of the canonical values below and published to HA and the event log. The derived heater call is reported through `heater_requested` / `heater_phys`; a normal pump after-run is reported as `DIV_AFTER_RUN`, not as an error.
 
 ### 4.1 Evaluation Priority Hierarchy
 When multiple divergence or override conditions coincide, `divergence_reason` must report the condition with the **highest priority**:
 
 1. **`DIV_OVERTEMP_PAUSE`** (Priority 1 — Highest): L1 hard safety cutoff active ($T_{\text{mix\_out}} \ge t_{\text{max\_hard}}$); `pump_floor_phys` forced `OFF` and mixer driven to `0.0`.
-2. **`DIV_DEMAND_LOSS`** (Priority 2): HA heater keep-alive missed beyond `demand_timeout_s`; `heater_phys` forced `OFF` (`heater_intended = ON`).
-3. **`DIV_AFTER_HEATING_TIMEOUT`** (Priority 3): Pumps forced `OFF` because `pump_stop_after_heating_s` expired without active heater demand (`pump_*_intended = ON`, `pump_*_phys = OFF`).
-4. **`DIV_ANTI_SHORT_CYCLE`** (Priority 4): `heater_phys` held `OFF` until `boiler_min_off_ms` expires (`heater_intended = ON`).
-5. **`DIV_DHW_PRIORITY_ACTIVE`** (Priority 5): `heater_phys` remains `ON`, but HA reported `dhw_active == true`; L2 integrator is frozen and stagnation alarms are suppressed while the boiler heats domestic hot water.
-6. **`DIV_FLOOR_DELTA_T_COLLAPSED`** (Priority 6): Floor loop $\Delta T < \text{min\_useful\_delta\_t}$; floor pump (and heater, if no radiators are active) paused for `floor_pause_duration_s` (`pump_floor_intended = ON`, `pump_floor_phys = OFF`).
-7. **`DIV_LONG_PAUSE`** (Priority 7): `heater_phys` turned `OFF` after running with all three pumps `OFF` for longer than `long_pause_s` (`heater_intended = ON`).
-8. **`DIV_NONE`** (Priority 8 — Normal): All physical relays match intended commands and heating operates normally.
+2. **`DIV_DEMAND_LOSS`** (Priority 2): one or more per-circuit keep-alives missed beyond `demand_timeout_s`; the effective `*_demand` and the derived heater call drop while `*_intended` stays set (`ERR_HA_KEEPALIVE_TIMEOUT`).
+3. **`DIV_ANTI_SHORT_CYCLE`** (Priority 3): `heater_phys` held `OFF` until `boiler_min_off_ms` expires (`heater_requested = ON`).
+4. **`DIV_DHW_PRIORITY_ACTIVE`** (Priority 4): `heater_phys` remains `ON`, but HA reported `dhw_active == true`; L2 integrator is frozen and stagnation alarms are suppressed while the boiler heats domestic hot water.
+5. **`DIV_FLOOR_DELTA_T_COLLAPSED`** (Priority 5): Floor loop $\Delta T < \text{min\_useful\_delta\_t}$; floor pump (and heater, if no radiators are active) paused for `floor_pause_duration_s` (`pump_floor_intended = ON`, `pump_floor_phys = OFF`).
+6. **`DIV_LONG_PAUSE`** (Priority 6): `heater_phys` turned `OFF` after running with all three pumps `OFF` for longer than `long_pause_s` (`heater_requested = ON`).
+7. **`DIV_AFTER_RUN`** (Priority 7): a circuit demand ended and that circuit's pump is still physically running for the board-owned `pump_stop_after_heating_s` after-run. Reported only when no higher-priority condition is active; it is normal operation, not an error.
+8. **`DIV_NONE`** (Priority 8 — Normal): All physical relays match their coordinated requests and heating operates normally.

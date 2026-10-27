@@ -1,10 +1,10 @@
 # HeatpumpsN — project handover
 
 **Status date:** 2026-10-27
-**Repository:** `/home/gume/HeatpumpsN`, branch `main`, HEAD `bea823e`
-("firmware: real-heating readiness (config v2, mixer window, supervision)")
-**Previous commit:** `36f756d` ("configurable mixer opening ceiling, 85 % default")
-**Firmware version string:** `0.2.0-web`
+**Repository:** `/home/gume/Work/HeatpumpsN`, branch `main`
+**HEAD:** board-managed heater change set (`11e8dc9`, `bd2b3e1`, plus the
+accompanying tests/docs commit)
+**Firmware version string:** `0.3.0-web`
 
 This is the entry point for whoever continues the project. It describes what
 exists, what does not, how to build/flash/test, and what to do next. The
@@ -15,10 +15,12 @@ the design specifications live in [`plans/`](plans/).
 
 ## 1. TL;DR
 
-* The controller firmware is **bench-complete**: it boots, runs a fixed FreeRTOS
-  task set, drives the emulated HHN 1.0 carrier, serves a web portal, talks to
-  MQTT/Home Assistant, and passes its runtime suite on a real ESP32
-  (`esp32dev_sim`, 65/65 checks with `--serial`, 58/58 without).
+* The controller firmware is **bench-complete** on the emulated carrier: it
+  boots, runs a fixed FreeRTOS task set, drives the emulated HHN 1.0 carrier,
+  serves a web portal, talks to MQTT/Home Assistant, and passes its runtime
+  suite on a real ESP32 (`esp32dev_sim`; the exact check count is in
+  `tests/README.md`). The current board-managed-heater change set has only been
+  compiled locally, not yet flashed.
 * The **only flashed board so far is a plain ESP32 devkit running the emulated
   carrier**. The real ESP32-S2 + HomeNet Heatpumps 1.0 carrier has never been
   flashed or validated. That is the single largest open risk.
@@ -49,11 +51,14 @@ one shared boiler/heater call:
 | Floor (mixed) | `pump_floor` + 3-point motorized mixer | blended floor supply |
 
 The ESP32 owns the real-time, safety-critical part: it arbitrates heater/pump
-requests, drives the mixer to a target position, and supervises limits. Home
-Assistant owns comfort logic and sends switch intents. The mixer has **no
-absolute position sensor in normal operation**: position is dead-reckoned from
-travel time, optionally corrected by an encoder reported over MQTT
-(`pos_source = POS_SRC_HA_GENERIC`).
+requests, derives the shared heater call from the three circuit demands, drives
+the mixer to a target position, owns the per-circuit pump after-run, and
+supervises limits. Home Assistant owns comfort logic and sends three per-circuit
+heating-switch demands (`Heating loop 1`, `Heating loop 2`, `Floor heating`),
+repeating each active `ON` as a keep-alive. There is no heater switch. The mixer
+has **no absolute position sensor in normal operation**: position is
+dead-reckoned from travel time, optionally corrected by an encoder reported over
+MQTT (`pos_source = POS_SRC_HA_GENERIC`).
 
 There is also an analysis workstream (old-system telemetry → controller
 parameters, DuckDB) and a SysID/HIL simulation workstream. Both are secondary;
@@ -206,8 +211,8 @@ it last.
 
 | Env | Result | RAM | Flash |
 | --- | --- | --- | --- |
-| `esp32dev_sim` | SUCCESS | 25.2 % (82 436 B) | 77.1 % (1 263 552 B) |
-| `esp32s2` | SUCCESS (compile only) | 28.9 % (94 740 B) | 76.0 % (1 245 467 B) |
+| `esp32dev_sim` | SUCCESS | 25.2 % (82 460 B) | 77.1 % (1 263 476 B) |
+| `esp32s2` | SUCCESS (compile only) | 28.9 % (94 764 B) | 76.0 % (1 245 531 B) |
 
 Only a pre-existing `-Wformat` warning in `wifi_client.cpp`. Never treat a
 compile-only `esp32s2` success as hardware validation.
@@ -288,16 +293,21 @@ unpinned. The watchdog timeout is `max(tick_ms*4 + 1000, 5000)` → currently
 **1900** ("feed withheld") / **1901** with the task ages, so a future reset is
 diagnosable from the boot log.
 
-### 6.3 The three relay states
+### 6.3 The relay states
 
-Every output carries three booleans, and confusing them is the most common
-mistake when reading the code:
+Every pump carries four booleans, and confusing them is the most common mistake
+when reading the code:
 
-* `*_intended` — what HA/portal/Test Mode wants (L4).
-* `*_requested` — what L2's coordination matrix decided (L2).
+* `*_intended` — the last accepted HA/Test Mode command (L4).
+* `*_demand` — the effective heating demand after the per-circuit keep-alive
+  (L2); a missed keep-alive drops it while `*_intended` stays set.
+* `*_requested` — what L2's coordination and after-run decided (L2).
 * `*_phys` — what L1 arbitrated and L0 actually drives (L1→L0).
 
-MQTT switch topics publish `*_phys`; virtual binary sensors publish `*_intended`.
+The heater has no HA command: L2 derives `heater_intended = heater_requested`
+from the three coordinated circuit requests. Test Mode may drive the heater
+manually. MQTT switch topics publish the effective circuit demand; the four
+binary sensors publish `*_phys`.
 
 ### 6.4 Configuration (v2)
 
@@ -362,8 +372,8 @@ Authoritative, in rough order of precedence:
    `boiler ≥ forward ≥ return` within tolerance. 60 s bad → 603, 30 s good →
    clear. Otherwise "not measurable" (no false verdict).
 6. **Heater lockout** — summer mode and anti-seize force the heater off.
-7. **Anti-short-cycle backstop**, **keep-alive timeout** (301),
-   **after-heating timeout** (302).
+7. **Anti-short-cycle backstop** (L1); per-circuit demand-loss (`301`) and pump
+   after-run are L2-owned, so L1 has no separate heater/pump timeout backstop.
 8. **Pump plausibility** — dry-run warning and welded-relay alarm from measured
    power, gated by `pump_power_check_enabled`.
 
@@ -378,13 +388,14 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
   `delay_s` (Smith-predictor style), gated by boiler supply margin, heater
   request and flush state; integrator anti-windup and leak.
 * Floor warm-up flush with a ΔT-collapse pause.
-* DHW priority freeze, long-pause detection, after-heating pump shutdown.
+* DHW priority freeze, long-pause detection, per-circuit demand keep-alive,
+  derived heater call and board-owned pump after-run.
 * Soft setpoint+Δ reaction: at `setpoint + mix_overshoot_delta_c` drive to
   `mix_overshoot_target_pct`, hold until `setpoint − mix_overshoot_recovery_c`,
   raise `WARN_MIX_OVERSHOOT`. Low priority; the L1 hard limit stays
   authoritative.
-* Test Mode bypasses coordination (`intended → requested` directly), but L1
-  still arbitrates and L0 still drives.
+* Test Mode bypasses coordination (`intended → requested` directly) and keeps
+  manual heater control, but L1 still arbitrates and L0 still drives.
 
 ### 6.8 Communications (L4)
 
@@ -414,9 +425,9 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
 | Area | Notes |
 | --- | --- |
 | L0 carrier + emulation | HHN 1.0 profile, extender bit map, safe state, LEDs, 1-Wire, MUX select |
-| L1 supervision | hard/warn overtemp + hysteresis, gradient, sensor postures, role check, summer/anti-seize lockout, anti-short-cycle, keep-alive/after-heating backstops, pump plausibility |
+| L1 supervision | hard/warn overtemp + hysteresis, gradient, sensor postures, role check, summer/anti-seize lockout, anti-short-cycle, pump plausibility |
 | L1 mixer | continuous target-position servo, ceiling/minimum, dynamic max, emergency close, homing/sweep, warning-only anomalies |
-| L2 control | PI + Smith predictor, flush + ΔT pause, DHW freeze/priority, long-pause, inferred DHW, overshoot reaction |
+| L2 control | PI + Smith predictor, flush + ΔT pause, DHW freeze/priority, long-pause, inferred DHW, overshoot reaction, per-circuit keep-alive, derived heater, board after-run |
 | Config | v2 + migration + CRC + sanitize + export/import |
 | Comms | Wi-Fi, MQTT/HA (incl. error sensors + log streaming), portal, WebSocket, OTA |
 | Diagnostics | RAM event/slow/access logs, relay counters, 5 LEDs, boot-safe state |
@@ -474,7 +485,8 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
    ceiling/minimum math, DHW inference state machine, role comparison, PI
    clamping. Keep them platform-independent so they run locally.
 8. **Extend `tests/runtime_check.py`** for every new rule; it is the de-facto
-   regression suite.
+   regression suite. The board-managed-heater change added discovery, keep-alive
+   and after-run checks; run them on the bench before the next feature.
 
 ### P2 — better control
 
@@ -511,7 +523,8 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
    board reset. Stale `.gz` files silently serve old JS.
 5. **The extender has a single writer (`T_io`).** It carries relay bits and MUX
    select lines. Safe byte is `0x00`.
-6. **`*_intended` ≠ `*_requested` ≠ `*_phys`.** Debug the correct stage.
+6. **`*_intended` ≠ `*_demand` ≠ `*_requested` ≠ `*_phys`.** Debug the correct
+   stage. A stale keep-alive clears the demand but not the intent.
 7. **Minimum opening never blocks a close.** If you add a path that closes the
    mixer, do not route it through the minimum.
 8. **L1 is authoritative.** Do not clamp only in the UI; always re-check in L1.
@@ -541,19 +554,10 @@ the files): `io_backend.cpp:268`, `include/hpn/l1_safety.h:10`,
 
 ## 10. Uncommitted local work
 
-At handover the working tree has **only** these local changes; they are
-deliberately not committed:
-
-* `simulation/` — modified `README.md`, `floor_model.py`,
-  `identified_parameters.json`, `plot_run.py`, `simulator.py`; untracked
-  `run_phys_sysid.py`, `verify_system_id.py`, `HIL_System_Identification_Report.md`,
-  `phys_sysid_fits*`, `sim_run_hil_*`, `test_run_*`.
-* `reviews/implementation_review.md` — untracked, written against older commit
-  `6f2d20d`; treat its findings as partly outdated.
-
-These belong to a separate SysID/HIL workstream and were not reviewed in this
-change set. **Do not commit them as part of firmware work** without the owner's
-decision.
+At this handover the working tree contains **only** the board-managed-heater
+change set (firmware, portal, tests and plans). There are no unrelated local
+edits in `simulation/` or untracked review files; the earlier SysID/HIL workspace
+was either committed or cleaned up separately.
 
 **Analysis workstream:** `analysis/handover.md` explains the old-system
 telemetry, DuckDB build (`build_duckdb.py`), data conventions and derived
@@ -567,8 +571,8 @@ untracked.
 - [ ] `pio remote agent list` shows the agent; `pio account login` done.
 - [ ] `curl http://192.168.2.14/api/status` returns `ok: true`.
 - [ ] `pio run -d firmware -e esp32dev_sim` and `-e esp32s2` both succeed.
-- [ ] `python3 tests/runtime_check.py` → 58/58 on the current bench build.
-- [ ] `tests/flash_and_check.sh --serial` → 65/65, no reset, no `501`.
+- [ ] `python3 tests/runtime_check.py` → all checks pass on the current bench build.
+- [ ] `tests/flash_and_check.sh --serial` → all checks pass, no reset, no `501`.
 - [ ] Boot log shows `[l1] mixer opening limit …`, dynamic-max and minimum lines,
       plus `[rtos] task WDT armed at 9000ms`.
 - [ ] `GET /api/config/export` saved as a backup.

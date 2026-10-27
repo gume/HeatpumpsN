@@ -41,8 +41,8 @@ The controller performs closed-loop control of the floor mixer output, coordinat
 
 ### 1.1 Division of Responsibility
 
-* **Home Assistant (HA)** is the **single command authority**. It owns room temperature sensing, comfort logic, per-circuit after-run orchestration, floor forwarding temperature setpoints, Heat/Summer mode selection, DHW heating active notification, and pump/heater switch commands across all three circuits.
-* **Controller** owns real-time floor mixer regulation, relay actuation, L1 safety arbitration, keep-alive and after-heating timeout supervision, local fallback/test mode, and telemetry logging.
+* **Home Assistant (HA)** owns room temperature sensing, comfort logic, floor forwarding temperature setpoints, Heat/Summer mode selection, DHW heating active notification, and the three **per-circuit heating-switch demands** (`heating_loop_1`, `heating_loop_2`, `floor_heating`). HA periodically re-issues each active switch as a keep-alive. It does not command the shared heater or the pump after-run.
+* **Controller** owns real-time floor mixer regulation, relay actuation, L1 safety arbitration, the derived shared heater call, per-circuit keep-alive supervision, the board-owned pump after-run, local fallback/test mode, and telemetry logging.
 * **Observer** is fully independent and intermittent: it reads logs and pushes L3-validated control loop tuning parameters (including optimizing parameters like pause durations). **It has no command path and cannot initiate tests**.
 * **Boiler** owns its own burner power modulation, internal DHW time-sharing diversion, and internal over-temperature/no-flow shutdown.
 

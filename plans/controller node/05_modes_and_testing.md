@@ -8,14 +8,14 @@
 
 ## 1. Heat Mode (`MODE_HEAT` — Normal Operation)
 
-* Standard closed-loop and multi-circuit coordination mode following Home Assistant commands across all three hydraulic circuits (`pump_floor`, `pump_rad1`, `pump_rad2`, and shared `heater`).
+* Standard closed-loop and multi-circuit coordination mode following Home Assistant's three heating-switch commands (`heating_loop_1`, `heating_loop_2`, `floor_heating`). The controller derives the shared `heater` call from those demands.
 
 ---
 
 ## 2. Summer (Dry) Mode & Anti-Seize Exercise (`MODE_SUMMER` / `MODE_ANTI_SEIZE`)
 
 * **Summer Mode Activation:** Commanded by HA (`summer_mode = true`) and persisted in NVS.
-* **Command Rejection:** Any incoming heating (`heater = ON`) or standard comfort pump command from HA is rejected with a warning log, and `*_intended` remains `OFF` so HA detects the mode mismatch.
+* **Command Rejection:** Any incoming heating-switch `ON` command from HA is rejected with a warning log, and `*_intended` remains `OFF` so HA detects the mode mismatch.
 * **Autonomous Anti-Seize Exercise (`MODE_ANTI_SEIZE`):**
   * Every `anti_seize_interval_s` ($\sim 30\text{ days}$), while in Summer mode, the controller autonomously enters `MODE_ANTI_SEIZE`.
   * **Safety Lockout:** L1 strictly forces `heater_phys = OFF`.
@@ -37,7 +37,7 @@ Initiated **only by a human user via the local Web Dashboard** for:
 
 * **Pipeline Intake:** Test mode acts as a command emulator entering at the same L4 intake point as HA commands, remaining **fully subject to all L1 safety rules** (`t_max_hard`, `t_max_warn`, `grad_limit`, sensor faults, and `boiler_min_off_ms`), with a visible countdown timer (`test_mode_rem_s`).
 * **Direct Mixer Jogging:** Specifically in `MODE_TEST_OVERRIDE`, L2 closed-loop mixer control can be paused to allow **direct manual mixer jogging** from the Web Dashboard (nudging `mix_target_pos` by $\pm 2\%$ steps, or storing an explicit target, through the L1 servo) to verify mechanical travel and wiring polarity. A jog may be stopped at any time; the emergency lock refuses jogs while it is held.
-* **Test Mode Expiry Mid-Heating (HA Offline):** When `test_mode_rem_s` reaches $0$, mode transitions to the persisted NVS mode (normally `MODE_HEAT`). If HA is offline, `keepalive_age_s >= demand_timeout_s` is immediately true, which funnels safely into the staged shutdown: `heater_phys` is opened immediately (`DIV_DEMAND_LOSS`), running pumps circulate for `pump_stop_after_heating_s`, and then all pumps turn off (`DIV_AFTER_HEATING_TIMEOUT`).
+* **Test Mode Expiry Mid-Heating (HA Offline):** When `test_mode_rem_s` reaches $0$, mode transitions to the persisted NVS mode (normally `MODE_HEAT`). Test Mode's manual heater intent is no longer authoritative, so the derived heater call follows the circuit demands. If HA is offline, those demands are stale (`demand_age_s >= demand_timeout_s`), which drops the demand and heater request (`DIV_DEMAND_LOSS`, error `301`), while each pump completes its board-owned after-run for `pump_stop_after_heating_s` before stopping.
 
 ### 3.3 Built-In Identification Test Routines (User-Initiated, Observer-Consumed)
 
@@ -48,7 +48,7 @@ Because the Observer has **zero command authority** and cannot trigger relays or
    * **Sequence:** Drives the mixer to the closed end-stop ($1.2 \times \text{travel\_time\_ms}$) to zero-home, then steps through $0\% \rightarrow 25\% \rightarrow 50\% \rightarrow 75\% \rightarrow 100\% \rightarrow 0\%$.
    * **Output:** Logs dead-reckoned position (`pos_est_dr`) vs. encoder position (`pos_encoder`) at each step to calibrate `travel_time_ms`, mechanical hysteresis, and valve characteristic.
 2. **Test 2 — Floor Dead-Time & Step-Response Identification:**
-   * **Precondition:** `pump_floor = ON`, `heater = ON`, and $T_{\text{boiler}}$ hot.
+   * **Precondition:** Test Mode manual outputs `pump_floor = ON`, `heater = ON`, and $T_{\text{boiler}}$ hot.
    * **Sequence:** Holds the mixer at a safe baseline position until $T_{\text{mix\_out}}$ and $T_{\text{return\_floor}}$ stabilize, then executes a bounded step sequence (e.g., $+10\%$, hold $3\text{ min}$, $-10\%$, hold $3\text{ min}$, strictly bounded by `t_max_warn`). If $T_{\text{mix\_out}} \ge t_{\text{max\_warn}}$, the routine immediately aborts, commands the mixer to $0.0$, and logs `TEST_ABORTED_OVERTEMP`.
    * **Output:** Provides clean excitation telemetry in the event/slow logs for the Observer to compute `delay_s`, `gain`, `ff_boiler`, `ff_return`, `kp`, and `ki`.
 3. **Test 3 — Multi-Circuit Radiator Coupling Probe:**

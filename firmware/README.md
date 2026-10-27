@@ -128,16 +128,13 @@ derived from the Wi-Fi MAC address.
 
 | HA domain | Entity | State topic | Command topic |
 | --- | --- | --- | --- |
-| `switch` | Heater | `state/heater` | `cmd/heater` |
-| `switch` | Pump floor | `state/pump_floor` | `cmd/pump_floor` |
-| `switch` | Pump radiator 1 | `state/pump_rad1` | `cmd/pump_rad1` |
-| `switch` | Pump radiator 2 | `state/pump_rad2` | `cmd/pump_rad2` |
-| `binary_sensor` | Heater virtual | `state/heater_virtual` | — |
-| `binary_sensor` | Heater physical | `state/heater_physical` | — |
-| `binary_sensor` | Pump floor virtual | `state/pump_floor_virtual` | — |
-| `binary_sensor` | Pump floor physical | `state/pump_floor_physical` | — |
-| `binary_sensor` | Pump radiator 1 physical | `state/pump_rad1_physical` | — |
-| `binary_sensor` | Pump radiator 2 physical | `state/pump_rad2_physical` | — |
+| `switch` | Heating loop 1 | `state/heating_loop_1` | `cmd/heating_loop_1` |
+| `switch` | Heating loop 2 | `state/heating_loop_2` | `cmd/heating_loop_2` |
+| `switch` | Floor heating | `state/floor_heating` | `cmd/floor_heating` |
+| `binary_sensor` | Pump 1 | `state/pump_1_physical` | — |
+| `binary_sensor` | Pump 2 | `state/pump_2_physical` | — |
+| `binary_sensor` | Floor pump | `state/floor_pump_physical` | — |
+| `binary_sensor` | Heater | `state/heater_physical` | — |
 | `sensor` | Floor pump power | `state/power_floor` | — |
 | `sensor` | Radiator 1 pump power | `state/power_rad1` | — |
 | `sensor` | Radiator 2 pump power | `state/power_rad2` | — |
@@ -150,19 +147,27 @@ derived from the Wi-Fi MAC address.
 | `sensor` | System error code (`0` = no error) | `state/system_error_code` | — |
 | `sensor` | System error text | `state/system_error_text` | — |
 
-The explicit request named “5 binary sensors” but listed heater virtual,
-heater physical, pump 1 physical, pump 2 physical, and pump floor virtual and
-physical. The implementation exposes **six** because the floor virtual and
-floor physical states are separate entities. Remove one discovery call in
-`publish_discovery()` if five was intended.
+The three switches are the only HA command path for heating. Their state
+topics carry the **effective per-circuit demand** after the keep-alive check;
+the four binary sensors carry the true L1/L0 physical output state. There are
+no virtual/duplicate entities. In normal operation L2 derives the shared heater
+call from the three circuit demands (`heater_requested = floor || loop 1 ||
+loop 2`); Test Mode is the only way to drive the heater manually. Each accepted
+switch command resets that circuit's `demand_age_s`, so a repeated `ON` is the
+keep-alive. A missed keep-alive drops the demand (error `301`) but keeps the raw
+intent, and a later `ON` re-arms it. When a demand ends, the board keeps that
+circuit's pump running for `pump_stop_after_heating_s` (pump-only after-run)
+before stopping it.
 
-Switch state topics carry the physical relay state. The virtual binary sensors
-carry the accepted `*_intended` command, while the physical binary sensors
-carry the L1/L0 output state. The floor setpoint command updates
-`Config::floor_setpoint_shadow`; it is an HA-owned runtime shadow, not a
-Category 1 configuration value. MQTT commands set `*_intended`, so on the bench
-they flow through L2 (Test Mode passes them through directly) and L1's safety
-arbitration before reaching the carrier.
+The retired `heater` / `pump_*` switches and the old virtual/physical binary
+sensors are deleted from HA by publishing empty retained discovery payloads on
+every discovery cycle, so upgrades do not leave stale entities behind.
+
+The floor setpoint command updates `Config::floor_setpoint_shadow`; it is an
+HA-owned runtime shadow, not a Category 1 configuration value. MQTT commands set
+`*_intended` and reset the circuit demand age, so on the bench they flow through
+L2 (Test Mode passes them through directly) and L1's safety arbitration before
+reaching the carrier.
 
 State and discovery are retained. The client reconnects every 5 s while the
 broker is unreachable, and the portal reports `mqtt.state`, broker, connect

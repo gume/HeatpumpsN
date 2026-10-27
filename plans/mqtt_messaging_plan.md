@@ -62,7 +62,7 @@ Every discovery payload injects a shared device block:
     "name": "HeatpumpsN Controller",
     "manufacturer": "HeatpumpsN",
     "model": "HomeNet Heatpumps 1.0",
-    "sw_version": "0.2.0-web",
+    "sw_version": "0.3.0-web",
     "configuration_url": "http://192.168.2.14/"
   },
   "availability_topic": "heatpumpsn/controller/status",
@@ -77,16 +77,13 @@ Discovery topics follow the format: `homeassistant/<component>/<node_id>/<object
 
 | Component | Object ID | Entity Name | State Topic | Command Topic | Details & Units |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `switch` | `heater` | Heater | `<base>/state/heater` | `<base>/cmd/heater` | Commands shared boiler heat demand (`ON`/`OFF`). |
-| `switch` | `pump_floor` | Pump floor | `<base>/state/pump_floor` | `<base>/cmd/pump_floor` | Commands floor circuit pump (`ON`/`OFF`). |
-| `switch` | `pump_rad1` | Pump radiator 1 | `<base>/state/pump_rad1` | `<base>/cmd/pump_rad1` | Commands radiator circuit 1 pump (`ON`/`OFF`). |
-| `switch` | `pump_rad2` | Pump radiator 2 | `<base>/state/pump_rad2` | `<base>/cmd/pump_rad2` | Commands radiator circuit 2 pump (`ON`/`OFF`). |
-| `binary_sensor` | `heater_virtual` | Heater virtual | `<base>/state/heater_virtual` | — | `device_class: heat`. Echoes accepted command intent (`heater_intended`). |
-| `binary_sensor` | `heater_physical` | Heater physical | `<base>/state/heater_physical` | — | `device_class: heat`. True hardware relay state (`heater_phys`). |
-| `binary_sensor` | `pump_floor_virtual` | Pump floor virtual | `<base>/state/pump_floor_virtual` | — | `device_class: running`. Accepted floor pump intent (`pump_floor_intended`). |
-| `binary_sensor` | `pump_floor_physical`| Pump floor physical | `<base>/state/pump_floor_physical` | — | `device_class: running`. True physical relay state (`pump_floor_phys`). |
-| `binary_sensor` | `pump_rad1_physical` | Pump radiator 1 physical | `<base>/state/pump_rad1_physical`| — | `device_class: running`. True physical relay state (`pump_rad1_phys`). |
-| `binary_sensor` | `pump_rad2_physical` | Pump radiator 2 physical | `<base>/state/pump_rad2_physical`| — | `device_class: running`. True physical relay state (`pump_rad2_phys`). |
+| `switch` | `heating_loop_1` | Heating loop 1 | `<base>/state/heating_loop_1` | `<base>/cmd/heating_loop_1` | Radiator circuit 1 heat demand (`ON`/`OFF`). Reflects the effective demand after the keep-alive check. |
+| `switch` | `heating_loop_2` | Heating loop 2 | `<base>/state/heating_loop_2` | `<base>/cmd/heating_loop_2` | Radiator circuit 2 heat demand (`ON`/`OFF`). Reflects the effective demand after the keep-alive check. |
+| `switch` | `floor_heating` | Floor heating | `<base>/state/floor_heating` | `<base>/cmd/floor_heating` | Floor circuit heat demand (`ON`/`OFF`). Reflects the effective demand after the keep-alive check. |
+| `binary_sensor` | `pump_1` | Pump 1 | `<base>/state/pump_1_physical` | — | `device_class: running`. True physical radiator-1 pump relay state (`pump_rad1_phys`). |
+| `binary_sensor` | `pump_2` | Pump 2 | `<base>/state/pump_2_physical` | — | `device_class: running`. True physical radiator-2 pump relay state (`pump_rad2_phys`). |
+| `binary_sensor` | `floor_pump` | Floor pump | `<base>/state/floor_pump_physical` | — | `device_class: running`. True physical floor pump relay state (`pump_floor_phys`). |
+| `binary_sensor` | `heater` | Heater | `<base>/state/heater_physical` | — | `device_class: heat`. True physical heater relay state (`heater_phys`). The heater request is derived by the controller; there is no heater switch. |
 | `sensor` | `power_floor` | Floor pump power | `<base>/state/power_floor` | — | `device_class: power`, unit: `W`, precision: 1. |
 | `sensor` | `power_rad1` | Radiator 1 pump power | `<base>/state/power_rad1` | — | `device_class: power`, unit: `W`, precision: 1. |
 | `sensor` | `power_rad2` | Radiator 2 pump power | `<base>/state/power_rad2` | — | `device_class: power`, unit: `W`, precision: 1. |
@@ -98,6 +95,15 @@ Discovery topics follow the format: `homeassistant/<component>/<node_id>/<object
 | `number` | `floor_setpoint` | Floor setpoint | `<base>/state/floor_setpoint` | `<base>/cmd/floor_setpoint`| Range: 5.0–80.0 °C, step: 0.5 °C, mode: `box`, unit: `°C`. |
 | `sensor` | `system_error_code` | System error code | `<base>/state/system_error_code` | — | Diagnostic text sensor. Numeric standardized code; `0` means no error. Published only when the diagnostic posture changes. |
 | `sensor` | `system_error_text` | System error text | `<base>/state/system_error_text` | — | Diagnostic text sensor. Human-readable code name plus active warning/alarm flags; `No error` when healthy. |
+
+#### Retirement of old entities
+
+The switch entities `heater`, `pump_floor`, `pump_rad1`, `pump_rad2` and the
+binary sensors `heater_virtual`, `heater_physical`, `pump_floor_virtual`,
+`pump_floor_physical`, `pump_rad1_physical`, `pump_rad2_physical` are no longer
+published. On every discovery cycle the controller publishes an **empty retained
+payload** to their discovery topics, which is the Home Assistant contract for
+deleting an entity. This keeps upgrades clean without manual HA cleanup.
 
 ---
 
@@ -111,16 +117,32 @@ Accepted payloads: `"ON"`, `"OFF"`, `"1"`, `"0"`, `"true"`, `"false"`.
 
 | Topic | Associated State Variable | Processing Contract & Keep-Alive Semantics |
 | :--- | :--- | :--- |
-| `<base>/cmd/heater` | `state.heater_intended` | Updates logical heat demand. When received as `ON`, **immediately resets `keepalive_age_s = 0`**. HA must repeat this command periodically (e.g. every 5 min) while heating is active. |
-| `<base>/cmd/pump_floor` | `state.pump_floor_intended` | Updates floor circuit circulation demand. |
-| `<base>/cmd/pump_rad1` | `state.pump_rad1_intended` | Updates radiator circuit 1 circulation demand. |
-| `<base>/cmd/pump_rad2` | `state.pump_rad2_intended` | Updates radiator circuit 2 circulation demand. |
+| `<base>/cmd/heating_loop_1` | `state.pump_rad1_intended` | Updates radiator circuit 1 demand. Every accepted command, including a repeated `ON`, resets `demand_age_s[CIRCUIT_RAD1] = 0`. HA must repeat the `ON` periodically (e.g. every 5 min) while heating is active. |
+| `<base>/cmd/heating_loop_2` | `state.pump_rad2_intended` | Updates radiator circuit 2 demand and resets `demand_age_s[CIRCUIT_RAD2]`. Same repeated-`ON` keep-alive. |
+| `<base>/cmd/floor_heating` | `state.pump_floor_intended` | Updates floor circuit demand and resets `demand_age_s[CIRCUIT_FLOOR]`. Same repeated-`ON` keep-alive. |
+
+There is **no heater command**. In normal operation L2 derives
+`heater_intended = floor demand || loop 1 demand || loop 2 demand` after the
+keep-alive and coordination rules. Test Mode may drive the heater manually
+through the local portal.
+
+#### Keep-alive timeout contract
+
+When a circuit's `ON` intent is not refreshed for `demand_timeout_s`:
+
+1. That circuit's effective `*_demand` drops to `false`; `*_intended` stays
+   `true` so a later `ON` re-arms it immediately.
+2. `divergence_reason = DIV_DEMAND_LOSS` and `system_error_code = 301`
+   (`ERR_HA_KEEPALIVE_TIMEOUT`) while any demand is stale.
+3. The derived heater call drops. The pump completes its board-owned
+   `pump_stop_after_heating_s` after-run, then stops.
+4. A repeated `ON` clears the stale state and error `301` on the next tick.
 
 #### Summer Mode Rejection Contract:
-If `config.summer_mode == true`, any incoming `ON` command targeting the heater or circulation pumps is **strictly rejected**:
+If `config.summer_mode == true`, any incoming `ON` command targeting the three heating-loop switches is **strictly rejected**:
 1. An error event (code `1808`) is written to the controller event log.
 2. The corresponding `*_intended` state variable remains `false`.
-3. The virtual binary sensor in Home Assistant reports `OFF`, producing an immediate command-state mismatch notification in HA automations.
+3. The switch state in Home Assistant reports `OFF`, producing an immediate command-state mismatch notification in HA automations.
 
 ### 3.2 Dynamic Setpoint Command
 
@@ -139,16 +161,13 @@ Publishing occurs during `mqtt::tick()` (1000 ms cadence) and executes only when
 
 | Topic | Payload Format | Publishing Trigger / Epsilon |
 | :--- | :--- | :--- |
-| `<base>/state/heater` | `"ON"` / `"OFF"` | On physical relay transition (`heater_phys`). |
-| `<base>/state/pump_floor` | `"ON"` / `"OFF"` | On physical relay transition (`pump_floor_phys`). |
-| `<base>/state/pump_rad1` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad1_phys`). |
-| `<base>/state/pump_rad2` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad2_phys`). |
-| `<base>/state/heater_virtual` | `"ON"` / `"OFF"` | On intent transition (`heater_intended`). |
-| `<base>/state/heater_physical`| `"ON"` / `"OFF"` | On physical relay transition (`heater_phys`). |
-| `<base>/state/pump_floor_virtual` | `"ON"` / `"OFF"` | On intent transition (`pump_floor_intended`). |
-| `<base>/state/pump_floor_physical`| `"ON"` / `"OFF"` | On physical relay transition (`pump_floor_phys`). |
-| `<base>/state/pump_rad1_physical` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad1_phys`). |
-| `<base>/state/pump_rad2_physical` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad2_phys`). |
+| `<base>/state/heating_loop_1` | `"ON"` / `"OFF"` | On effective-demand transition (`pump_rad1_demand`). |
+| `<base>/state/heating_loop_2` | `"ON"` / `"OFF"` | On effective-demand transition (`pump_rad2_demand`). |
+| `<base>/state/floor_heating` | `"ON"` / `"OFF"` | On effective-demand transition (`pump_floor_demand`). |
+| `<base>/state/pump_1_physical` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad1_phys`). |
+| `<base>/state/pump_2_physical` | `"ON"` / `"OFF"` | On physical relay transition (`pump_rad2_phys`). |
+| `<base>/state/floor_pump_physical` | `"ON"` / `"OFF"` | On physical relay transition (`pump_floor_phys`). |
+| `<base>/state/heater_physical` | `"ON"` / `"OFF"` | On physical relay transition (`heater_phys`). |
 | `<base>/state/power_floor` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$ (`kFloatPublishEpsilon`). |
 | `<base>/state/power_rad1` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$. |
 | `<base>/state/power_rad2` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$. |

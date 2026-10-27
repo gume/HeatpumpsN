@@ -70,9 +70,9 @@ When L0 flags a sensor as persistently invalid (after `sensor_error_threshold` c
 
 * Prevents `heater_phys` from transitioning `OFF` $\rightarrow$ `ON` until at least `boiler_min_off_ms` has elapsed since the last `ON` $\rightarrow$ `OFF` transition.
 * On controller cold boot, `boiler_min_off_ms` is initialized as active to protect the boiler burner against rapid cycling during power brownouts.
-* While held off, sets `divergence_reason = DIV_ANTI_SHORT_CYCLE` (keeping `heater_intended = ON`).
+* While held off, sets `divergence_reason = DIV_ANTI_SHORT_CYCLE` (keeping `heater_requested = ON`).
 
-### 2.7 Supervision Timeout Backstops
+### 2.7 Supervision Timeout Ownership
 
-* **Heater Keep-Alive Backstop:** Verifies that `heater_phys == OFF` whenever `keepalive_age_s >= demand_timeout_s` (outside of active local Test Override mode), enforcing `divergence_reason = DIV_DEMAND_LOSS`.
-* **Pump After-Heating Backstop:** Verifies that `pump_floor_phys == OFF`, `pump_rad1_phys == OFF`, and `pump_rad2_phys == OFF` whenever `after_heating_timer_s >= pump_stop_after_heating_s` and `heater_phys == OFF` (outside of active Anti-seize or local Test Override mode), enforcing `divergence_reason = DIV_AFTER_HEATING_TIMEOUT`.
+* **Demand-loss and after-run timers are L2-owned.** L1 does not run its own keep-alive or after-heating timers; it only arbitrates the `*_requested` values it receives. L2 drops a stale circuit demand after `demand_timeout_s` and applies the per-circuit pump after-run for `pump_stop_after_heating_s` (see `04_control_and_coordination_l2.md` §1.1 and §2.4).
+* L1 still enforces the unconditional safety rules above; a stale demand can never keep the heater energized because the derived heater request is already `OFF` when it reaches L1.

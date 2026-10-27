@@ -62,9 +62,9 @@ One-glance overview. No interaction except navigation.
 | Element | Source |
 |---|---|
 | Mode badge (Heat / Summer / Test) | mode state + authoritative source |
-| 3 circuit cards: pump cmd/phys state, after-run countdown | live state |
+| 3 circuit cards: demand/intent state, physical pump state, after-run countdown | live state |
 | Mixer position (commanded %, encoder %) | live state |
-| Heater: cmd vs. phys, reason code | live state |
+| Heater: requested vs. phys (derived from circuit demand), reason code | live state |
 | Boiler supply temp, mixer forward/return temps | live state |
 | MQTT connected / last disconnect | connection module |
 | Wi-Fi RSSI, uptime | system module |
@@ -80,7 +80,7 @@ Single page combining all circuits and the heater. Everything read-only.
 ┌──────────────┬──────────────┬───────────────────────────┐
 │ Radiator 1   │ Radiator 2   │ Floor (Mixer)             │
 │ pump: ● on   │ pump: ○ off  │ pump: ● on                │
-│ cmd:  on     │ cmd:  off    │ mixer pos: 42%            │
+│ demand: on   │ demand: off  │ mixer pos: 42%            │
 │ after-run: — │ after-run: — │ vs encoder: 41% ✓         │
 └──────────────┴──────────────┴───────────────────────────┘
 ┌──────────────────────────────────────────────────────────┐
@@ -90,9 +90,9 @@ Single page combining all circuits and the heater. Everything read-only.
 │   forward (mixed out): 34.2 °C                           │
 └──────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────┐
-│ Heater                                                   │
-│   cmd: ON   phys: ON ✓   reason: rad1 pump active        │
-│   demand keep-alive: last seen 12 s ago                  │
+│ Heater (board-managed)                                   │
+│   requested: ON   phys: ON ✓   reason: heating           │
+│   source: heating loop 1 demand                          │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -104,9 +104,9 @@ Single page combining all circuits and the heater. Everything read-only.
 Each temperature shows: value, sensor ID, staleness (e.g. "2 s ago"), and health state (ok / stale / error). If a sensor is in error, the tile shows the last valid value greyed out with a warning chip.
 
 **Heater block rules:**
-- `heater_cmd` and `heater_phys` always side by side; a mismatch is highlighted red (§5.6).
-- Reason code shown whenever the controller switched the heater off (§5.6).
-- Demand keep-alive age displayed; turns amber when approaching the demand-loss timeout, red when expired.
+- `heater_requested` and `heater_phys` are always shown side by side; a mismatch is highlighted red (§5.6). The heater has no HA command: it is derived by L2 from the three circuit demands, and Test Mode is the only manual heater source.
+- Reason code is shown whenever the controller holds the heater off (§5.6).
+- Each circuit card shows its own `demandAge` (time since the last accepted ON) and, after the demand ends, the remaining board-owned `afterRun`. The age turns amber when approaching `demand_timeout_s` and red when the demand has gone stale.
 
 ### 3.3 Diagnostics
 
@@ -155,7 +155,7 @@ Auto-expires after 2 h. Never persisted across reboot.
 - Toggles for pump_rad1, pump_rad2, pump_floor, heater.
 - Mixer: open / close / stop buttons + target position slider.
 - **Every command goes through the command intake + Layer 1 arbitration.** If arbitration refuses (e.g. heater-on without an active pump per coordination rules), the UI shows the refusal with the reason code — the toggle visually snaps back with a toast, it never pretends to have succeeded.
-- State feedback uses the same cmd/phys pairing as the Plant page, so relay faults are visible during testing.
+- State feedback uses the same demand/phys pairing as the Plant page, so relay faults are visible during testing.
 
 **Test sequences block:**
 
@@ -174,7 +174,7 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 
 **3.5.1 Safety & Timeouts**
 - Demand-loss timeout (range-limited)
-- After-heating timeout, global + per-pump overrides
+- Board after-run time (`pump_stop_after_heating_s`, applied per circuit)
 - Anti-seize schedule (interval, duration)
 - Mixer travel timeout (max allowed travel time before fault)
 
@@ -296,9 +296,9 @@ unchanged frames. Changes must not block `T_io`.
   "mode": {"current": "heat", "source": "ha"},
   "mqtt": {"connected": true, "state": "connected", "broker": "192.168.2.10", "port": 1883, "connectCount": 3, "lastDisconnect": 1720000000, "errors": 0},
   "circuits": {
-    "rad1": {"cmd": 1, "phys": 1, "afterRun": 0},
-    "rad2": {"cmd": 0, "phys": 0, "afterRun": 0},
-    "floor": {"cmd": 1, "phys": 1, "mixerPos": 42, "encoderPos": 41}
+    "rad1": {"intended": 1, "demand": 1, "cmd": 1, "phys": 1, "demandAge": 12, "afterRun": 0},
+    "rad2": {"intended": 0, "demand": 0, "cmd": 0, "phys": 0, "demandAge": 0, "afterRun": 0},
+    "floor": {"intended": 1, "demand": 1, "cmd": 1, "phys": 1, "demandAge": 12, "afterRun": 0, "mixerPos": 42, "encoderPos": 41}
   },
   "temps": {
     "boilerSupply": 62.4,
@@ -307,7 +307,7 @@ unchanged frames. Changes must not block `T_io`.
     "mixerForward": 34.2,
     "return": 33.8
   },
-  "heater": {"cmd": 1, "phys": 1, "reason": "rad1_active", "demandAge": 12},
+  "heater": {"automatic": true, "cmd": 1, "requested": 1, "phys": 1, "reason": "heating"},
   "safety": {"flags": [], "latched": []},
   "sensors": [{"id": "28ff...", "val": 62.4, "age": 2, "state": "ok"}],
   "test": {"active": false, "remaining": 0}
@@ -469,7 +469,7 @@ A Node.js server reproduces the full API so the frontend can be developed and te
 mock-server/
   server.js        # Express: serves frontend/, implements /api/* and /ws
   state.js         # simulated plant state (temps drift, pumps toggle,
-                   #   heater cmd/phys with occasional mismatch, sensor errors)
+                   #   heater requested/phys with occasional mismatch, sensor errors)
   arbitration.js   # simplified Layer 1 rules so test-mode refusals are realistic
   frontend/        # the actual SPA — identical files later deployed to LittleFS
 ```
@@ -477,7 +477,7 @@ mock-server/
 Key behaviors to simulate:
 - Temperatures drift realistically (first-order lag toward a target)
 - Sensor dropouts (random stale/error states) to exercise the health UI
-- A deliberate cmd/phys mismatch injection for heater/pumps
+- A deliberate requested/phys mismatch injection for heater/pumps
 - Arbitration refusals (e.g. heater-on with no pump active) to verify the UI shows reason codes
 - Test mode countdown timer with auto-expiry
 
@@ -509,7 +509,7 @@ This means the entire UI can be clicked through, themed, and reviewed before any
 
 1. **Mixer control type** — 3-point (open/close/stop) wires vs. travel-to-percentage only; affects Test Mode manual controls and Hardware & Pins page.
 2. **Slow log retention** — resolved: logs are RAM-only (96 events, 180 slow samples) and never consume flash; optional MQTT streaming provides external retention.
-3. **After-run timeout granularity** — global vs. per-pump (plan §9.1 open question); the Safety settings page should be built to accommodate both.
+3. ~~After-run timeout granularity — global vs. per-pump~~ Resolved: one `pump_stop_after_heating_s` value applied per circuit, owned by the board; the Safety settings page shows it once.
 4. **Summer mode authority** — currently local NVS setting with HA override; confirm HA integration treats this the same way.
 
 ---

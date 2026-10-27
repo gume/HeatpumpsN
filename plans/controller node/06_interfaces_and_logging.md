@@ -16,10 +16,11 @@
   * `201` (`ERR_SENSOR_MIX_LOST`): Floor mixed output temperature sensor (`T_mix_out`) persistent fault.
   * `202` (`ERR_SENSOR_RET_LOST`): Floor return temperature sensor (`T_return_floor`) persistent fault.
   * `203` (`ERR_SENSOR_BOILER_LOST`): Boiler supply temperature sensor (`T_boiler`) persistent fault.
-  * `301` (`ERR_HA_KEEPALIVE_TIMEOUT`): HA heater keep-alive message missed beyond `demand_timeout_s`.
-  * `302` (`ERR_AFTER_HEAT_TIMEOUT`): Pump after-heating run expired without heat demand (`pump_stop_after_heating_s`).
+  * `301` (`ERR_HA_KEEPALIVE_TIMEOUT`): a heating-loop keep-alive was missed beyond `demand_timeout_s`; the demand is stale until the next ON.
   * `401` (`ERR_RELAY_FAULT_WELDED`): Welded relay contact detected by pump power sensor.
   * `501` (`ERR_NVS_DATA_CORRUPTED`): Configuration CRC check failed in NVS; compiled-in safety defaults loaded.
+  * `603` (`ERR_SENSOR_ROLE_SUSPECT`): Sensor-role plausibility check failed while heating.
+  * `604` (`ERR_DHW_INFER_TIMEOUT`): Inferred DHW charging exceeded `dhw_infer_max_s`.
 * The NVS warning/error is latched for the current boot. Saving settings rewrites the config blob but does not clear the live flag; a reboot clears it once every persisted blob validates. This keeps counter or anti-seize corruption visible instead of masking it behind a config save.
 * A companion **`system_error_text`** text sensor publishes the human-readable meaning of the current code, for example `501: NVS checksum mismatch (saved NVS data rejected; defaults loaded)`. With `ERR_OK` and no flags the payload is `No error`; active warning/alarm bits are appended, so the text also changes when the diagnostic posture changes.
 * Both entities are published only when `system_error_code` or `active_alarms` changes. Ordinary relay, pump, mixer and setpoint transitions do not update them.
@@ -38,7 +39,7 @@ The panels are exposed through the web portal (`/api/log/events`, `/api/log/slow
 * **Mixer Moves:** start timestamp, direction (`OPEN`/`CLOSE`), energized duration ($\text{ms}$), and surrounding temperatures/encoder delta.
 * **Safety & Sensor Events:** every L1 safety trip/recovery and L0 sensor glitch or persistent fault with state context.
 * **Configuration Changes:** parameter name, old value, new value, ownership category (Cat 1 / Cat 2 / Cat 3), and config version counter.
-* **Command vs. Physical Divergence Transitions:** every transition where `heater_intended != heater_phys` or `pump_*_intended != pump_*_phys`, recording the new `divergence_reason` and `system_error_code`.
+* **Demand vs. Physical Divergence Transitions:** every transition where a circuit's effective demand or request differs from its physical relay, or where the derived heater request differs from `heater_phys`, recording the new `divergence_reason` and `system_error_code`.
 * **Lifecycle & Mode Transitions:** warm-up flush start/end, Anti-seize start/end, and Test Mode / identification routine start/end.
 
 ---
@@ -47,18 +48,17 @@ The panels are exposed through the web portal (`/api/log/events`, `/api/log/slow
 
 ### 2.1 MQTT / Home Assistant Contract
 
-#### Dual-State Switch & Binary Sensor Architecture
-* **HA Switches (Commands $\rightarrow$ Controller):** HA commands heating via switches (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`).
-* **HA Binary Sensors (Controller $\rightarrow$ HA):**
-  1. **Intended State Echo (`*_intended`):** Reflects the accepted command state. For `heater` and `pump_floor`, `*_intended` remains `ON` even when the controller internally pauses the relay due to safety, $\Delta T$ collapse, anti-short-cycle, or DHW priority — preventing false HA communication error alerts. (In Summer mode, rejected `ON` commands keep `*_intended = OFF` to intentionally alert HA).
-  2. **Physical State (`*_phys`):** Reports the true hardware relay state (`heater_phys`, `pump_floor_phys`, `pump_rad1_phys`, `pump_rad2_phys`) for monitoring and energy accounting.
+#### Heating Demand & Physical Sensor Architecture
+* **HA Switches (Commands $\rightarrow$ Controller):** HA commands heating via three per-circuit switches: `heating_loop_1`, `heating_loop_2`, `floor_heating`. There is no heater switch.
+* **Keep-alive:** each accepted switch command, including a repeated `ON`, refreshes that circuit's `demand_age_s`. A missed refresh drops the effective demand but keeps `*_intended` set; error `301` is reported while stale.
+* **HA Binary Sensors (Controller $\rightarrow$ HA):** the four physical outputs: `Pump 1`, `Pump 2`, `Floor pump`, `Heater` (`*_phys`). Virtual/duplicate entities are not published.
+* **Derived heater:** in normal operation L2 sets `heater_requested = floor demand || loop 1 demand || loop 2 demand` after coordination and before the pump-only after-run.
 
 #### Subscribed Command Topics (HA $\rightarrow$ Controller)
 Scoped under `<mqtt_base_topic>/cmd/`. Implemented today:
-* `<mqtt_base_topic>/cmd/pump_floor` (`ON` / `OFF`)
-* `<mqtt_base_topic>/cmd/pump_rad1` (`ON` / `OFF`)
-* `<mqtt_base_topic>/cmd/pump_rad2` (`ON` / `OFF`)
-* `<mqtt_base_topic>/cmd/heater` (`ON` / `OFF`)
+* `<mqtt_base_topic>/cmd/heating_loop_1` (`ON` / `OFF`, repeated `ON` is the keep-alive)
+* `<mqtt_base_topic>/cmd/heating_loop_2` (`ON` / `OFF`)
+* `<mqtt_base_topic>/cmd/floor_heating` (`ON` / `OFF`)
 * `<mqtt_base_topic>/cmd/floor_setpoint` ($^{\circ}\text{C}$, ideal floor forwarding temperature $\rightarrow$ `floor_setpoint_shadow`)
 
 Reserved for the full L2/L3 contract:
@@ -70,9 +70,8 @@ Reserved for the full L2/L3 contract:
 The current HA integration uses one retained topic per entity so MQTT discovery
 can bind directly. Implemented today:
 * `<mqtt_base_topic>/status` (`online`/`offline`, retained LWT — strictly for HA visibility; triggers no control action)
-* `<mqtt_base_topic>/state/heater`, `pump_floor`, `pump_rad1`, `pump_rad2` (physical relay state)
-* `<mqtt_base_topic>/state/heater_virtual`, `heater_physical`
-* `<mqtt_base_topic>/state/pump_floor_virtual`, `pump_floor_physical`, `pump_rad1_physical`, `pump_rad2_physical`
+* `<mqtt_base_topic>/state/heating_loop_1`, `heating_loop_2`, `floor_heating` (effective circuit demand)
+* `<mqtt_base_topic>/state/pump_1_physical`, `pump_2_physical`, `floor_pump_physical`, `heater_physical` (physical relay state)
 * `<mqtt_base_topic>/state/power_floor`, `power_rad1`, `power_rad2`, `power_mixer` (W)
 * `<mqtt_base_topic>/state/mixer_state` (`idle`, `opening`, `closing`)
 * `<mqtt_base_topic>/state/temp_boiler`, `temp_return`, `temp_mix` ($^{\circ}\text{C}$ or `unknown`)
@@ -87,8 +86,8 @@ Optional telemetry log streams (enabled by `mqtt_log_enabled`, JSON lines):
 Reserved aggregate/observer topics:
 * `<mqtt_base_topic>/state/temperatures` (`T_boiler`, `T_return_floor`, `T_mix_out`, health flags)
 * `<mqtt_base_topic>/state/mixer` (`pos_est_dr`, `pos_encoder`, `pos_source`)
-* `<mqtt_base_topic>/state/relays` (Intended and physical states for all 3 pumps and heater)
-* `<mqtt_base_topic>/state/divergence_reason` (`none`, `floor_delta_t_collapsed`, `overtemp_pause`, `long_pause`, `anti_short_cycle`, `demand_loss`, `after_heating_timeout`, `dhw_priority_active`)
+* `<mqtt_base_topic>/state/relays` (intended, demand, requested and physical states for all 3 pumps and the derived heater)
+* `<mqtt_base_topic>/state/divergence_reason` (`none`, `floor_delta_t_collapsed`, `overtemp_pause`, `long_pause`, `anti_short_cycle`, `demand_loss`, `after_run`, `dhw_priority_active`)
 * `<mqtt_base_topic>/state/mode` (`heat`, `summer`, `anti_seize`, `test_override`) + `test_mode_rem_s` countdown
 * `<mqtt_base_topic>/state/alarms` (Active alarm/warning bitmask, flush state, config version)
 
@@ -96,9 +95,8 @@ Reserved aggregate/observer topics:
 Discovery is published retained to
 `homeassistant/<component>/<node_id>/<object_id>/config`, with `<node_id>`
 derived from the Wi-Fi MAC. The current entity set is:
-* 4 switches: heater, pump_floor, pump_rad1, pump_rad2;
-* 6 binary sensors: heater virtual/physical, pump floor virtual/physical,
-  pump radiator 1 physical, pump radiator 2 physical;
+* 3 switches: `heating_loop_1`, `heating_loop_2`, `floor_heating`;
+* 4 binary sensors: `Pump 1`, `Pump 2`, `Floor pump`, `Heater` (all physical);
 * 4 power sensors: floor pump, radiator 1 pump, radiator 2 pump, mixer motor;
 * 1 mixer-state enum sensor (`idle`/`opening`/`closing`);
 * 3 temperature sensors: boiler supply, floor return, mixer forward;
@@ -106,9 +104,9 @@ derived from the Wi-Fi MAC. The current entity set is:
 * 2 diagnostic text sensors: `system_error_code` (numeric code, `0` = normal)
   and `system_error_text` (message and active warning/alarm flags).
 
-The request said “5 binary sensors” but listed floor virtual and floor
-physical separately, so the implementation exposes six. Drop one discovery
-call if five was intended.
+The retired `heater`/`pump_*` switches and the old virtual/physical binary
+sensors are removed by publishing empty retained discovery payloads on every
+discovery cycle.
 
 ### 2.2 Local Web Dashboard + WiFi Manager
 
@@ -116,7 +114,7 @@ call if five was intended.
 * **Status LEDs:** L4 maps live state to the five addressable LEDs described in `02_hardware_and_l0.md` §1.2. LED 0 shows system/comms health, LED 1 boiler/heater/DHW, LED 2 floor circuit and mixer, and LEDs 3–4 the radiator circuits. L0 owns the NeoPixel write; the animator only supplies RGB frames.
 * **Provisioning:** Captive portal and web UI for WiFi credentials, fallback AP settings, and MQTT broker parameters.
 * **Configuration Editor:** Full read/write access to **Category 1 (Long-Term Configuration)** parameters; read-only display of **Category 2 (HA)** and **Category 3 (Observer)** parameters.
-* **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual relay toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater`), direct mixer jogging controls (open/close $\pm 2\%$ nudges and stop), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).
+* **Test Override Mode UI:** Start/stop time-limited Test mode (`test_mode_max_s` countdown), manual output toggles (`pump_floor`, `pump_rad1`, `pump_rad2`, `heater` — Test Mode keeps manual heater control), direct mixer jogging controls (open/close $\pm 2\%$ nudges and stop), and launch buttons for the built-in Observer Identification Test Routines (`05_modes_and_testing.md` §3.3).
 
 ### 2.3 Observer Interface (L3 Parameter Ingestion)
 

@@ -12,17 +12,17 @@
 
 Communication between Home Assistant (HA) and the controller uses **switches** and **sensors**:
 
-* **Switch Intents:** `heater`, `pump_floor`, `pump_rad1`, and `pump_rad2` are HA switches commanding the controller `ON`/`OFF` based on HA's comfort logic. These set `*_intended` in `SystemState`.
-* **Heater Keep-Alive:** While heat is demanded, HA repeatedly issues the `heater` switch `ON` command (e.g., every $5\text{ minutes}$). Each reception resets `keepalive_age_s = 0` and signals that the HA integration/connection is alive.
-* **Keep-Alive Timeout (`demand_timeout_s`):** If no heater keep-alive message is received within `demand_timeout_s` (e.g., $\text{refresh\_time} + 1\text{ min}$, or $2 \times \text{refresh\_time} + 1\text{ min}$), the controller declares HA communication lost and immediately shuts down the heater (`heater_requested = OFF`, `heater_phys = OFF`, `heater_intended` remains `ON` as last commanded, `divergence_reason = DIV_DEMAND_LOSS`).
-* **Staged Pump Shutdown (`pump_stop_after_heating_s`):** When the heater keep-alive expires, or when HA turns the `heater` switch `OFF` while pumps remain commanded `ON`, the after-heating timer (`after_heating_timer_s`) starts. Running pumps continue operating until `after_heating_timer_s >= pump_stop_after_heating_s`, after which all pumps are stopped (`pump_*_phys = OFF`, `pump_*_intended` remains `ON`, `divergence_reason = DIV_AFTER_HEATING_TIMEOUT`). Internal layers (such as L2 flush or L1 cooling safety) may govern floor pump state within safety rules.
-* **Explicit Pump Shutdown by HA:** If HA explicitly commands a pump off (`pump_*_intended = OFF`), the controller turns that pump `OFF` **immediately**, regardless of `after_heating_timer_s`.
-* **Pumps Switched ON Without Heater:** If HA switches any pump `ON` while `heater` is `OFF`, the same `pump_stop_after_heating_s` timer starts immediately. There is no keep-alive for pumps alone; pumps cannot run indefinitely without active heater demand.
+* **Heating-switch intents:** `heating_loop_1`, `heating_loop_2`, and `floor_heating` are HA switches commanding the controller `ON`/`OFF` based on HA's comfort logic. These set `pump_rad1_intended`, `pump_rad2_intended`, and `pump_floor_intended` in `SystemState`.
+* **Per-circuit keep-alive:** While a circuit demands heat, HA repeatedly issues that circuit's switch `ON` command (e.g., every $5\text{ minutes}$). Each accepted command — including a repeated `ON` — resets `demand_age_s[circuit] = 0`. The repetition is the liveness signal for that circuit.
+* **Keep-alive timeout (`demand_timeout_s`):** If a circuit's `ON` is not refreshed within `demand_timeout_s` (e.g., $2 \times \text{refresh\_time}$), that circuit's effective `*_demand` drops to `false` while `*_intended` remains `ON` as last commanded. The controller reports `divergence_reason = DIV_DEMAND_LOSS` and `ERR_HA_KEEPALIVE_TIMEOUT` (`301`) while any demand is stale. A later `ON` re-arms the demand immediately and clears the error.
+* **Derived heater call:** There is no HA heater switch. In normal operation, after the keep-alive and coordination rules, L2 derives `heater_intended = heater_requested = req_floor || req_rad1 || req_rad2`. A pump after-run never keeps the heater on.
+* **Board-owned pump after-run (`pump_stop_after_heating_s`):** When a circuit's demand ends (HA turns the switch `OFF` or the keep-alive expires), L2 keeps that circuit's pump requested for `pump_stop_after_heating_s`, then stops it. Each circuit has its own after-run timer. During this window `*_demand = OFF`, `*_requested = ON`, `*_phys = ON` and `divergence_reason = DIV_AFTER_RUN` (when no higher-priority condition is active). HA does not orchestrate this after-run.
+* **Explicit switch OFF:** HA turning a heating switch `OFF` ends the demand immediately, but the board still applies that circuit's after-run before the pump physically stops. Set `pump_stop_after_heating_s = 0` to disable the run-on.
 
 ### 1.2 Boiler DHW Time-Sharing & Heat-Drop Handling
 
 * **DHW Priority & Time-Sharing (Physical Relay ON, Heat Diverted):**
-  The boiler time-shares its capacity between Domestic Hot Water (DHW) and space heating. DHW takes priority and lasts approximately $5$–$15\text{ minutes}$. During this window, **the heater switch and physical relay remain ON (`heater_intended = ON`, `heater_phys = ON`), but no heating flow or temperature rise occurs in the distribution circuits** because the boiler internally diverts all heat to the DHW tank.
+  The boiler time-shares its capacity between Domestic Hot Water (DHW) and space heating. DHW takes priority and lasts approximately $5$–$15\text{ minutes}$. During this window, **the heater remains requested by the active circuit demands and the physical relay remains ON (`heater_requested = ON`, `heater_phys = ON`), but no heating flow or temperature rise occurs in the distribution circuits** because the boiler internally diverts all heat to the DHW tank.
 * **HA Notification (`dhw_active`):** HA notifies the controller of active DHW heating via `dhw_active = true` / `false`. This is the preferred source and remains authoritative when a meter is configured. Optionally, if no meter is configured, L2 can infer the same condition from a boiler-temperature drop while the heater is on (`dhw_infer_enabled`); see §2 rule 7.
 * **Stagnation & Cold-Supply Protection (No False Errors):**
   When `dhw_active == true`, L2 adapts to prevent misinterpreting stagnant or dropping $T_{\text{boiler}}$ as a control fault or accumulating integrator windup:
@@ -31,7 +31,7 @@ Communication between Home Assistant (HA) and the controller uses **switches** a
 
 ### 1.3 Summer Mode Command Rejection
 
-* In **Summer mode** (`mode == MODE_SUMMER`), if HA commands `heater` or any `pump_*` switch `ON`, the controller rejects the command, logs a warning event, and keeps the corresponding `*_intended` echo sensor `OFF`. This intentional mismatch triggers an error notification in the HA integration as designed.
+* In **Summer mode** (`mode == MODE_SUMMER`), if HA commands any of the three heating-loop switches `ON`, the controller rejects the command, logs a warning event, and keeps the corresponding `*_intended` state `OFF`. This intentional mismatch triggers an error notification in the HA integration as designed.
 
 ---
 
@@ -74,32 +74,37 @@ Communication between Home Assistant (HA) and the controller uses **switches** a
 
 ### 2.4 Multi-Circuit Heater & Pump Coordination
 
-1. **Normal After-Run (HA-Driven):**
-   * When a heating cycle finishes, HA commands `heater = OFF` while keeping the relevant circuit pump(s) `ON` to circulate residual heat, then commands the pump(s) `OFF`. Supervised by `pump_stop_after_heating_s` (§1.1).
-2. **Floor $\Delta T$-Collapse Rule (Early Floor Shutdown & Planned Pause):**
+1. **Heater Derivation:**
+   * After the keep-alive, summer/anti-seize and coordination rules, L2 computes the base requests `req_floor`, `req_rad1`, `req_rad2` and derives the heater call as `req_floor || req_rad1 || req_rad2`.
+   * The heater request is set before the pump after-run is applied: an after-run circulates residual heat with the heater off.
+2. **Board-Owned Pump After-Run:**
+   * When a circuit demand ends while that circuit's pump is requested or physically running, L2 starts that circuit's after-run (`after_run_age_s[circuit]`).
+   * The circuit's pump stays requested until `pump_stop_after_heating_s` expires, then stops. The heater never stays on for an after-run.
+   * `divergence_reason = DIV_AFTER_RUN` is reported while an after-run is the only active condition. HA does not orchestrate this; it only observes the switch state and the physical pump sensor.
+3. **Floor $\Delta T$-Collapse Rule (Early Floor Shutdown & Planned Pause):**
    * When the floor circuit is running post-flush (`t_ret_flush_valid == true`) and its temperature drop persistently collapses:
      $$T_{\text{mix\_out}} - T_{\text{return\_floor}} < \text{min\_useful\_delta\_t}$$
      the floor slab is thermally saturated.
    * **Action on Floor Circuit:** L2 sets `pump_floor_requested = OFF` (keeping `pump_floor_intended = ON`), drives the mixer to $0.0$, sets `flush_state = PAUSED_DELTA_T`, and sets `divergence_reason = DIV_FLOOR_DELTA_T_COLLAPSED`.
-   * **Action on Shared Heater:** If **neither radiator pump is running** (`pump_rad1_phys == OFF && pump_rad2_phys == OFF`), L2 also sets `heater_requested = OFF` (keeping `heater_intended = ON`) for the planned pause duration `floor_pause_duration_s` (optimized by the Observer). If any radiator pump is running, `heater_phys` remains `ON` to serve the radiators.
+   * **Action on Shared Heater:** If **neither radiator pump is requested or running** (`req_rad1 == false && req_rad2 == false`), the derived heater call drops for the planned pause duration `floor_pause_duration_s` (optimized by the Observer). If any radiator circuit is active, `heater_phys` remains `ON` to serve the radiators.
    * **Recovery:** After `floor_pause_duration_s` expires, L2 restarts `pump_floor` and runs a Warm-Up Flush (§2.3) to sample whether a useful $\Delta T$ has returned.
-3. **"Heater ON + All Pumps OFF" Policy (`long_pause_s`):**
+4. **"Heater ON + All Pumps OFF" Policy (`long_pause_s`):**
    * Having `heater_phys == ON` while all three pumps (`pump_floor_phys`, `pump_rad1_phys`, `pump_rad2_phys`) are `OFF` is permitted by L1 (relying on the boiler's internal modulation/cutout) and raises a diagnostic warning (`WARN_HEATER_NO_PUMP`), not a safety trip.
-   * If this state persists beyond `long_pause_s`, L2 sets `heater_requested = OFF` (`heater_intended` remains `ON`, `divergence_reason = DIV_LONG_PAUSE`).
+   * If this state persists beyond `long_pause_s`, L2 drops the heater request through `DIV_LONG_PAUSE`.
 
 ---
 
 ## 3. Multi-Circuit Coordination Summary Table
 
-| Situation | `heater_intended` / `heater_phys` | `pump_floor_intended` / `pump_floor_phys` | `pump_rad1,2_intended` / `pump_rad1,2_phys` | Mixer Target | Notes & Divergence Reason |
+| Situation | Heater `requested` / `phys` | Floor `demand` / `phys` | Radiators `demand` / `phys` | Mixer Target | Notes & Divergence Reason |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Normal heating (all/any)** | `ON` / `ON` | per HA / same | per HA / same | Closed ($0.0$) if `pump_floor=OFF`, else L2 loop | Standard operation (`DIV_NONE`) |
-| **DHW Priority Active (`dhw_active = true`)** | `ON` / **`ON`** | per HA / same | per HA / same | Regulates or holds | Boiler relay ON, heat diverted internally to DHW; integrator frozen (`DIV_DHW_PRIORITY_ACTIVE`) |
-| **After-run (HA-driven)** | `OFF` / `OFF` | per HA / same | per HA / same | Holds or closes | Supervised by `pump_stop_after_heating_s` (`DIV_NONE`) |
-| **Floor $\Delta T$ collapsed (Radiators OFF)** | `ON` / **`OFF`** | `ON` / **`OFF`** | `OFF` / `OFF` | **Closed ($0.0$)** | Floor saturated $\rightarrow$ pauses floor pump & heater for `floor_pause_duration_s` (`DIV_FLOOR_DELTA_T_COLLAPSED`) |
+| **Normal heating (all/any)** | derived `ON` / `ON` | per HA / same | per HA / same | Closed ($0.0$) if floor demand OFF, else L2 loop | Standard operation (`DIV_NONE`) |
+| **DHW Priority Active (`dhw_active = true`)** | derived `ON` / **`ON`** | per HA / same | per HA / same | Regulates or holds | Boiler relay ON, heat diverted internally to DHW; integrator frozen (`DIV_DHW_PRIORITY_ACTIVE`) |
+| **Board after-run** | `OFF` / `OFF` | `OFF` / **`ON`** until timeout | `OFF` / **`ON`** until timeout | Holds or closes | Pump-only run-on after a demand ends (`DIV_AFTER_RUN`) |
+| **Floor $\Delta T$ collapsed (Radiators OFF)** | `OFF` / **`OFF`** | `ON` / **`OFF`** | `OFF` / `OFF` | **Closed ($0.0$)** | Floor saturated $\rightarrow$ pauses floor pump & heater for `floor_pause_duration_s` (`DIV_FLOOR_DELTA_T_COLLAPSED`) |
 | **Floor $\Delta T$ collapsed (Radiator ON)** | `ON` / `ON` | `ON` / **`OFF`** | `ON` / `ON` | **Closed ($0.0$)** | Stops floor pump & closes mixer; boiler stays ON for radiators (`DIV_FLOOR_DELTA_T_COLLAPSED`) |
-| **Floor Flush phase** | per HA / same | `ON` / `ON` | per HA / same | Capped at `flush_max_pos` | Heater relay untouched by flush (`DIV_NONE`) |
+| **Floor Flush phase** | derived `ON` / same | `ON` / `ON` | per HA / same | Capped at `flush_max_pos` | Heater relay untouched by flush (`DIV_NONE`) |
 | **Heater ON, all pumps OFF** | `ON` / `ON` ($\rightarrow$ **`OFF`** after `long_pause_s`) | `OFF` / `OFF` | `OFF` / `OFF` | **Closed ($0.0$)** | Permitted with `WARN_HEATER_NO_PUMP`; cuts heater after `long_pause_s` (`DIV_LONG_PAUSE`) |
-| **Demand keep-alive expired** | **`ON` / `OFF`** | `ON` / **`OFF`** (after timeout) | `ON` / **`OFF`** (after timeout) | **Closed ($0.0$)** | Heater off at `demand_timeout_s` (`DIV_DEMAND_LOSS`); pumps off at `pump_stop_after_heating_s` (`DIV_AFTER_HEATING_TIMEOUT`) |
+| **Demand keep-alive expired** | **`OFF` / `OFF`** | `ON` (intent) / `OFF` demand / **`OFF`** after after-run | same per circuit | **Closed ($0.0$)** | Demand drops at `demand_timeout_s` (`DIV_DEMAND_LOSS`, `301`); pump stops after `pump_stop_after_heating_s` |
 | **Summer Mode Command** | **`OFF` / `OFF`** (warning) | **`OFF` / `OFF`** (warning) | **`OFF` / `OFF`** (warning) | **Closed ($0.0$)** | Rejects command; `*_intended` stays `OFF` to trigger HA error |
-| **L1 Floor Overtemp ($\ge t_{\text{max\_hard}}$)** | per HA / **unchanged** | per HA / **`OFF`** | per HA / same | **Force Closed ($0.0$)** | Stops `pump_floor_phys` & closes mixer; resumes when $T_{\text{mix\_out}}$ drops (`DIV_OVERTEMP_PAUSE`) |
+| **L1 Floor Overtemp ($\ge t_{\text{max\_hard}}$)** | derived / **unchanged** | per HA / **`OFF`** | per HA / same | **Force Closed ($0.0$)** | Stops `pump_floor_phys` & closes mixer; resumes when $T_{\text{mix\_out}}$ drops (`DIV_OVERTEMP_PAUSE`) |
