@@ -64,6 +64,7 @@ typedef enum {
 #define WARN_MIX_OVERSHOOT (1u << 14)
 #define WARN_SENSOR_ROLE_SUSPECT (1u << 15)
 #define WARN_DHW_INFER_TIMEOUT (1u << 16)
+#define ALARM_MIX_INTERLOCK (1u << 17)
 
 // Standard system error codes (SystemState.system_error_code)
 #define ERR_OK 0
@@ -73,6 +74,7 @@ typedef enum {
 #define ERR_SENSOR_BOILER_LOST 203
 #define ERR_HA_KEEPALIVE_TIMEOUT 301
 #define ERR_RELAY_FAULT_WELDED 401
+#define ERR_MIX_INTERLOCK_FAULT 402
 #define ERR_NVS_DATA_CORRUPTED 501
 #define ERR_SENSOR_ROLE_SUSPECT 603
 #define ERR_DHW_INFER_TIMEOUT 604
@@ -115,6 +117,7 @@ struct SystemState {
   bool mix_motion;                 // motor energized right now (L1 -> L0)
   int8_t mix_dir;                  // +1 opening, -1 closing, 0 idle
   bool mix_emergency;              // emergency close latched; writers locked out
+  bool mix_interlock_fault;        // board reports open+close energised together (v1.x)
   int8_t mix_free_run_dir;         // non-zero: homing/sweep, ignore target/limits
   uint32_t mix_free_run_until_ms;  // free-run safety deadline
 

@@ -30,6 +30,7 @@ void state_init(SystemState& state) {
   state.mix_motion = false;
   state.mix_dir = 0;
   state.mix_emergency = false;
+  state.mix_interlock_fault = false;
   state.mix_free_run_dir = 0;
   state.mix_free_run_until_ms = 0;
 
@@ -55,6 +56,8 @@ const char* error_code_name(uint16_t code) {
       return "heating switch keep-alive timeout";
     case ERR_RELAY_FAULT_WELDED:
       return "welded relay contact";
+    case ERR_MIX_INTERLOCK_FAULT:
+      return "mixer interlock fault";
     case ERR_NVS_DATA_CORRUPTED:
       return "NVS checksum mismatch";
     case ERR_SENSOR_ROLE_SUSPECT:
@@ -102,6 +105,8 @@ const char* alarm_name(uint32_t bit) {
       return "sensor role suspect";
     case WARN_DHW_INFER_TIMEOUT:
       return "inferred DHW too long";
+    case ALARM_MIX_INTERLOCK:
+      return "mixer open/close interlock";
     default:
       return "unknown";
   }
@@ -138,7 +143,8 @@ void append_alarm_list(char* out, size_t out_size, uint32_t alarms) {
 }
 
 bool has_critical_alarm(uint32_t alarms) {
-  return (alarms & (ALARM_OVERTEMP_HARD | ALARM_SENSOR_FAULT_MIX | ALARM_WELDED_RELAY)) != 0;
+  return (alarms & (ALARM_OVERTEMP_HARD | ALARM_SENSOR_FAULT_MIX | ALARM_WELDED_RELAY |
+                   ALARM_MIX_INTERLOCK)) != 0;
 }
 
 }  // namespace
@@ -186,6 +192,9 @@ void format_error_text(const SystemState& state, char* out, size_t out_size) {
       break;
     case ERR_RELAY_FAULT_WELDED:
       append(out, out_size, " (pump current with relay commanded off)");
+      break;
+    case ERR_MIX_INTERLOCK_FAULT:
+      append(out, out_size, " (board reports open and close energised together)");
       break;
     case ERR_NVS_DATA_CORRUPTED:
       append(out, out_size, " (saved NVS data rejected; defaults loaded)");

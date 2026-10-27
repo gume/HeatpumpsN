@@ -45,6 +45,24 @@ bool pcf8574_write(uint8_t value) {
   return true;
 }
 
+bool pcf8574_read(uint8_t& value) {
+  return sim::read_expander(value);
+}
+
+bool ads1115_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address) {
+  (void)sda_pin;
+  (void)scl_pin;
+  (void)address;
+  return true;
+}
+
+bool ads1115_read_volts(uint8_t channel, float& volts) {
+  (void)channel;
+  (void)volts;
+  // No waveform model: use l0::read_power_w() for emulated current.
+  return false;
+}
+
 void adc_begin(uint8_t pin) {
   (void)pin;
 }
@@ -255,6 +273,112 @@ bool pcf8574_write(uint8_t value) {
   return Wire.endTransmission() == 0;
 }
 
+bool pcf8574_read(uint8_t& value) {
+  if (!g_pcf8574_ready) {
+    return false;
+  }
+  // A PCF8574 has no register pointer, so one address cycle returns the port.
+  // The caller must have written the port first, which also releases any pin
+  // that is used as an input (P7 on the v1.x board).
+  if (Wire.requestFrom(static_cast<uint8_t>(g_pcf8574_address), static_cast<uint8_t>(1)) != 1) {
+    return false;
+  }
+  value = static_cast<uint8_t>(Wire.read());
+  return true;
+}
+
+// --- ADS1115 ---------------------------------------------------------------
+// Register map: 0x00 conversion, 0x01 config, 0x02/0x03 thresholds.
+// Single-ended inputs AIN0-AIN3 against GND, +/-4.096 V PGA, 860 SPS.
+constexpr uint8_t kAdsConversionReg = 0x00;
+constexpr uint8_t kAdsConfigReg = 0x01;
+constexpr uint16_t kAdsOsSingleShot = 0x8000;
+constexpr uint16_t kAdsPga4096 = 0x0200;  // PGA = 001 at bits 11:9
+constexpr uint16_t kAdsSingleMode = 0x0100;
+constexpr uint16_t kAdsDr860 = 0x00E0;    // DR = 111 at bits 7:5 (860 SPS)
+constexpr uint16_t kAdsComparatorOff = 0x0003;
+// MUX = 100/101/110/111 selects AIN0..AIN3 single-ended.
+constexpr uint8_t kAdsSingleEndedMux[4] = {0x04, 0x05, 0x06, 0x07};
+constexpr float kAdsVoltsPerLsb = 0.000125f;  // 4.096 V / 32768
+
+uint8_t g_ads1115_address = 0x48;
+bool g_ads1115_ready = false;
+
+bool ads1115_write_reg(uint8_t reg, uint16_t value) {
+  Wire.beginTransmission(g_ads1115_address);
+  Wire.write(reg);
+  Wire.write(static_cast<uint8_t>(value >> 8));
+  Wire.write(static_cast<uint8_t>(value & 0xFF));
+  return Wire.endTransmission() == 0;
+}
+
+bool ads1115_read_reg(uint8_t reg, uint16_t& value) {
+  Wire.beginTransmission(g_ads1115_address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(static_cast<uint8_t>(g_ads1115_address), static_cast<uint8_t>(2)) != 2) {
+    return false;
+  }
+  const uint16_t hi = static_cast<uint16_t>(Wire.read());
+  const uint16_t lo = static_cast<uint16_t>(Wire.read());
+  value = static_cast<uint16_t>((hi << 8) | lo);
+  return true;
+}
+
+bool ads1115_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address) {
+  if (!pin_assigned(sda_pin) || !pin_assigned(scl_pin)) {
+    g_ads1115_ready = false;
+    return false;
+  }
+  Wire.begin(sda_pin, scl_pin);
+  Wire.setClock(100000);
+  g_ads1115_address = address;
+  // Reading the config register is the cheapest way to probe the device.
+  uint16_t config = 0;
+  g_ads1115_ready = ads1115_read_reg(kAdsConfigReg, config);
+  return g_ads1115_ready;
+}
+
+bool ads1115_read_volts(uint8_t channel, float& volts) {
+  if (!g_ads1115_ready || channel > 3) {
+    return false;
+  }
+  const uint16_t config = static_cast<uint16_t>(
+      kAdsOsSingleShot | (static_cast<uint16_t>(kAdsSingleEndedMux[channel]) << 12) |
+      kAdsPga4096 | kAdsSingleMode | kAdsDr860 | kAdsComparatorOff);
+  if (!ads1115_write_reg(kAdsConfigReg, config)) {
+    return false;
+  }
+
+  // A single 860 SPS conversion takes about 1.2 ms. Wait for OS to read back as
+  // 1 (conversion complete) instead of trusting a fixed delay.
+  uint16_t status = 0;
+  const uint32_t start = millis();
+  bool ready = false;
+  while (millis() - start < 25) {
+    if (!ads1115_read_reg(kAdsConfigReg, status)) {
+      return false;
+    }
+    if ((status & kAdsOsSingleShot) != 0) {
+      ready = true;
+      break;
+    }
+    delayMicroseconds(500);
+  }
+  if (!ready) {
+    return false;
+  }
+
+  uint16_t raw = 0;
+  if (!ads1115_read_reg(kAdsConversionReg, raw)) {
+    return false;
+  }
+  volts = static_cast<float>(static_cast<int16_t>(raw)) * kAdsVoltsPerLsb;
+  return true;
+}
+
 void adc_begin(uint8_t pin) {
   pinMode(pin, INPUT);
 }
@@ -309,9 +433,9 @@ bool read_temperature(TempRole role, float& celsius) {
 }
 
 float read_power_w(CurrentChannel channel) {
-  // TODO(L0): convert the MUX/ADC sample with the carrier calibration
-  // (firmware/docs/hhn-1.0.md §4.1). Until then only the emulation reports
-  // power.
+  // Hardware conversion lives in hpn::l0::read_power_w(), which owns the
+  // board's front-end choice and the shared calibration. This backend hook is
+  // only used by the emulation model.
   (void)channel;
   return 0.0f;
 }

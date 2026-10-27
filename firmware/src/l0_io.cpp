@@ -38,9 +38,23 @@ bool uses_shift_register() {
   return g_config.output_expander == OUTPUT_EXPANDER_74HC595;
 }
 
-uint8_t output_level(bool on) {
-  return g_config.output_active_low ? (on ? io::kLow : io::kHigh)
-                                    : (on ? io::kHigh : io::kLow);
+bool relay_active_low(Relay relay) {
+  switch (relay) {
+    case Relay::Heater:
+      return g_config.output_active_low_heater;
+    case Relay::PumpRad1:
+      return g_config.output_active_low_pump_rad1;
+    case Relay::PumpRad2:
+      return g_config.output_active_low_pump_rad2;
+    case Relay::PumpFloor:
+      return g_config.output_active_low_pump_floor;
+    default:
+      return false;
+  }
+}
+
+uint8_t output_level(bool on, bool active_low) {
+  return active_low ? (on ? io::kLow : io::kHigh) : (on ? io::kHigh : io::kLow);
 }
 
 uint8_t with_bit(uint8_t byte, uint8_t bit, bool high) {
@@ -55,14 +69,30 @@ uint8_t with_bit(uint8_t byte, uint8_t bit, bool high) {
 
 // Set an actuator bit in the raw output byte. The MUX helpers use with_bit()
 // directly because those select lines are not affected by output polarity.
-uint8_t with_output(uint8_t byte, uint8_t bit, bool on) {
-  return with_bit(byte, bit, output_level(on) != io::kLow);
+uint8_t with_output(uint8_t byte, uint8_t bit, bool on, bool active_low) {
+  return with_bit(byte, bit, output_level(on, active_low) != io::kLow);
 }
 
 uint8_t inactive_output_byte() {
-  uint8_t byte = g_config.output_active_low ? 0xFF : 0x00;
+  // PCF8574 pins are quasi-bidirectional: a high level is the safe idle state
+  // for unconnected spares and for the fault input. The 74HC595 starts at 0.
+  uint8_t byte = g_config.output_expander == OUTPUT_EXPANDER_PCF8574 ? 0xFF : 0x00;
+  byte = with_bit(byte, g_config.expander_bit_pump_floor,
+                  g_config.output_active_low_pump_floor);
+  byte = with_bit(byte, g_config.expander_bit_pump_rad1,
+                  g_config.output_active_low_pump_rad1);
+  byte = with_bit(byte, g_config.expander_bit_pump_rad2,
+                  g_config.output_active_low_pump_rad2);
+  byte = with_bit(byte, g_config.expander_bit_heater, g_config.output_active_low_heater);
+  byte = with_bit(byte, g_config.expander_bit_mix_direction,
+                  g_config.output_active_low_mix_direction);
+  byte = with_bit(byte, g_config.expander_bit_mix_motion,
+                  g_config.output_active_low_mix_motion);
   byte = with_bit(byte, g_config.expander_bit_mux_s0, false);
   byte = with_bit(byte, g_config.expander_bit_mux_s1, false);
+  // P7 is a quasi-bidirectional input on the v1.x board: the port latch must
+  // stay high so the external driver can pull it to the asserted level.
+  byte = with_bit(byte, g_config.expander_bit_mix_fault, true);
   return byte;
 }
 
@@ -96,18 +126,18 @@ uint8_t relay_pin(Relay relay) {
   }
 }
 
-void init_output_pin(uint8_t pin, const char* name) {
+void init_output_pin(uint8_t pin, const char* name, bool active_low) {
   if (!is_assigned(pin)) {
     Serial.printf("[l0] %-11s unassigned\n", name);
     return;
   }
 
-  const uint8_t off = output_level(false);
+  const uint8_t off = output_level(false, active_low);
   io::write_pin(pin, off);
   io::pin_mode(pin, io::kModeOutput);
   io::write_pin(pin, off);
-  Serial.printf("[l0] %-11s GPIO%u (safe=OFF%s)\n", name, static_cast<unsigned>(pin),
-                g_config.output_active_low ? ", active-low" : "");
+  Serial.printf("[l0] %-11s GPIO%u (safe=OFF, %s)\n", name, static_cast<unsigned>(pin),
+                active_low ? "active-low" : "active-high");
 }
 
 // A shift register with MSBFIRST puts bit 0 on Q0 (QA), matching the legacy
@@ -121,10 +151,17 @@ void write_outputs() {
     io::shift_out_msb(g_config.expander_data_pin, g_config.expander_clock_pin,
                       g_config.expander_latch_pin, g_output_byte);
   } else if (g_config.output_expander == OUTPUT_EXPANDER_PCF8574) {
-    if (!io::pcf8574_write(g_output_byte) && !g_pcf_write_error_logged) {
-      Serial.printf("[l0] PCF8574 write failed (addr 0x%02X)\n",
-                    static_cast<unsigned>(g_config.expander_address));
-      g_pcf_write_error_logged = true;
+    // P7 is an input on the v1.x board. Write it high so the PCF8574 releases
+    // the line before reading the interlock state.
+    const uint8_t byte = with_bit(g_output_byte, g_config.expander_bit_mix_fault, true);
+    if (!io::pcf8574_write(byte)) {
+      if (!g_pcf_write_error_logged) {
+        Serial.printf("[l0] PCF8574 write failed (addr 0x%02X)\n",
+                      static_cast<unsigned>(g_config.expander_address));
+        g_pcf_write_error_logged = true;
+      }
+    } else {
+      g_pcf_write_error_logged = false;
     }
   }
 }
@@ -184,16 +221,21 @@ void init_pcf8574() {
 }
 
 void init_direct_outputs() {
-  init_output_pin(g_config.gpio_pump_floor, "pump_floor");
-  init_output_pin(g_config.gpio_pump_rad1, "pump_rad1");
-  init_output_pin(g_config.gpio_pump_rad2, "pump_rad2");
-  init_output_pin(g_config.gpio_heater, "heater");
-  init_output_pin(g_config.gpio_mix_open, "mix_open");
-  init_output_pin(g_config.gpio_mix_close, "mix_close");
+  init_output_pin(g_config.gpio_pump_floor, "pump_floor",
+                  g_config.output_active_low_pump_floor);
+  init_output_pin(g_config.gpio_pump_rad1, "pump_rad1",
+                  g_config.output_active_low_pump_rad1);
+  init_output_pin(g_config.gpio_pump_rad2, "pump_rad2",
+                  g_config.output_active_low_pump_rad2);
+  init_output_pin(g_config.gpio_heater, "heater", g_config.output_active_low_heater);
+  init_output_pin(g_config.gpio_mix_open, "mix_open",
+                  g_config.output_active_low_mix_direction);
+  init_output_pin(g_config.gpio_mix_close, "mix_close",
+                  g_config.output_active_low_mix_motion);
 }
 
 void init_current_mux() {
-  if (!g_board.has_current_mux) {
+  if (g_config.current_sense != CURRENT_SENSE_MUX_ADC || !g_board.has_current_mux) {
     return;
   }
 
@@ -201,8 +243,8 @@ void init_current_mux() {
     io::adc_begin(g_board.adc_pin);
   }
 
-  // 74HC4051 S2/S3 are held low on the HomeNet Heatpumps 1.0 carrier; only
-  // channels 0-3 are used.
+  // 74HC4051 S2/S3 are held low on the HomeNet Heating control v0.1 board;
+  // only channels 0-3 are used.
   if (is_assigned(g_board.mux_s2_pin)) {
     io::pin_mode(g_board.mux_s2_pin, io::kModeOutput);
     io::write_pin(g_board.mux_s2_pin, io::kLow);
@@ -214,6 +256,25 @@ void init_current_mux() {
 
   io::adc_set_resolution(12);
   Serial.printf("[l0] current MUX adc=GPIO%u\n", static_cast<unsigned>(g_board.adc_pin));
+}
+
+void init_current_sense() {
+  if (g_config.current_sense == CURRENT_SENSE_MUX_ADC) {
+    init_current_mux();
+  } else if (g_config.current_sense == CURRENT_SENSE_ADS1115) {
+    const bool ok = io::ads1115_begin(g_config.i2c_sda, g_config.i2c_scl,
+                                      g_config.ads1115_address);
+    Serial.printf("[l0] ADS1115   addr=0x%02X sda=%u scl=%u (%s)\n",
+                  static_cast<unsigned>(g_config.ads1115_address),
+                  static_cast<unsigned>(g_config.i2c_sda),
+                  static_cast<unsigned>(g_config.i2c_scl),
+                  ok ? "ready" : "NOT ACKNOWLEDGED");
+    if (!g_config.tlv9064_present) {
+      Serial.println("[l0] TLV9064 absent; current measurement disabled");
+    }
+  } else {
+    Serial.println("[l0] current sense disabled");
+  }
 }
 
 void leds_off() {
@@ -238,14 +299,14 @@ void begin(const Config& config, const BoardConfig& board) {
 
   const char* driver = "direct GPIO";
   if (g_config.output_expander == OUTPUT_EXPANDER_74HC595) {
-    driver = "74HC595 output extender";
+    driver = "74HC595";
   } else if (g_config.output_expander == OUTPUT_EXPANDER_PCF8574) {
-    driver = "PCF8574 output extender";
+    driver = "PCF8574";
   }
-  Serial.printf("[l0] carrier   %s (%s)\n", g_board.name, driver);
+  Serial.printf("[l0] board     %s (%s output driver)\n", g_board.name, driver);
   Serial.printf("[l0] backend   %s\n", io::kEmulated ? "emulation" : "hardware");
 
-  // Seed the emulation model (or the hardware backend) with this carrier.
+  // Seed the emulation model (or the hardware backend) with this board.
   io::begin(g_config, g_board);
 
   if (g_config.output_expander == OUTPUT_EXPANDER_74HC595) {
@@ -256,7 +317,7 @@ void begin(const Config& config, const BoardConfig& board) {
     init_direct_outputs();
   }
 
-  init_current_mux();
+  init_current_sense();
 
   if (is_assigned(g_config.gpio_led_data) && g_config.num_leds > 0) {
     g_led_count = g_config.num_leds > kMaxLeds ? kMaxLeds : g_config.num_leds;
@@ -271,24 +332,45 @@ void begin(const Config& config, const BoardConfig& board) {
 
 void apply_safe_state() {
   if (uses_expander()) {
-    // All relays off, mixer motion off, and MUX channel 0 selected. For an
-    // active-low relay board every actuator bit is driven high.
+    // All relays off, mixer motion off, and MUX channel 0 selected. Each output
+    // is driven to its own inactive level.
     g_output_byte = inactive_output_byte();
     write_outputs();
   } else {
-    const uint8_t off = output_level(false);
     const uint8_t pins[] = {
         g_config.gpio_pump_floor, g_config.gpio_pump_rad1, g_config.gpio_pump_rad2,
         g_config.gpio_heater,     g_config.gpio_mix_open,  g_config.gpio_mix_close,
     };
-    for (uint8_t pin : pins) {
-      if (is_assigned(pin)) {
-        io::write_pin(pin, off);
+    const bool active_low[] = {
+        g_config.output_active_low_pump_floor, g_config.output_active_low_pump_rad1,
+        g_config.output_active_low_pump_rad2,  g_config.output_active_low_heater,
+        g_config.output_active_low_mix_direction, g_config.output_active_low_mix_motion,
+    };
+    for (size_t i = 0; i < sizeof(pins); ++i) {
+      if (is_assigned(pins[i])) {
+        io::write_pin(pins[i], output_level(false, active_low[i]));
       }
     }
   }
 
   leds_off();
+}
+
+// P7 on the v1.x PCF8574 relay board is the board's software-interlock fault
+// output. It is an input to the MCU and is asserted when open and close are
+// energised together.
+void update_interlock_fault(SystemState& state) {
+  if (g_config.output_expander != OUTPUT_EXPANDER_PCF8574 ||
+      g_config.expander_bit_mix_fault > 7) {
+    state.mix_interlock_fault = false;
+    return;
+  }
+  uint8_t value = 0;
+  if (!io::pcf8574_read(value)) {
+    return;
+  }
+  const bool high = (value & static_cast<uint8_t>(1u << g_config.expander_bit_mix_fault)) != 0;
+  state.mix_interlock_fault = g_config.mix_fault_active_low ? !high : high;
 }
 
 void tick(const Config& config, const BoardConfig& board, SystemState& state) {
@@ -343,6 +425,10 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
     state.mixer_power_w = read_power_w(config, CurrentChannel::Mixer);
   }
 
+  // The v1.x relay board reports a software-interlock failure (open and close
+  // energised together) as an input on the PCF8574.
+  update_interlock_fault(state);
+
   // Encoder sampling and the remaining L0 diagnostics are still TODO(L0). The
   // mixer pulse state machine now lives in L1 so bench and hardware builds
   // share the same actuator path.
@@ -355,31 +441,33 @@ void set_relay(Relay relay, bool on) {
     if (bit > 7) {
       return;
     }
-    g_output_byte = with_output(g_output_byte, bit, on);
+    g_output_byte = with_output(g_output_byte, bit, on, relay_active_low(relay));
     write_outputs();
     return;
   }
 
   const uint8_t pin = relay_pin(relay);
   if (is_assigned(pin)) {
-    io::write_pin(pin, output_level(on));
+    io::write_pin(pin, output_level(on, relay_active_low(relay)));
   }
 }
 
 void set_mixer_motor(bool enabled, bool open_direction) {
   const bool open_close = g_config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
+  const bool direction_low = g_config.output_active_low_mix_direction;
+  const bool motion_low = g_config.output_active_low_mix_motion;
 
   if (uses_expander()) {
-    // The two carrier channels are logical open/direction and close/motion.
-    // Legacy HHN 1.0 uses direction + motion enable; the new carrier uses two
+    // The two board channels are logical open/direction and close/motion.
+    // The v0.1 board uses direction + motion enable; the v1.x board uses two
     // interlocked open/close relays. Reuse the same two bits for both modes.
     const uint8_t open_or_direction_bit = g_config.expander_bit_mix_direction;
     const uint8_t close_or_motion_bit = g_config.expander_bit_mix_motion;
     const bool first_on = open_close ? (enabled && open_direction) : open_direction;
     const bool second_on = open_close ? (enabled && !open_direction) : enabled;
 
-    g_output_byte = with_output(g_output_byte, open_or_direction_bit, first_on);
-    g_output_byte = with_output(g_output_byte, close_or_motion_bit, second_on);
+    g_output_byte = with_output(g_output_byte, open_or_direction_bit, first_on, direction_low);
+    g_output_byte = with_output(g_output_byte, close_or_motion_bit, second_on, motion_low);
     write_outputs();
     return;
   }
@@ -389,20 +477,20 @@ void set_mixer_motor(bool enabled, bool open_direction) {
   if (open_close) {
     // Separate, hardware-interlocked open/close relays.
     if (can_open) {
-      io::write_pin(g_config.gpio_mix_open, output_level(enabled && open_direction));
+      io::write_pin(g_config.gpio_mix_open, output_level(enabled && open_direction, direction_low));
     }
     if (can_close) {
-      io::write_pin(g_config.gpio_mix_close, output_level(enabled && !open_direction));
+      io::write_pin(g_config.gpio_mix_close, output_level(enabled && !open_direction, motion_low));
     }
     return;
   }
 
   // Legacy direction + motion: first channel is direction, second is enable.
   if (can_open) {
-    io::write_pin(g_config.gpio_mix_open, output_level(open_direction));
+    io::write_pin(g_config.gpio_mix_open, output_level(open_direction, direction_low));
   }
   if (can_close) {
-    io::write_pin(g_config.gpio_mix_close, output_level(enabled));
+    io::write_pin(g_config.gpio_mix_close, output_level(enabled, motion_low));
   }
 }
 
@@ -420,9 +508,72 @@ bool read_temperature(TempRole role, float& celsius) {
   return io::read_temperature(role, celsius);
 }
 
+// Shared current-sensor calibration: the settings block is common to both
+// front ends so a sensor swap does not need a new set of parameters.
+float calibrated_power_w(const Config& config, float rms_volts) {
+  float offset_v = config.pump_current_offset_v;
+  float w_per_v = config.pump_current_w_per_v;
+  if (!isfinite(offset_v) || offset_v < 0.0f || offset_v > 1.0f) offset_v = 0.004f;
+  if (!isfinite(w_per_v) || w_per_v < 1.0f || w_per_v > 5000.0f) w_per_v = 588.2f;
+  float watts = (rms_volts - offset_v) * w_per_v;
+  if (watts < 5.0f) {
+    watts = 0.0f;
+  } else if (watts > 2000.0f) {
+    watts = 2000.0f;
+  }
+  return watts;
+}
+
+// HomeNet Heating control v1.x: the optional TLV9064 assembly turns current
+// into a voltage that the ADS1115 samples. Without the assembly installed
+// there is no usable signal, so current protection stays off.
+float read_ads_power_w(const Config& config, CurrentChannel channel) {
+  if (!config.tlv9064_present) {
+    return 0.0f;
+  }
+  const uint8_t index = static_cast<uint8_t>(channel);
+  if (index >= kCurrentChannelCount) {
+    return 0.0f;
+  }
+  const uint8_t ads_channel = g_board.current_ads_channel[index];
+  if (ads_channel == HPN_GPIO_UNASSIGNED || ads_channel > 3) {
+    return 0.0f;
+  }
+
+  // Sample two mains cycles at 860 SPS and remove the DC bias, mirroring the
+  // MUX/ADC path so both share the same calibration settings.
+  const uint32_t start = micros();
+  uint32_t count = 0;
+  float mean = 0.0f;
+  float m2 = 0.0f;
+  while (micros() - start < 40000u && count < 40) {
+    float volts = 0.0f;
+    if (!io::ads1115_read_volts(ads_channel, volts)) {
+      break;
+    }
+    if (!isfinite(volts)) {
+      continue;
+    }
+    ++count;
+    const float delta = volts - mean;
+    mean += delta / static_cast<float>(count);
+    m2 += delta * (volts - mean);
+  }
+  if (count < 4) {
+    return 0.0f;
+  }
+  return calibrated_power_w(config, sqrtf(m2 / static_cast<float>(count)));
+}
+
 float read_power_w(const Config& config, CurrentChannel channel) {
   if (io::kEmulated) {
     return io::read_power_w(channel);
+  }
+  if (config.current_sense == CURRENT_SENSE_ADS1115) {
+    return read_ads_power_w(config, channel);
+  }
+  if (config.current_sense != CURRENT_SENSE_MUX_ADC) {
+    return 0.0f;
   }
   if (!g_board.has_current_mux || !is_assigned(g_board.adc_pin)) {
     return 0.0f;
@@ -451,17 +602,7 @@ float read_power_w(const Config& config, CurrentChannel channel) {
     return 0.0f;
   }
   const float rms_volts = sqrtf(m2 / static_cast<float>(count));
-  float offset_v = config.pump_current_offset_v;
-  float w_per_v = config.pump_current_w_per_v;
-  if (!isfinite(offset_v) || offset_v < 0.0f || offset_v > 1.0f) offset_v = 0.004f;
-  if (!isfinite(w_per_v) || w_per_v < 1.0f || w_per_v > 5000.0f) w_per_v = 588.2f;
-  float watts = (rms_volts - offset_v) * w_per_v;
-  if (watts < 5.0f) {
-    watts = 0.0f;
-  } else if (watts > 2000.0f) {
-    watts = 2000.0f;
-  }
-  return watts;
+  return calibrated_power_w(config, rms_volts);
 }
 
 uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {
@@ -469,6 +610,9 @@ uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_cou
 }
 
 bool select_current_channel(CurrentChannel channel) {
+  if (g_config.current_sense != CURRENT_SENSE_MUX_ADC) {
+    return false;
+  }
   if (!g_board.has_current_mux || !uses_expander()) {
     return false;
   }

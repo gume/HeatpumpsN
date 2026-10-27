@@ -46,6 +46,14 @@ void shift_out_msb(uint8_t data_pin, uint8_t clock_pin, uint8_t latch_pin, uint8
 bool pcf8574_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address, uint8_t initial);
 // Write the expander port. Returns false when the transfer failed.
 bool pcf8574_write(uint8_t value);
+// Read the expander port. Returns false when the transfer failed. In emulation
+// this returns the driven byte with the simulated fault input applied.
+bool pcf8574_read(uint8_t& value);
+
+// ADS1115 four-channel ADC (HomeNet Heating control v1.x). Single-shot,
+// single-ended inputs against GND, +/-4.096 V range. channel is 0-3.
+bool ads1115_begin(uint8_t sda_pin, uint8_t scl_pin, uint8_t address);
+bool ads1115_read_volts(uint8_t channel, float& volts);
 
 void adc_begin(uint8_t pin);
 void adc_set_resolution(uint8_t bits);

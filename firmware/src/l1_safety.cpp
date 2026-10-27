@@ -507,6 +507,26 @@ void tick(const Config& config, SystemState& state) {
     state.mix_free_run_dir = 0;
     state.mix_free_run_until_ms = 0;
   }
+
+  // --- Board interlock fault (HomeNet Heating control v1.x) ---------------
+  // P7 asserts when the relay board itself sees open and close energised
+  // together. That is a hardware-level failure, so drop both coils and never
+  // move the valve while the fault is present.
+  if (state.mix_interlock_fault) {
+    state.active_alarms |= ALARM_MIX_INTERLOCK;
+    state.system_error_code = ERR_MIX_INTERLOCK_FAULT;
+    l0::set_mixer_motor(false, false);
+    state.mix_motion = false;
+    state.mix_dir = 0;
+    state.mix_free_run_dir = 0;
+    state.mix_free_run_until_ms = 0;
+    return;
+  }
+  state.active_alarms &= ~ALARM_MIX_INTERLOCK;
+  if (state.system_error_code == ERR_MIX_INTERLOCK_FAULT) {
+    state.system_error_code = ERR_OK;
+  }
+
   service_mixer(config, state, force_mixer_close, allow_mixer_open);
 }
 

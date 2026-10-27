@@ -6,12 +6,12 @@
 #include "hpn/config.h"
 #include "hpn/io_types.h"
 
-// Emulation model of a HomeNet Heatpumps carrier.
+// Emulation model of a HomeNet Heating control board.
 //
 // Only compiled into the firmware with -DHPN_IO_EMULATION. L0 writes its
 // outputs into this model instead of physical pins, and reads mocked sensor
-// answers from it. The future web dashboard reads `snapshot()` and calls the
-// setters to mock temperatures and pump power.
+// answers from it. The bench dashboard reads `snapshot()` and calls the setters
+// to mock temperatures, pump power and the interlock fault input.
 //
 // Deliberately simple: no 1-Wire bus timing, no ADC waveform, no relay
 // physics. It models *answers*, not electronics.
@@ -43,6 +43,9 @@ struct Snapshot {
   bool realistic_power;    // pump/mixer power follows relay/motion
   bool realistic_boiler;   // boiler supply is a placeholder sine wave
 
+  // Simulated board interlock fault input (HomeNet Heating control v1.x).
+  bool interlock_fault;
+
   // Observed outputs (L0 writes these through the I/O backend).
   uint8_t mux_channel;  // 0xFF when the carrier has no current MUX
   uint8_t output_byte;  // last expander byte (0 for direct-GPIO carriers)
@@ -70,6 +73,9 @@ void set_mixer_manual(bool motion, bool open);
 void set_follow_controller(bool on);
 void set_realistic_power(bool on);
 void set_realistic_boiler(bool on);
+// Drive the board's software-interlock fault input (v1.x P7). The logical
+// value is polarity-independent; the backend presents it on the port pin.
+void set_interlock_fault(bool asserted);
 void clear_manual_overrides();
 void clear_relay_override(Relay relay);
 void clear_mixer_override();
@@ -83,6 +89,8 @@ void record_led_frame(const uint8_t* rgb, uint16_t count);
 // --- Backend reads --------------------------------------------------------
 bool read_temperature(TempRole role, float& celsius);
 float read_power_w(CurrentChannel channel);
+// Port value as the PCF8574 would report it, including the fault input bit.
+bool read_expander(uint8_t& value);
 uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count);
 
 }  // namespace sim

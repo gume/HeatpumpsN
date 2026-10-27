@@ -33,6 +33,7 @@ struct Model {
   bool follow_controller;
   bool realistic_power;
   bool realistic_boiler;
+  bool interlock_fault;
   bool relay_override[kRelayCount];
   bool relay_manual_on[kRelayCount];
   bool mixer_override;
@@ -96,44 +97,68 @@ bool uses_expander(const Config& config) {
          config.output_expander == OUTPUT_EXPANDER_PCF8574;
 }
 
-bool output_bit_on(const Config& config, uint8_t byte, uint8_t bit) {
+bool output_bit_on(uint8_t byte, uint8_t bit, bool active_low) {
   const bool high = bit_is_set(byte, bit);
-  return config.output_active_low ? !high : high;
+  return active_low ? !high : high;
 }
 
-bool pin_is_high(const Model& model, uint8_t pin) {
-  return is_assigned(pin) && pin < kMaxGpio && model.pin_level[pin] != 0;
+bool relay_active_low(const Config& config, Relay relay) {
+  switch (relay) {
+    case Relay::Heater:
+      return config.output_active_low_heater;
+    case Relay::PumpRad1:
+      return config.output_active_low_pump_rad1;
+    case Relay::PumpRad2:
+      return config.output_active_low_pump_rad2;
+    case Relay::PumpFloor:
+      return config.output_active_low_pump_floor;
+    default:
+      return false;
+  }
+}
+
+bool pin_output_on(const Model& model, uint8_t pin, bool active_low) {
+  if (!is_assigned(pin) || pin >= kMaxGpio) {
+    return false;
+  }
+  const bool high = model.pin_level[pin] != 0;
+  return active_low ? !high : high;
 }
 
 bool controller_relay_state(const Model& model, Relay relay) {
   if (uses_expander(model.config)) {
-    return output_bit_on(model.config, model.output_byte, relay_bit(model.config, relay));
+    return output_bit_on(model.output_byte, relay_bit(model.config, relay),
+                         relay_active_low(model.config, relay));
   }
-  return pin_is_high(model, relay_pin(model.config, relay));
+  return pin_output_on(model, relay_pin(model.config, relay),
+                       relay_active_low(model.config, relay));
 }
 
 bool controller_mixer_motion(const Model& model) {
   const bool open_close = model.config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
+  const bool direction_low = model.config.output_active_low_mix_direction;
+  const bool motion_low = model.config.output_active_low_mix_motion;
   if (uses_expander(model.config)) {
-    const bool first =
-        output_bit_on(model.config, model.output_byte, model.config.expander_bit_mix_direction);
-    const bool second =
-        output_bit_on(model.config, model.output_byte, model.config.expander_bit_mix_motion);
+    const bool first = output_bit_on(model.output_byte,
+                                     model.config.expander_bit_mix_direction, direction_low);
+    const bool second = output_bit_on(model.output_byte,
+                                      model.config.expander_bit_mix_motion, motion_low);
     return open_close ? (first || second) : second;
   }
-  const bool first = pin_is_high(model, model.config.gpio_mix_open);
-  const bool second = pin_is_high(model, model.config.gpio_mix_close);
-  // New carrier: two interlocked open/close relays. Legacy carrier: the first
+  const bool first = pin_output_on(model, model.config.gpio_mix_open, direction_low);
+  const bool second = pin_output_on(model, model.config.gpio_mix_close, motion_low);
+  // New board: two interlocked open/close relays. Legacy board: the first
   // pin is direction and the second is the motion enable.
   return open_close ? (first || second) : second;
 }
 
 bool controller_mixer_open(const Model& model) {
+  const bool direction_low = model.config.output_active_low_mix_direction;
   if (uses_expander(model.config)) {
-    return output_bit_on(model.config, model.output_byte,
-                         model.config.expander_bit_mix_direction);
+    return output_bit_on(model.output_byte,
+                         model.config.expander_bit_mix_direction, direction_low);
   }
-  return pin_is_high(model, model.config.gpio_mix_open);
+  return pin_output_on(model, model.config.gpio_mix_open, direction_low);
 }
 
 bool effective_relay_state(const Model& model, Relay relay) {
@@ -256,15 +281,39 @@ bool output_enabled(const Model& model) {
 }
 
 void reset_locked(Model& model) {
-  // Mirror the power-on state of the selected driver. An active-low relay
-  // board (PCF8574) idles high, which is the safe OFF level, so the initial
-  // byte is 0xFF with the MUX select bits low.
-  uint8_t initial_output = model.config.output_active_low ? 0xFF : 0x00;
-  if (model.config.expander_bit_mux_s0 < 8) {
-    initial_output &= static_cast<uint8_t>(~(1u << model.config.expander_bit_mux_s0));
+  // Mirror the power-on state of the selected driver. PCF8574 pins idle high,
+  // which is the safe OFF level for an active-low relay board and the required
+  // released level for the fault input. The 74HC595 starts at 0.
+  const Config& config = model.config;
+  uint8_t initial_output = config.output_expander == OUTPUT_EXPANDER_PCF8574 ? 0xFF : 0x00;
+  const bool levels[] = {
+      config.output_active_low_heater,
+      config.output_active_low_pump_rad1,
+      config.output_active_low_pump_rad2,
+      config.output_active_low_pump_floor,
+      config.output_active_low_mix_direction,
+      config.output_active_low_mix_motion,
+  };
+  const uint8_t bits[] = {
+      config.expander_bit_heater,      config.expander_bit_pump_rad1,
+      config.expander_bit_pump_rad2,   config.expander_bit_pump_floor,
+      config.expander_bit_mix_direction, config.expander_bit_mix_motion,
+  };
+  for (size_t i = 0; i < sizeof(bits); ++i) {
+    if (bits[i] < 8 && levels[i]) {
+      initial_output |= static_cast<uint8_t>(1u << bits[i]);
+    }
   }
-  if (model.config.expander_bit_mux_s1 < 8) {
-    initial_output &= static_cast<uint8_t>(~(1u << model.config.expander_bit_mux_s1));
+  // The MUX select lines are active-high, independently of relay polarity.
+  if (config.expander_bit_mux_s0 < 8) {
+    initial_output &= static_cast<uint8_t>(~(1u << config.expander_bit_mux_s0));
+  }
+  if (config.expander_bit_mux_s1 < 8) {
+    initial_output &= static_cast<uint8_t>(~(1u << config.expander_bit_mux_s1));
+  }
+  // The fault input (P7) is quasi-bidirectional: the port latch stays high.
+  if (config.expander_bit_mix_fault < 8) {
+    initial_output |= static_cast<uint8_t>(1u << config.expander_bit_mix_fault);
   }
   model.output_byte = initial_output;
   memset(model.pin_level, 0, sizeof(model.pin_level));
@@ -284,6 +333,7 @@ void reset_locked(Model& model) {
   model.follow_controller = true;
   model.realistic_power = true;
   model.realistic_boiler = false;
+  model.interlock_fault = false;
   for (uint8_t i = 0; i < kRelayCount; ++i) {
     model.relay_override[i] = false;
     model.relay_manual_on[i] = false;
@@ -365,6 +415,7 @@ Snapshot snapshot() {
   out.follow_controller = model.follow_controller;
   out.realistic_power = model.realistic_power;
   out.realistic_boiler = model.realistic_boiler;
+  out.interlock_fault = model.interlock_fault;
   out.mux_channel = mux_channel(model);
   out.output_byte = model.output_byte;
   out.output_enabled = output_enabled(model);
@@ -473,6 +524,13 @@ void set_realistic_boiler(bool on) {
   taskEXIT_CRITICAL(&g_mux);
 }
 
+void set_interlock_fault(bool asserted) {
+  taskENTER_CRITICAL(&g_mux);
+  g_model.interlock_fault = asserted;
+  touch(g_model);
+  taskEXIT_CRITICAL(&g_mux);
+}
+
 void clear_manual_overrides() {
   taskENTER_CRITICAL(&g_mux);
   for (uint8_t i = 0; i < kRelayCount; ++i) {
@@ -573,6 +631,23 @@ float read_power_w(CurrentChannel channel) {
   watts = effective_power(g_model, channel);
   taskEXIT_CRITICAL(&g_mux);
   return watts;
+}
+
+bool read_expander(uint8_t& value) {
+  taskENTER_CRITICAL(&g_mux);
+  uint8_t port = g_model.output_byte;
+  const uint8_t bit = g_model.config.expander_bit_mix_fault;
+  if (bit < 8) {
+    // PCF8574 P7 is an input: the board pulls it to the asserted level when
+    // open and close are energised together, otherwise it stays released.
+    const bool released_high = g_model.config.mix_fault_active_low;
+    const bool input_high = released_high ? !g_model.interlock_fault : g_model.interlock_fault;
+    port = input_high ? static_cast<uint8_t>(port | (1u << bit))
+                      : static_cast<uint8_t>(port & ~(1u << bit));
+  }
+  value = port;
+  taskEXIT_CRITICAL(&g_mux);
+  return true;
 }
 
 uint8_t discover_temperature_sensors(TemperatureSensorInfo* out, uint8_t max_count) {

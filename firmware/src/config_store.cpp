@@ -14,17 +14,19 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 3;
+constexpr uint16_t kVersion = 4;
 
 // v1 blobs contain the unchanged 1288-byte Config prefix (the first version
 // already used the former tail padding for mix_max_open_pct). v2 appended the
 // pump-calibration, operating-window, overshoot, sensor-role and inferred-DHW
-// fields. v3 appends the output-driver/port-expander block. Each migration
-// starts from current defaults and copies the unchanged old prefix, so the new
-// fields receive a valid value.
+// fields. v3 appended the first output-driver/port-expander block. v4 adds
+// per-channel polarity, the PCF8574 fault input and the current-measurement
+// front end. Each migration starts from current defaults and copies the
+// unchanged old prefix, so the new fields receive a valid value.
 constexpr size_t kV1ConfigSize = 1288;
 constexpr size_t kV2ConfigSize = 1348;
-constexpr size_t kCurrentConfigSize = 1364;
+constexpr size_t kV3ConfigSize = 1364;
+constexpr size_t kCurrentConfigSize = 1376;
 
 struct ConfigBlobHeader {
   uint32_t magic;
@@ -46,8 +48,8 @@ struct ConfigBlob {
 
 static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
-static_assert(sizeof(Config) > kV2ConfigSize,
-              "v3 fields must be appended after the v2 Config prefix");
+static_assert(sizeof(Config) > kV3ConfigSize,
+              "v4 fields must be appended after the v3 Config prefix");
 // Any future field addition must bump kVersion and extend the migration path
 // instead of silently invalidating stored settings.
 static_assert(sizeof(Config) == kCurrentConfigSize,
@@ -68,6 +70,10 @@ uint32_t blob_crc_bytes(uint8_t* bytes, size_t size) {
 
 void sanitize_output_bit(uint8_t& bit, uint8_t fallback) {
   if (bit > 7) bit = fallback;
+}
+
+void sanitize_optional_output_bit(uint8_t& bit) {
+  if (bit != HPN_GPIO_UNASSIGNED && bit > 7) bit = HPN_GPIO_UNASSIGNED;
 }
 
 void sanitize_config(Config& config) {
@@ -143,8 +149,17 @@ void sanitize_config(Config& config) {
   sanitize_output_bit(config.expander_bit_pump_floor, 3);
   sanitize_output_bit(config.expander_bit_mix_direction, 4);
   sanitize_output_bit(config.expander_bit_mix_motion, 5);
-  sanitize_output_bit(config.expander_bit_mux_s0, 6);
-  sanitize_output_bit(config.expander_bit_mux_s1, 7);
+  sanitize_optional_output_bit(config.expander_bit_mux_s0);
+  sanitize_optional_output_bit(config.expander_bit_mux_s1);
+  sanitize_optional_output_bit(config.expander_bit_mix_fault);
+
+  // Current-measurement block (v4).
+  if (config.current_sense > CURRENT_SENSE_ADS1115) {
+    config.current_sense = CURRENT_SENSE_NONE;
+  }
+  if (config.ads1115_address < 0x08 || config.ads1115_address > 0x77) {
+    config.ads1115_address = 0x48;
+  }
 
   // A minimum above the usable ceiling is contradictory. Clamp it rather than
   // rejecting stored settings; normal API writes validate the combination.
@@ -218,6 +233,28 @@ ConfigLoadResult config_load(Config& config) {
           } else if (blob_crc_bytes(bytes, stored) == header->crc) {
             Config migrated = config_defaults();
             memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV2ConfigSize);
+            sanitize_config(migrated);
+            config = migrated;
+            result = ConfigLoadResult::Migrated;
+          } else {
+            result = ConfigLoadResult::Corrupt;
+          }
+        } else if (header->version == 3) {
+          const size_t v3_blob_size = sizeof(ConfigBlobHeader) + kV3ConfigSize;
+          if (stored != v3_blob_size || header->size != kV3ConfigSize) {
+            result = ConfigLoadResult::Corrupt;
+          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
+            Config migrated = config_defaults();
+            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV3ConfigSize);
+            // v3 had one global polarity. Carry it into every output so the
+            // relay board behaviour does not change during the migration.
+            const bool legacy_low = migrated.output_active_low;
+            migrated.output_active_low_heater = legacy_low;
+            migrated.output_active_low_pump_rad1 = legacy_low;
+            migrated.output_active_low_pump_rad2 = legacy_low;
+            migrated.output_active_low_pump_floor = legacy_low;
+            migrated.output_active_low_mix_direction = legacy_low;
+            migrated.output_active_low_mix_motion = legacy_low;
             sanitize_config(migrated);
             config = migrated;
             result = ConfigLoadResult::Migrated;

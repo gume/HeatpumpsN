@@ -8,8 +8,8 @@
 // Mixer actuator wiring. The two logical channels are always open/direction
 // and close/motion; this setting tells L0 how the carrier exposes them.
 enum MixerWiring : uint8_t {
-  MIX_WIRING_DIRECTION_MOTION = 0,  // legacy: direction + motion enable
-  MIX_WIRING_OPEN_CLOSE = 1,        // new: separate open and close relays
+  MIX_WIRING_DIRECTION_MOTION = 0,  // HomeNet Heating control v0.1
+  MIX_WIRING_OPEN_CLOSE = 1,        // HomeNet Heating control v1.x
 };
 
 // Output driver for the relay and mixer channels. Direct GPIO keeps the
@@ -17,8 +17,17 @@ enum MixerWiring : uint8_t {
 // bit assignment and polarity are also configurable.
 enum OutputExpander : uint8_t {
   OUTPUT_EXPANDER_NONE = 0,    // direct GPIO pins
-  OUTPUT_EXPANDER_74HC595 = 1, // serial shift register
-  OUTPUT_EXPANDER_PCF8574 = 2, // I2C quasi-bidirectional port expander
+  OUTPUT_EXPANDER_74HC595 = 1, // HomeNet Heating control v0.1
+  OUTPUT_EXPANDER_PCF8574 = 2, // HomeNet Heating control v1.x
+};
+
+// Current-measurement front end. v0.1 multiplexes four ACS712 outputs onto one
+// ADC pin; v1.x reads an ADS1115 whose inputs come from the optional TLV9064
+// sensor assembly. A board without current sensing reports 0 W.
+enum CurrentSense : uint8_t {
+  CURRENT_SENSE_NONE = 0,
+  CURRENT_SENSE_MUX_ADC = 1,
+  CURRENT_SENSE_ADS1115 = 2,
 };
 
 // Canonical configuration contract.
@@ -201,8 +210,8 @@ struct Config {
   uint32_t dhw_infer_max_s;
 
   // --- Output driver / port expander --------------------------------------
-  // The legacy carrier drives its relays through a 74HC595-compatible serial
-  // extender; the next carrier uses a PCF8574. Both are runtime-selectable so
+  // The v0.1 board drives its relays through a 74HC595-compatible serial
+  // extender; the v1.x board uses a PCF8574. Both are runtime-selectable so
   // the same firmware can drive either board (and a custom I2C address)
   // without a rebuild.
   uint8_t output_expander;       // OUTPUT_EXPANDER_* enum
@@ -212,11 +221,11 @@ struct Config {
   uint8_t expander_latch_pin;    // 74HC595 RCLK / STCP
   uint8_t expander_oe_pin;       // 74HC595 /OE, 255 when hard-wired
   bool expander_oe_active_low;   // true: /OE low enables the outputs
-  // Logical ON drives the physical output low. This covers relay boards with
-  // active-low inputs, including the PCF8574 board whose pins idle high.
+  // Legacy global polarity, kept only so v3 NVS blobs can be migrated. New
+  // code uses the per-channel flags below; the portal no longer edits this.
   bool output_active_low;
   // Expander output bit (0-7) for each logical channel. Direction and motion
-  // are the two mixer channels described by MixerWiring.
+  // are the two mixer channels described by MixerWiring. 0xFF = not connected.
   uint8_t expander_bit_heater;
   uint8_t expander_bit_pump_rad1;
   uint8_t expander_bit_pump_rad2;
@@ -225,7 +234,43 @@ struct Config {
   uint8_t expander_bit_mix_motion;
   uint8_t expander_bit_mux_s0;
   uint8_t expander_bit_mux_s1;
+
+  // --- Per-channel output polarity ----------------------------------------
+  // Each logical output has its own polarity because one board may mix
+  // active-high and active-low relay drivers. A logical ON drives the output
+  // low when the corresponding flag is true.
+  bool output_active_low_heater;
+  bool output_active_low_pump_rad1;
+  bool output_active_low_pump_rad2;
+  bool output_active_low_pump_floor;
+  bool output_active_low_mix_direction;
+  bool output_active_low_mix_motion;
+
+  // --- Port-expander fault input ------------------------------------------
+  // PCF8574 P7 on HomeNet Heating control v1.x is an input from the relay
+  // board's software interlock. It asserts when the open and close relays are
+  // energised together. 0xFF disables monitoring.
+  uint8_t expander_bit_mix_fault;
+  bool mix_fault_active_low;
+
+  // --- Current measurement -------------------------------------------------
+  // v0.1: four current sensors through a 74HC4051 into one ADC pin.
+  // v1.x: ADS1115 A0/A1/A3/A4. The TLV9064 sensor assembly is external and
+  // optional; when it is absent the firmware must not use current protection.
+  uint8_t current_sense;        // CURRENT_SENSE_* enum
+  uint8_t ads1115_address;      // 7-bit I2C address (default 0x48)
+  bool tlv9064_present;
 };
+
+inline bool current_sense_available(const Config& config) {
+  if (config.current_sense == CURRENT_SENSE_NONE) {
+    return false;
+  }
+  if (config.current_sense == CURRENT_SENSE_ADS1115 && !config.tlv9064_present) {
+    return false;
+  }
+  return true;
+}
 
 // Mixer opening ceiling as a fraction (0.01-1.0). Single source of truth for
 // the L1 enforcement and the higher-layer clamps.

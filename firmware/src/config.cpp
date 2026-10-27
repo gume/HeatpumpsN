@@ -118,15 +118,26 @@ Config config_defaults() {
   c.expander_latch_pin = HPN_GPIO_UNASSIGNED;
   c.expander_oe_pin = HPN_GPIO_UNASSIGNED;
   c.expander_oe_active_low = true;
-  c.output_active_low = false;
+  c.output_active_low = false;  // legacy migration field
   c.expander_bit_heater = 0;
   c.expander_bit_pump_rad1 = 1;
   c.expander_bit_pump_rad2 = 2;
   c.expander_bit_pump_floor = 3;
   c.expander_bit_mix_direction = 4;
   c.expander_bit_mix_motion = 5;
-  c.expander_bit_mux_s0 = 6;
-  c.expander_bit_mux_s1 = 7;
+  c.expander_bit_mux_s0 = HPN_GPIO_UNASSIGNED;
+  c.expander_bit_mux_s1 = HPN_GPIO_UNASSIGNED;
+  c.expander_bit_mix_fault = HPN_GPIO_UNASSIGNED;
+  c.mix_fault_active_low = true;
+  c.output_active_low_heater = false;
+  c.output_active_low_pump_rad1 = false;
+  c.output_active_low_pump_rad2 = false;
+  c.output_active_low_pump_floor = false;
+  c.output_active_low_mix_direction = false;
+  c.output_active_low_mix_motion = false;
+  c.current_sense = CURRENT_SENSE_NONE;
+  c.ads1115_address = 0x48;
+  c.tlv9064_present = false;
 
   copy_str(c.mixer_meter_device, "");
   copy_str(c.mixer_meter_field, "");
