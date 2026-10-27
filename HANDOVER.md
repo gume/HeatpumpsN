@@ -19,9 +19,10 @@ the design specifications live in [`plans/`](plans/).
   boots, runs a fixed FreeRTOS task set, drives the emulated HHN 1.0 carrier,
   serves a web portal, talks to MQTT/Home Assistant, and passes its runtime
   suite on a real ESP32 (`esp32dev_sim`; the exact check count is in
-  `tests/README.md`). The current board-managed-heater change set was flashed
-  to that bench board (firmware + LittleFS) and passes the full suite:
-  `85 passed, 0 failed, 0 skipped` with `--serial` on 2026-10-27.
+  `tests/README.md`). The current output-driver change set was flashed to that
+  bench board (firmware + LittleFS) and passes the full suite:
+  `89 passed, 0 failed, 0 skipped` with `--serial` and `82 passed` without it on
+  2026-10-27.
 * The **only flashed board so far is a plain ESP32 devkit running the emulated
   carrier**. The real ESP32-S2 + HomeNet Heatpumps 1.0 carrier has never been
   flashed or validated. That is the single largest open risk.
@@ -75,7 +76,7 @@ see §10.
 | `README.md` | short project overview + quick start | yes |
 | `AGENTS.md` | rules for AI/automation agents (remote agent, bounded serial) | yes |
 | `firmware/` | PlatformIO project: controller firmware | yes |
-| `firmware/HANDOVER.md` | engineering log of the last change set | yes |
+| `firmware/HANDOVER.md` | engineering logs of recent change sets | yes |
 | `firmware/README.md` | firmware details: targets, tasks, portal, NVS, safety notes | yes |
 | `firmware/docs/hhn-1.0.md` | carrier wiring, output extender, MUX, current sensing | yes |
 | `firmware/docs/io-emulation.md` | emulation model and its seams | yes |
@@ -263,16 +264,17 @@ HA / portal / MQTT
         │  *_phys, mix_motion/mix_dir, alarms
         ▼
   L0  I/O      (T_io, 20 ms, core 1)  ── the ONLY layer that touches pins
-        │  relays, extender, MUX, LEDs, 1-Wire
+        │  relays, expander, MUX, LEDs, 1-Wire
         ▼
-   carrier (HHN 1.0 extender) / emulation model
+   carrier (HHN 1.0 extender / PCF8574) / emulation model
 ```
 
 Binding rules:
 
 * **Only L0 touches hardware.** L1/L2 write logical state and call L0.
-* **One writer for the output extender** (`T_io`). The extender carries relay
-  bits *and* MUX select lines; two writers would corrupt both.
+* **One writer for the output driver** (`T_io`). The selected 74HC595 or
+  PCF8574 carries relay bits *and* MUX select lines; two writers would corrupt
+  both.
 * L1 always wins. L2 and the portal may clamp for coherence, but L1 re-checks
   every move and never opens past the effective ceiling.
 * `T_io` feeds the plant task watchdog **only while** `T_safety`, `T_io` and
@@ -427,11 +429,11 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
 
 | Area | Notes |
 | --- | --- |
-| L0 carrier + emulation | HHN 1.0 profile, extender bit map, safe state, LEDs, 1-Wire, MUX select |
+| L0 carrier + emulation | HHN 1.0 profile, runtime direct/74HC595/PCF8574 driver, expander bit map, polarity-aware safe state, LEDs, 1-Wire, MUX select |
 | L1 supervision | hard/warn overtemp + hysteresis, gradient, sensor postures, role check, summer/anti-seize lockout, anti-short-cycle, pump plausibility |
 | L1 mixer | continuous target-position servo, ceiling/minimum, dynamic max, emergency close, homing/sweep, warning-only anomalies |
 | L2 control | PI + Smith predictor, flush + ΔT pause, DHW freeze/priority, long-pause, inferred DHW, overshoot reaction, per-circuit keep-alive, derived heater, board after-run |
-| Config | v2 + migration + CRC + sanitize + export/import |
+| Config | v3 + v1/v2 migration + CRC + sanitize + export/import |
 | Comms | Wi-Fi, MQTT/HA (incl. error sensors + log streaming), portal, WebSocket, OTA |
 | Diagnostics | RAM event/slow/access logs, relay counters, 5 LEDs, boot-safe state |
 | Bench hardening | watchdog ownership, pre-sized JSON, withheld-feed diagnostics |
@@ -441,6 +443,7 @@ DHW is active the mixer integrator freezes and the valve holds/closes safely.
 | Gap | Where | Impact |
 | --- | --- | --- |
 | **Real HHN 1.0 / ESP32-S2 validation** | `esp32s2` env | highest risk: no real relay, extender, MUX or 1-Wire run yet |
+| **Real PCF8574 / active-low relay validation** | runtime output driver | I²C backend and polarity are compile/emulation-verified only |
 | **Pump-current hardware sampling** | `io_backend.cpp:268` TODO; `read_power_w()` returns 0 on hardware | pump protection cannot work on the real plant until done |
 | **Local encoder sampling** | `l0_io.cpp:277`; `POS_SRC_I2C` declared but unimplemented | position stays dead-reckoned + external MQTT encoder |
 | **L3 adaptive tuning** | not implemented; no `/config/tuning/set` | parameters stay manual/observer-owned |

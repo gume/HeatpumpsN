@@ -45,12 +45,15 @@ future carrier, keep the flag and change the carrier macro.
 At boot L0 prints which path is active:
 
 ```
-[l0] carrier   HomeNet Heatpumps 1.0 (output extender)
+[l0] carrier   HomeNet Heatpumps 1.0 (74HC595 output extender)
 [l0] backend   emulation
+[l0] 74HC595   data=12 clock=11 latch=9 oe=7 (OE active-low)
 ```
 
 An `esp32dev_sim` image must never be expected to drive real relays. Verify the
-`backend` line before connecting anything.
+`backend` line before connecting anything. The driver name follows the runtime
+`output_expander` setting; a PCF8574 selection prints `PCF8574 output extender`
+and uses the same emulated output byte.
 
 ## 3. What the model contains
 
@@ -69,8 +72,8 @@ An `esp32dev_sim` image must never be expected to drive real relays. Verify the
 | `realistic_power` | Pump power follows its relay; mixer power follows motion |
 | `realistic_boiler` | Boiler supply is the placeholder sine wave around 65 °C |
 | `mux_channel` | Decoded MUX channel, `0xFF` if the carrier has none |
-| `output_byte` | Last byte latched into the output extender (controller output) |
-| `output_enabled` | `OE` state of the shift register |
+| `output_byte` | Last byte written to the selected output driver (74HC595 latch or PCF8574 port) |
+| `output_enabled` | `OE` state of a 74HC595; always true for PCF8574 and direct GPIO |
 | `led_count`, `led_rgb[]` | Last LED frame, logical RGB |
 | `revision` | Bumped on every change; cheap change detection for the UI |
 

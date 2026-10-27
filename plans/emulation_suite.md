@@ -90,7 +90,7 @@ struct Snapshot {
 
   // --- Carrier Telemetry & Registers ---
   uint8_t mux_channel;           // Decoded 74HC4051 analog MUX channel
-  uint8_t output_byte;           // Raw 74HC595 shift register latch byte
+  uint8_t output_byte;           // Last byte of the selected output driver
   bool    output_enabled;        // Output Enable (OE) state
   uint16_t led_count;            // Number of chained addressable LEDs
   uint8_t led_rgb[15];           // Captured RGB pixel buffer (5 LEDs * 3 bytes)
@@ -118,14 +118,18 @@ struct Snapshot {
   * Can be raised above `t_max_hard` (50.0 °C) to evaluate L1 overtemperature emergency latching, or pulsed rapidly to trigger gradient limit cutoffs ($dT/dt > 0.3\ \text{K/s}$).
 
 #### 2. Carrier & Actuator Simulation
-* **Shift Register (74HC595):** Captures bit writes from L0 and immediately reflects them into emulated relays:
+* **Output driver:** L0 writes the selected driver into the model. For a
+  74HC595 the emulator captures the latch byte; for a PCF8574 it captures the
+  I²C port byte. Both feed the same relay/MUX model, and
+  `output_active_low` inverts the relay interpretation. The default HHN 1.0 bit
+  map is:
   * Bit 0: Heater switch
   * Bit 3: Mixer direction
   * Bit 4: Mixer motion enable
   * Bit 5: Radiator pump 1
   * Bit 6: Radiator pump 2
   * Bit 7: Floor pump
-* **Analog Current MUX (74HC4051):** Decodes bits 1 & 2 of the shift register to determine the active ACS712 current measurement channel:
+* **Analog Current MUX (74HC4051):** Decodes the configured S0/S1 expander bits (default 2 & 1) to determine the active ACS712 current measurement channel. MUX bits stay active-high regardless of relay polarity:
   * Channel 0: Radiator 2 pump
   * Channel 1: Floor pump
   * Channel 2: Mixer motor

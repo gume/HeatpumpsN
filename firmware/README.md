@@ -21,15 +21,17 @@ steps are described in
 | --- | --- | --- | --- | --- |
 | `esp32dev_sim` | `esp32dev` | dual-core Xtensa | HomeNet Heatpumps 1.0 | **emulated** — default env |
 | `esp32dev` | `esp32dev` | dual-core Xtensa | boardless | hardware (no pins assigned) |
-| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, output extender + MUX |
+| `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heatpumps 1.0 | hardware, runtime output driver + MUX |
 | `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware, 2.0 target |
 | `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, 2.0 target |
 
 Carriers describe wiring; the backend describes whether writes reach pins. They
 are independent compile-time choices:
 
-- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: serial output extender, analogue
-  current MUX, 5 LEDs, 1-Wire. ESP32-S2 in the field.
+- `-DHPN_CARRIER_HHN1` — HomeNet Heatpumps 1.0: 74HC595 default output
+  driver, analogue current MUX, 5 LEDs, 1-Wire. ESP32-S2 in the field. The
+  output driver itself is runtime configuration, so a PCF8574 can be selected
+  on the same carrier.
 - `-DHPN_CARRIER_BOARDLESS` — bare devkit, pins unassigned
   (`HPN_GPIO_UNASSIGNED`) until the 2.0 layout exists.
 - `-DHPN_IO_EMULATION` — L0 runs against an in-memory model of the carrier
@@ -386,10 +388,11 @@ tests/flash_and_check.sh --serial        # build + flash esp32dev_sim + checks
 ```
 
 Verified on the bench ESP32 (`esp32dev_sim`, 2026-10-27):
-`PASSED: 85 passed, 0 failed, 0 skipped` with `--serial`, and `78/78` without
-the reboot. The boot log showed the saved config loading, no Preferences
-errors, no `501` latch, no crash markers, the `[l1] mixer opening limit` line
-and the new dynamic-maximum/minimum lines.
+`PASSED: 89 passed, 0 failed, 0 skipped` with `--serial`, and `82/82` without
+the reboot. The boot log showed the saved config loading, the 74HC595 driver
+with its pin map and `/OE` polarity, no Preferences errors, no `501` latch and
+no crash markers. The serial run also round-tripped a PCF8574 driver selection
+and rejected duplicate expander bits.
 
 Requirements, the full check list and the state the suite restores are in
 [`../tests/README.md`](../tests/README.md). `--serial` reboots the board.

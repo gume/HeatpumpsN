@@ -296,5 +296,17 @@ polarity, `output_active_low`, and eight `expander_bit_*` values.
 * `pio run -d firmware -e esp32s2` → **SUCCESS** (compile only).
 * `node --check firmware/data/js/app.js` and `gzip -9` asset regeneration → OK.
 * `python3 -m py_compile tests/runtime_check.py` → OK.
-* Bench flash and full runtime suite: see the top-level `HANDOVER.md` for the
-  current result and the remaining hardware caveat (no real PCF8574 board yet).
+* Flashed firmware + LittleFS to the bench ESP32 (`esp32dev_sim`) on
+  2026-10-27. The existing v2 blob migrated to v3 on the first boot; later
+  reboots log `[config] loaded saved configuration from NVS`.
+* `python3 tests/runtime_check.py --serial` → **PASSED: 89 passed, 0 failed,
+  0 skipped**; without `--serial` → **PASSED: 82 passed, 0 failed, 0 skipped**.
+* The serial boot log showed `[l0] carrier HomeNet Heatpumps 1.0 (74HC595
+  output extender)`, `[l0] 74HC595 data=12 clock=11 latch=9 oe=7 (OE
+  active-low)` and no NVS/crash markers.
+* The suite round-tripped a PCF8574 selection (address, I2C pins, active-low),
+  observed the reboot flag and confirmed duplicate expander bits are rejected.
+
+**Still open:** no real PCF8574 board or ESP32-S2 carrier has been available, so
+the I²C backend and the active-low relay board are compile/emulation-verified
+only. Bench-test polarity with a meter before connecting pumps.

@@ -4,7 +4,8 @@ End-to-end checks against a **running** controller. They complement the native
 unit tests in `firmware/test/`: these exercise the real HTTP API, the versioned
 config contract, the RAM log rings, MQTT discovery/state publishing, the
 emulation build's LED mapping, the per-circuit keep-alive, the board-owned
-pump after-run, the mixer opening window and sensor-role verification.
+pump after-run, the runtime output driver (direct/74HC595/PCF8574, expander bit
+map and polarity), the mixer opening window and sensor-role verification.
 
 `runtime_check.py` prints one line per check and finishes with either
 `PASSED: ...` (exit code 0) or `FAILED: ...` (exit code 1).
@@ -22,8 +23,8 @@ tests/flash_and_check.sh --serial
 A successful run ends with a summary line, for example:
 
 ```
-PASSED: 85 passed, 0 failed, 0 skipped   # with --serial
-PASSED: 78 passed, 0 failed, 0 skipped   # without --serial
+PASSED: 89 passed, 0 failed, 0 skipped   # with --serial
+PASSED: 82 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.
