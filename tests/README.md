@@ -5,7 +5,8 @@ unit tests in `firmware/test/`: these exercise the real HTTP API, the versioned
 config contract, the RAM log rings, MQTT discovery/state publishing, the
 emulation build's LED mapping, the per-circuit keep-alive, the board-owned
 pump after-run, the runtime output driver (direct/74HC595/PCF8574, expander bit
-map and polarity), the mixer opening window and sensor-role verification.
+map, per-output polarity, the v1.x P7 fault input, the MUX/ADS1115 current front
+ends), the mixer opening window and sensor-role verification.
 
 `runtime_check.py` prints one line per check and finishes with either
 `PASSED: ...` (exit code 0) or `FAILED: ...` (exit code 1).
@@ -28,6 +29,12 @@ PASSED: 82 passed, 0 failed, 0 skipped   # without --serial
 ```
 
 The exact count changes with the build and the MQTT/emulation availability.
+
+Last full run: **2026-10-27** on the bench ESP32 (`esp32dev_sim`, HomeNet
+Heating control v0.1 emulated, firmware reflashed with the v4 config and the
+new assets): `89 passed` with `--serial`, `82 passed` without it. The v1.x
+fault path was verified separately; see the last note under
+[Notes and limitations](#notes-and-limitations).
 
 ## Prerequisites
 
@@ -80,9 +87,13 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    pump-current calibration section and the minimum-opening field.
 3. **Config contract** — the MQTT log fields exist on `/api/config/network`;
    the mixer window, overshoot, sensor-role and inferred-DHW fields exist on
-   `/api/config/safety`; the pump calibration fields and protection switch
-   exist on `/api/config/hardware`; `/api/sensors/roles` exposes the documented
-   shape; and the obsolete pulse-width fields are gone.
+   `/api/config/safety`; the pump calibration fields, the protection switch,
+   the output driver and expander bit map, the six per-output polarity flags,
+   the v1.x fault-input fields (`expander_bit_mix_fault`,
+   `mix_fault_active_low`) and the current front end (`current_sense`,
+   `ads1115_address`, `tlv9064_present`) exist on `/api/config/hardware`;
+   `/api/sensors/roles` exposes the documented shape; and the obsolete
+   pulse-width fields are gone.
 4. **RAM logs** — `/api/log/events` and `/api/log/slow` are populated, stay
    within capacity, have the documented record shape, and no NVS-corruption
    event (501) was latched.
@@ -108,30 +119,36 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    cyan) states. A critical alarm must make LED 0 blink red.
 9. **No false diagnostics** — relay/pump transitions must not republish the
    error state topics.
-10. **Keep-alive** (emulation build) — with `demand_timeout_s` briefly set to
+10. **Output driver and polarity** (emulation build) — a PCF8574 patch with
+    the v1.x bit map (pump 1 P0, pump 2 P1, pump 3/floor P2, open P3, close P4,
+    heat P5, fault P7), mixed per-output polarity, the unused MUX select bits
+    set to `255`, `current_sense=ADS1115` and `tlv9064_present=true` must
+    round-trip through `/api/config/hardware`, the response must request a
+    reboot, and a duplicate expander bit must be rejected with HTTP 400.
+11. **Keep-alive** (emulation build) — with `demand_timeout_s` briefly set to
     10 s, turning on `Heating loop 1` arms the demand. Without a repeat
     command the effective demand drops while the raw intent stays set, error
     `301` is reported, and a fresh ON re-arms the demand and clears the error.
-11. **Board after-run** (emulation build) — with a short
+12. **Board after-run** (emulation build) — with a short
     `pump_stop_after_heating_s`, a floor demand runs the pump and automatic
     heater. When the demand ends the heater stops immediately, but the pump
     stays physically on with a decreasing `afterRun` value until the board's
     after-run expires.
-12. **Mixer opening ceiling** (emulation build) — `/api/config/safety` carries
+13. **Mixer opening ceiling** (emulation build) — `/api/config/safety` carries
     a valid `mix_max_open_pct` and `/api/state` reports the same value as
     `circuits.floor.mixerMaxPct`. In Test Mode with a short travel time, the
     script parks the valve at 0 %, starts a 100 % move and lowers the ceiling
     to 40 % mid-move; L1 must stop at 40 % with the motor off, the live value
     must follow, and the portal must reject a target above the ceiling with
     HTTP 400.
-13. **Sensor role verification** (emulation build) — with Test Mode heating
+14. **Sensor role verification** (emulation build) — with Test Mode heating
     active and valid safe temperatures, `/api/sensors/roles` must report
     `measurable` and `plausible`. Inverting boiler and return temperatures must
     keep the check measurable but report `plausible=false` with the
     boiler ≥ forward comparison false. Test Mode drives the heater manually
     through `/api/test/command`; the check is only possible while the heater
     and floor pump are physically running.
-14. **Serial boot (optional)** — the board boots with the saved config, logs
+15. **Serial boot (optional)** — the board boots with the saved config, logs
     no Preferences errors, no NVS corruption and no crash markers, then
     reconnects Wi-Fi and MQTT.
 
@@ -164,6 +181,10 @@ The script is written to be re-runnable on a shared bench:
   `/api/test/command` and safe temperatures, inverts the boiler/return
   simulator answers, then restores the flag, the window, the temperatures, the
   outputs and the previous Test Mode state.
+- The output-driver check writes the PCF8574/v1.x hardware patch (bit map,
+  per-output polarity, fault bit, current front end) and restores every key it
+  changed during cleanup. The change is stored but not activated, because
+  hardware settings only take effect after a reboot.
 - `--broker` changes `mqtt_host`/`mqtt_port` only for the duration of the run.
 - `--serial` **reboots the controller**; run it last.
 
@@ -172,9 +193,28 @@ save performed by the normal config PUT endpoint.
 
 ## Notes and limitations
 
-- Error-sensor, LED, keep-alive, after-run, mixer-ceiling and sensor-role
-  checks require `HPN_IO_EMULATION` (the `esp32dev_sim` environment); they are
-  reported as skipped otherwise.
+- Error-sensor, LED, keep-alive, after-run, mixer-ceiling, sensor-role and
+  output-driver checks require `HPN_IO_EMULATION` (the `esp32dev_sim`
+  environment); they are reported as skipped otherwise.
+- The v1.x interlock fault path is **not** part of the automated run: it needs
+  a driver change plus a reboot. It was verified by hand on 2026-10-27 with the
+  emulated `esp32dev_sim` build. Set `output_expander=2` (PCF8574), the v1.x
+  bit map with `expander_bit_mix_fault=7` and `mix_fault_active_low=true`, all
+  six outputs active low, `mixer_wiring=1`, `current_sense=0` and the MUX bits
+  `255`, reboot, then:
+
+  ```bash
+  curl -X POST -H 'Content-Type: application/json' \
+       -d '{"fault":true}' http://<controller>/api/sim/interlock
+  curl -s http://<controller>/api/sim       # interlockFault=true, outputByte 0xff
+  curl -s http://<controller>/api/state     # safety.errorCode=402, mixer interlock text
+  curl -X POST -H 'Content-Type: application/json' \
+       -d '{"fault":false}' http://<controller>/api/sim/interlock
+  curl -s http://<controller>/api/state     # safety.errorCode back to 0
+  ```
+
+  Restore the hardware section when done; a reboot re-applies the stored
+  output driver.
 - Counter persistence and anti-seize CRC writes are not exercised on the
   bench board; those are covered by code review and the NVS integrity checks
   in the boot log.

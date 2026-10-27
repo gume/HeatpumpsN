@@ -643,11 +643,18 @@ class Controller:
             "expander_latch_pin",
             "expander_oe_pin",
             "expander_oe_active_low",
-            "output_active_low",
             "expander_bit_heater",
             "expander_bit_pump_floor",
             "expander_bit_mix_direction",
             "expander_bit_mux_s1",
+            "expander_bit_mix_fault",
+            "mix_fault_active_low",
+            "output_active_low_heater",
+            "output_active_low_pump_floor",
+            "output_active_low_mix_motion",
+            "current_sense",
+            "ads1115_address",
+            "tlv9064_present",
         )
         missing_expander = [key for key in expander_fields if key not in self.hardware]
         self.checker.expect(
@@ -680,15 +687,27 @@ class Controller:
             "expander_address": 0x27,
             "i2c_sda": 8,
             "i2c_scl": 10,
-            "output_active_low": True,
-            "expander_bit_heater": 0,
-            "expander_bit_pump_floor": 1,
-            "expander_bit_pump_rad1": 2,
-            "expander_bit_pump_rad2": 3,
-            "expander_bit_mix_direction": 4,
-            "expander_bit_mix_motion": 5,
-            "expander_bit_mux_s0": 6,
-            "expander_bit_mux_s1": 7,
+            # HomeNet Heating control v1.x bit map, with mixed output polarity.
+            "expander_bit_pump_rad1": 0,
+            "expander_bit_pump_rad2": 1,
+            "expander_bit_pump_floor": 2,
+            "expander_bit_mix_direction": 3,
+            "expander_bit_mix_motion": 4,
+            "expander_bit_heater": 5,
+            "expander_bit_mix_fault": 7,
+            "mix_fault_active_low": True,
+            "output_active_low_heater": False,
+            "output_active_low_pump_floor": True,
+            "output_active_low_pump_rad1": True,
+            "output_active_low_pump_rad2": True,
+            "output_active_low_mix_direction": True,
+            "output_active_low_mix_motion": True,
+            # No analogue MUX on this board; ADS1115 with the optional sensor.
+            "expander_bit_mux_s0": 255,
+            "expander_bit_mux_s1": 255,
+            "current_sense": 2,
+            "ads1115_address": 0x48,
+            "tlv9064_present": True,
         }
         response = self._put_hardware(patch)
         stored = http_json(self.base, "/api/config/hardware")
@@ -698,7 +717,7 @@ class Controller:
             if stored.get(key) != value
         }
         self.checker.expect(
-            "PCF8574 driver and polarity round-trip",
+            "PCF8574 driver, per-output polarity and current front end round-trip",
             not mismatched,
             json.dumps(mismatched, sort_keys=True) if mismatched else "",
         )
