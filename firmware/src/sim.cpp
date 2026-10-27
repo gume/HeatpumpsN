@@ -639,9 +639,10 @@ bool read_expander(uint8_t& value) {
   const uint8_t bit = g_model.config.expander_bit_mix_fault;
   if (bit < 8) {
     // PCF8574 P7 is an input: the board pulls it to the asserted level when
-    // open and close are energised together, otherwise it stays released.
-    const bool released_high = g_model.config.mix_fault_active_low;
-    const bool input_high = released_high ? !g_model.interlock_fault : g_model.interlock_fault;
+    // both mixer channels are requested, otherwise it stays released. The
+    // v1.x board asserts high, so a healthy line reads low.
+    const bool asserted_high = !g_model.config.mix_fault_active_low;
+    const bool input_high = g_model.interlock_fault ? asserted_high : !asserted_high;
     port = input_high ? static_cast<uint8_t>(port | (1u << bit))
                       : static_cast<uint8_t>(port & ~(1u << bit));
   }

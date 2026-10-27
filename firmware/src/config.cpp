@@ -128,7 +128,8 @@ Config config_defaults() {
   c.expander_bit_mux_s0 = HPN_GPIO_UNASSIGNED;
   c.expander_bit_mux_s1 = HPN_GPIO_UNASSIGNED;
   c.expander_bit_mix_fault = HPN_GPIO_UNASSIGNED;
-  c.mix_fault_active_low = true;
+  // The v1.x board asserts its interlock fault high (FAULT = NOR(#M+, #M-)).
+  c.mix_fault_active_low = false;
   c.output_active_low_heater = false;
   c.output_active_low_pump_rad1 = false;
   c.output_active_low_pump_rad2 = false;

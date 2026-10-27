@@ -199,9 +199,9 @@ save performed by the normal config PUT endpoint.
 - The v1.x interlock fault path is **not** part of the automated run: it needs
   a driver change plus a reboot. It was verified by hand on 2026-10-27 with the
   emulated `esp32dev_sim` build. Set `output_expander=2` (PCF8574), the v1.x
-  bit map with `expander_bit_mix_fault=7` and `mix_fault_active_low=true`, all
-  six outputs active low, `mixer_wiring=1`, `current_sense=0` and the MUX bits
-  `255`, reboot, then:
+  bit map with `expander_bit_mix_fault=7` and `mix_fault_active_low=false`
+  (the board asserts `FAULT` high), all six outputs active low,
+  `mixer_wiring=1`, `current_sense=0` and the MUX bits `255`, reboot, then:
 
   ```bash
   curl -X POST -H 'Content-Type: application/json' \

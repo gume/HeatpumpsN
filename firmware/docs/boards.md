@@ -306,7 +306,8 @@ Assumptions that need schematic confirmation:
 - PCF8574 base address `0x20` (no strap fitted).
 - ADS1115 address `0x48` (ADDR tied to GND).
 - All relay-driver inputs are active low.
-- The interlock fault input is active low.
+- The interlock fault input is active high: `FAULT` is low while the mixer
+  interlock is healthy.
 
 ### 3.2 PCF8574 output bit map
 
@@ -335,8 +336,11 @@ stored as `255` ("not connected").
 ### 3.3 Interlock fault input
 
 P7 is an **input to the MCU**, driven by the relay board's software interlock.
-It asserts when the board sees the open and close relays energised together.
-This is a hardware-level failure: L0 reports it as
+`FAULT = NOR(#M+, #M-)` (U13), so the line is **active high**: it is low while
+the interlock is healthy and goes high when the board sees both mixer channels
+requested at the same time. The same gate array then forces `MP+` and `MP-` low,
+so the board drops both mixer relays in hardware before the MCU reacts. This is
+a hardware-level failure: L0 reports it as
 `SystemState::mix_interlock_fault`, and L1:
 
 - raises `ALARM_MIX_INTERLOCK` and sets `ERR_MIX_INTERLOCK_FAULT` (402);
@@ -424,9 +428,10 @@ other driver. The Hardware page hides the unrelated settings but keeps them in
    schematic.
 2. Confirm the relay inputs are active low, then verify one output at a time
    with the PCF8574 (start with pumps, end with the mixer).
-3. Verify P6 stays high and P7 reads released with the interlock healthy.
-4. Force an interlock fault on the relay board and confirm the mixer stops and
-   the portal shows error 402.
+3. Verify P6 stays high and P7 reads low (not asserted) with the interlock
+   healthy.
+4. Force an interlock fault on the relay board and confirm P7 goes high, the
+   mixer stops and the portal shows error 402.
 5. Declare `tlv9064_present` only after the assembly is fitted; verify the
    A0/A1/A2/A3 mapping against a known load before enabling current protection.
    Run the mixer in both directions and confirm A2 reads the moving motor.

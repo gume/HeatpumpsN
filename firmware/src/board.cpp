@@ -149,7 +149,9 @@ void board_apply_defaults(Config& config) {
   config.expander_bit_mux_s0 = HPN_GPIO_UNASSIGNED;  // no analogue MUX
   config.expander_bit_mux_s1 = HPN_GPIO_UNASSIGNED;
   config.expander_bit_mix_fault = 7;      // P7: interlock fault input
-  config.mix_fault_active_low = true;
+  // U13 forms FAULT = NOR(#M+, #M-), so the line is low while the interlock is
+  // healthy and goes high only when both mixer channels are requested.
+  config.mix_fault_active_low = false;
 
   config.current_sense = CURRENT_SENSE_ADS1115;
   config.ads1115_address = 0x48;
