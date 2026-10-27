@@ -627,34 +627,41 @@ function tempTile(label, value, health) {
   </div>`;
 }
 
-function circuitCard(key, label, circuit, powerW = null, options = {}) {
+function circuitCard(key, label, circuit, powerW = null) {
   const c = circuit || {};
   const afterRun = num(c.afterRun, 0);
   const on = !!num(c.phys, 0);
-  const cmd = !!num(c.cmd, 0);
-  const isFloor = key === 'floor';
-  const isHeater = key === 'heater';
-  // Radiator relays are assumed to execute their command; only the floor pump
-  // and the safety-owned heater expose a separate physical state.
-  const pill = (isFloor || isHeater) ? mismatchPill(cmd, on) : statePill(on, on ? 'ON' : 'OFF');
+  const demand = !!num(c.demand ?? c.cmd, 0);
+  const demandAge = num(c.demandAge, 0);
+  // The heating switch is the HA-facing demand; the pump can legitimately stay
+  // on after the switch turns off because the board owns the after-run.
+  const pill = mismatchPill(demand, on);
 
-  let rows = '';
-  if (isHeater) {
-    rows = `<div class="metric-row"><span class="k">Reason</span><span class="v">${esc(options.reason || '—')}</span></div>
-      <div class="metric-row"><span class="k">Demand age</span><span class="v">${num(options.demandAge, 0) ? fmtAge(options.demandAge) : '—'}</span></div>`;
-  } else {
-    if (isFloor) {
-      rows += `<div class="metric-row"><span class="k">Command</span><span class="v">${cmd ? 'ON' : 'OFF'}</span></div>
-        <div class="metric-row"><span class="k">Physical</span><span class="v">${on ? 'ON' : 'OFF'}</span></div>`;
-    }
-    rows += `<div class="metric-row"><span class="k">After-run</span><span class="v">${afterRun ? fmtAge(afterRun) : '—'}</span></div>`;
-    if (powerW !== null && powerW !== undefined) {
-      rows += `<div class="metric-row"><span class="k">Power</span><span class="v">${fmtNum(powerW, 1)} W</span></div>`;
-    }
-  }
+  const rows = `
+    <div class="metric-row"><span class="k">Heating switch</span><span class="v">${demand ? 'ON' : 'OFF'}</span></div>
+    <div class="metric-row"><span class="k">Pump</span><span class="v">${on ? 'ON' : 'OFF'}</span></div>
+    <div class="metric-row"><span class="k">${afterRun ? 'After-run' : 'Demand age'}</span><span class="v">${afterRun ? fmtAge(afterRun) : (demandAge ? fmtAge(demandAge) : '—')}</span></div>
+    ${powerW !== null && powerW !== undefined ? `<div class="metric-row"><span class="k">Power</span><span class="v">${fmtNum(powerW, 1)} W</span></div>` : ''}
+  `;
 
   return `<div class="circuit">
     <div class="circuit-head"><strong>${esc(label)}</strong>${pill}</div>
+    <div class="circuit-body">${rows}</div>
+  </div>`;
+}
+
+function heaterCard(heater) {
+  const on = !!num(heater.phys, 0);
+  const requested = !!num(heater.requested ?? heater.cmd, 0);
+  const rows = `
+    <div class="metric-row"><span class="k">Control</span><span class="v">Automatic (board)</span></div>
+    <div class="metric-row"><span class="k">Request</span><span class="v">${requested ? 'ON' : 'OFF'}</span></div>
+    <div class="metric-row"><span class="k">Relay</span><span class="v">${on ? 'ON' : 'OFF'}</span></div>
+    <div class="metric-row"><span class="k">Reason</span><span class="v">${esc(heater.reason || '—')}</span></div>
+  `;
+
+  return `<div class="circuit">
+    <div class="circuit-head"><strong>Heater</strong>${statePill(on, on ? 'ON' : 'OFF')}</div>
     <div class="circuit-body">${rows}</div>
   </div>`;
 }
@@ -764,10 +771,10 @@ function dashboardLeds(live) {
 
   return [
     { label: 'LED 0 · System', ...systemLed },
-    { label: 'LED 1 · Boiler', ...boilerLed },
+    { label: 'LED 1 · Heater', ...boilerLed },
     { label: 'LED 2 · Floor', ...floorLed },
-    { label: 'LED 3 · Rad 1', ...pumpLed(rad1On) },
-    { label: 'LED 4 · Rad 2', ...pumpLed(rad2On) }
+    { label: 'LED 3 · Loop 1', ...pumpLed(rad1On) },
+    { label: 'LED 4 · Loop 2', ...pumpLed(rad2On) }
   ];
 }
 
@@ -814,14 +821,14 @@ function renderDashboard() {
     <div class="grid cols-2">
       <section class="card readonly accent-top">
         <div class="card-head">
-          <div><h2>Circuits</h2><p>Relay state, after-run and electrical draw</p></div>
+          <div><h2>Heating loops</h2><p>Switch demand, physical pump and board-owned after-run</p></div>
           <span class="chip">${esc(modeLabel(mode.current))}</span>
         </div>
         <div class="circuit-grid">
-          ${circuitCard('heater', 'Heater', { cmd: heater.cmd, phys: heater.phys }, null, { reason: heater.reason, demandAge: heater.demandAge })}
-          ${circuitCard('floor', 'Floor pump', circuits.floor, power.floor)}
-          ${circuitCard('rad1', 'Radiator 1', circuits.rad1, power.rad1)}
-          ${circuitCard('rad2', 'Radiator 2', circuits.rad2, power.rad2)}
+          ${circuitCard('rad1', 'Heating loop 1', circuits.rad1, power.rad1)}
+          ${circuitCard('rad2', 'Heating loop 2', circuits.rad2, power.rad2)}
+          ${circuitCard('floor', 'Floor heating', circuits.floor, power.floor)}
+          ${heaterCard(heater)}
         </div>
       </section>
 
@@ -1191,10 +1198,12 @@ function renderTest() {
         </div>
         <div class="banner warn">
           <strong>Before activating:</strong> Test Mode writes manual commands through the same intake path as HA.
-          It is intended for bench verification only. L1 safety still retains final authority over the heater.
+          It is intended for bench verification only. L1 safety still retains final authority over every output,
+          including the heater.
         </div>
         <ul class="small muted" style="margin:12px 0 16px 18px; padding:0">
-          <li>Heater commands are refused unless at least one pump is commanded ON.</li>
+          <li>In normal operation the board owns the heater and follows the three heating switches.</li>
+          <li>Test Mode is the only place where the heater can be commanded manually.</li>
           <li>The session expires automatically at the configured limit (2 h by default).</li>
           <li>Commands update <span class="mono">*_intended</span>; on the bench, L2 copies them to <span class="mono">*_requested</span>.</li>
         </ul>
@@ -1224,10 +1233,10 @@ function renderTest() {
           <div><h2>Manual outputs</h2><p>Command state versus physical relay state</p></div>
           <span class="chip chip-err">GUARDED</span>
         </div>
-        ${testOutputRow('heater', 'Heater', heater.cmd, heater.phys, 'Requires at least one pump ON; L1 refuses otherwise.')}
-        ${testOutputRow('pump_floor', 'Floor pump', floor.cmd, floor.phys, 'Floor loop pump')}
-        ${testOutputRow('pump_rad1', 'Radiator 1 pump', circuits.rad1?.cmd, circuits.rad1?.phys, 'Radiator circuit 1')}
-        ${testOutputRow('pump_rad2', 'Radiator 2 pump', circuits.rad2?.cmd, circuits.rad2?.phys, 'Radiator circuit 2')}
+        ${testOutputRow('heater', 'Heater (manual)', heater.cmd, heater.phys, 'Board-managed outside Test Mode; requires at least one pump ON here.')}
+        ${testOutputRow('pump_floor', 'Floor pump', floor.cmd, floor.phys, 'Floor heating circuit pump')}
+        ${testOutputRow('pump_rad1', 'Heating loop 1 pump', circuits.rad1?.cmd, circuits.rad1?.phys, 'Heating loop 1')}
+        ${testOutputRow('pump_rad2', 'Heating loop 2 pump', circuits.rad2?.cmd, circuits.rad2?.phys, 'Heating loop 2')}
         <div class="banner info" style="margin-top:12px">Divergence: <span class="mono">${esc(system.divergence || 'none')}</span></div>
       </section>
 
@@ -1270,7 +1279,7 @@ function renderTest() {
       <div class="sequence-grid">
         <div class="sequence-card">
           <h4>Anti-seize</h4>
-          <p>Runs floor, rad1 and rad2 pumps for 30 seconds each, then stops them.</p>
+          <p>Runs the floor, loop 1 and loop 2 pumps for 30 seconds each, then stops them.</p>
           <button class="btn btn-sm btn-primary" type="button" data-action="test-sequence" data-sequence="anti-seize">Run sequence</button>
         </div>
         <div class="sequence-card">
@@ -1449,8 +1458,8 @@ function renderSettingsSafety() {
             ${fieldRange('mix_safe_pos', 'Safe mixer position', cfg.mix_safe_pos, 0, 1, 0.01, '0–1', 'Position used when the mixer must be parked safely.')}
             ${fieldRange('mix_max_open_pct', 'Maximum mixer opening', cfg.mix_max_open_pct, 10, 100, 1, '%', 'L1 never drives the mixer above this limit. Lower it if a sudden temperature rise needs a faster close.')}
             ${fieldNumber('boiler_min_off_min', 'Boiler minimum off time', cfg.boiler_min_off_ms / 60000, 0, 60, 0.5, 'Minimum boiler off time before it may be re-energized.', 'number', 'min')}
-            ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Time without a fresh HA demand before the demand is dropped.', 'int', 's')}
-            ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Pumps keep running for this long after heating stops.', 'int', 's')}
+            ${fieldNumber('demand_timeout_s', 'Demand timeout', cfg.demand_timeout_s, 10, 3600, 1, 'Time without a repeated ON command on a heating switch before that circuit demand is dropped.', 'int', 's')}
+            ${fieldNumber('pump_stop_after_heating_s', 'Pump after-run', cfg.pump_stop_after_heating_s, 0, 3600, 1, 'Board-managed pump run-on after that circuit demand ends.', 'int', 's')}
             ${fieldNumber('long_pause_min', 'Long-pause threshold', cfg.long_pause_s / 60, 0, 1440, 1, 'Time before a long-pause divergence is reported.', 'number', 'min')}
           </div>
         </div>
@@ -1546,8 +1555,8 @@ function renderSettingsHardware() {
           <h3>GPIO map</h3>
           <div class="form-grid">
             ${fieldNumber('gpio_pump_floor', 'Floor pump GPIO', cfg.gpio_pump_floor, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_pump_rad1', 'Radiator 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_pump_rad2', 'Radiator 2 pump GPIO', cfg.gpio_pump_rad2, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_pump_rad1', 'Heating loop 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_pump_rad2', 'Heating loop 2 pump GPIO', cfg.gpio_pump_rad2, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_heater', 'Heater GPIO', cfg.gpio_heater, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_mix_open', 'Mixer open / direction GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_mix_close', 'Mixer close / motion GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
@@ -2062,7 +2071,7 @@ async function saveSettingsForm(form) {
 async function activateTest() {
   const ok = await confirmDialog(
     'Activate Test Mode?',
-    'Manual output control bypasses HA demand. The session is time-limited and L1 still retains final authority over the heater. Use it only for bench verification.',
+    'Manual output control bypasses HA demand. The session is time-limited and L1 still retains final authority over every output. The heater is normally board-managed; use this only for bench verification.',
     'Activate',
     true
   );
