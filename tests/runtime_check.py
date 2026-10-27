@@ -655,6 +655,8 @@ class Controller:
             "current_sense",
             "ads1115_address",
             "tlv9064_present",
+            "has_pump_power",
+            "has_mixer_power",
         )
         missing_expander = [key for key in expander_fields if key not in self.hardware]
         self.checker.expect(
@@ -708,6 +710,9 @@ class Controller:
             "current_sense": 2,
             "ads1115_address": 0x48,
             "tlv9064_present": True,
+            # Four optional meters, one deliberately disabled.
+            "has_pump_power": [True, True, False],
+            "has_mixer_power": True,
         }
         response = self._put_hardware(patch)
         stored = http_json(self.base, "/api/config/hardware")
@@ -734,6 +739,16 @@ class Controller:
         self.checker.expect(
             "duplicate expander bits rejected",
             status == 400 and "unique" in text,
+            f"HTTP {status}: {text[:160]}",
+        )
+
+        short_meters = dict(patch)
+        short_meters["has_pump_power"] = [True, False]  # one channel missing
+        status, payload, _ = http_request(self.base, "/api/config/hardware", "PUT", short_meters)
+        text = payload.decode("utf-8", "replace")
+        self.checker.expect(
+            "short power-meter array rejected",
+            status == 400 and "has_pump_power" in text,
             f"HTTP {status}: {text[:160]}",
         )
 

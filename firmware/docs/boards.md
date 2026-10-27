@@ -234,13 +234,27 @@ watts = (rms_volts - pump_current_offset_v) * pump_current_w_per_v
 Both parameters are editable under **Settings → Hardware → Current measurement**
 and are shared by every channel. The defaults reproduce the legacy fit (offset
 `0.004 V`, slope `588.2 W/V`), so **re-derive them with a clamp meter before
-trusting the values**, and re-derive again for v1.x. The firmware keeps
-`has_pump_power[i]` flags so a channel that is not populated can be disabled.
+trusting the values**, and re-derive again for v1.x. Each of the four channels
+is optional: `has_pump_power[3]` covers floor, radiator 1 and radiator 2, and
+`has_mixer_power` covers the mixer. `power_meter_present(config, channel)` is
+the single view of those flags; a channel that is not populated is never
+sampled and reports 0 W.
 
 Current-based dry-run and welded-relay protection can be switched off with
 `pump_power_check_enabled` while the sensor is uncalibrated. Measurements remain
 visible in the UI and MQTT; only the protection logic is skipped. Turn it back
-on once the calibration is verified.
+on once the calibration is verified. The same protection is also skipped
+automatically when the configured front end cannot produce a measurement (no
+current sensing selected, or a v1.x ADS1115 build with `tlv9064_present` false):
+`l0::power_measurement_available()` decides this once per tick, so a missing
+sensor can never be mistaken for three dry-running pumps.
+
+Independently of the front end, each of the four meters can be disabled on its
+own in **Settings → Hardware → Current measurement → Power meters**. A channel
+without a meter is not sampled, reports 0 W on `/api/state` and MQTT, and is
+ignored by the dry-run/welded checks. The Diagnostics page lists all four
+readings with their fitted state, so a single dead or unpopulated ring can be
+identified without disabling the other three.
 
 #### Known v0.1 limitations
 
@@ -496,11 +510,15 @@ the next revision.
    which switches on the relay") contradicts the drawn active-low drivers: with
    active-low inputs a high level is OFF, so the `0xFF` boot byte is the safe
    state. Delete the note so nobody "fixes" the polarity later.
-7. **Pump-power supervision is armed without a sensor.** The profile sets
-   `has_pump_power[] = true` and `pump_power_check_enabled` defaults to true
-   while `tlv9064_present` is false. On real hardware every running pump would
-   be reported as dry after 20 ticks. Either tie `has_pump_power[]` to
-   `current_sense_available()` or disable the check until the front end works.
+7. **Pump-power supervision needs the TLV9064 assembly.** The drawing has a
+   current ring on all three pumps and on the mixer, so the profile declares
+   `has_pump_power[] = true` and `has_mixer_power = true`. The rings are only
+   readable through the optional TLV9064 assembly, which is not fitted and whose
+   bias reference is still missing (item 2). `tlv9064_present` therefore defaults
+   to false, and L1 now keeps the dry-run/welded checks inert via
+   `l0::power_measurement_available()` instead of acting on a front end that
+   reads 0 W by construction. Fit the assembly, fix item 2, then declare
+   `tlv9064_present = true`; protection starts working with no other change.
 8. **The MCU pad map is not on the drawing.** U2 carries the D1-mini net names
    only (`D1` = SCL, `D2` = SDA, `D3` = TEMP, `D4` = LED); no ESP32-S3 pad is
    assigned. The firmware defaults in §3.1 (GPIO 9/8/4/5) are therefore an

@@ -263,7 +263,21 @@ struct Config {
   uint8_t current_sense;        // CURRENT_SENSE_* enum
   uint8_t ads1115_address;      // 7-bit I2C address (default 0x48)
   bool tlv9064_present;
+  // Optional mixer power meter, appended in v5. The three pump meters live in
+  // has_pump_power[] above; together they form one flag per CurrentChannel.
+  // A meter that is not fitted is never sampled and reports 0 W.
+  bool has_mixer_power;
 };
+
+// True when a power meter is fitted on `channel`, indexed by CurrentChannel
+// (0 floor, 1 radiator 1, 2 radiator 2, 3 mixer). Absent meters are not
+// sampled: read_power_w() returns 0 W and L1 ignores the channel.
+inline bool power_meter_present(const Config& config, uint8_t channel) {
+  if (channel < 3) {
+    return config.has_pump_power[channel];
+  }
+  return channel == 3 && config.has_mixer_power;
+}
 
 inline bool current_sense_available(const Config& config) {
   if (config.current_sense == CURRENT_SENSE_NONE) {

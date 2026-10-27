@@ -90,8 +90,10 @@ HPN_UPLOAD_FS=1 tests/flash_and_check.sh
    `/api/config/safety`; the pump calibration fields, the protection switch,
    the output driver and expander bit map, the six per-output polarity flags,
    the v1.x fault-input fields (`expander_bit_mix_fault`,
-   `mix_fault_active_low`) and the current front end (`current_sense`,
-   `ads1115_address`, `tlv9064_present`) exist on `/api/config/hardware`;
+   `mix_fault_active_low`), the current front end (`current_sense`,
+   `ads1115_address`, `tlv9064_present`) and the four optional power-meter
+   flags (`has_pump_power` — three booleans — and `has_mixer_power`) exist on
+   `/api/config/hardware`;
    `/api/sensors/roles` exposes the documented shape; and the obsolete
    pulse-width fields are gone.
 4. **RAM logs** — `/api/log/events` and `/api/log/slow` are populated, stay

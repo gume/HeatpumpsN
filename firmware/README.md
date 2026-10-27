@@ -246,8 +246,8 @@ task and never blocks the real-time tasks.
   heater/safety state (including the error code and readable error text), the
   five carrier status LEDs and recent events.
 - **Plant** — read-only circuits, pumps, after-run timers and mixer feedback.
-- **Diagnostics** — Event Log, Slow Log (10 s samples), Sensor Health and Relay
-  Counters.
+- **Diagnostics** — Event Log, Slow Log (10 s samples), Sensor Health, Power
+  Meters and Relay Counters.
 - **Test Mode** — time-limited manual control through the same
   `*_intended` → `*_requested` intake as HA. The heater is refused unless a pump
   is commanded ON. Activation/deactivation and every command are logged.
@@ -482,6 +482,11 @@ is a Python SConscript despite its extension; see the remote upload section.
   stay visible either way. It is also inert when the configured front end cannot
   measure at all (no current sensing selected, or a v1.x ADS1115 build with
   `tlv9064_present` false), so a missing sensor is never read as dry pumps.
+- Each of the four current channels is optional and enabled separately in
+  **Settings → Hardware → Power meters** (`has_pump_power[]` for floor,
+  radiator 1 and radiator 2, `has_mixer_power` for the mixer). A disabled meter
+  is not sampled, reports 0 W and is ignored by protection; the Diagnostics page
+  shows all four readings with their fitted state.
 - Mixer anomalies (motion longer than a full stroke, or no encoder response
   during a commanded move) and sensor-role/DHW inference problems are
   **warning-only**. They do not stop the plant; L1's hard over-temperature rule

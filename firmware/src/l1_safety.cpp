@@ -455,7 +455,7 @@ void tick(const Config& config, SystemState& state) {
   // until a usable measurement exists (v1.x: TLV9064 assembly declared fitted).
   if (config.pump_power_check_enabled && l0::power_measurement_available(config)) {
     for (uint8_t i = 0; i < 3; ++i) {
-      if (!config.has_pump_power[i]) {
+      if (!power_meter_present(config, i)) {
         g_dry_run_count[i] = 0;
         g_welded_count[i] = 0;
         continue;

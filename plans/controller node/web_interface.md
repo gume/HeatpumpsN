@@ -184,6 +184,7 @@ All pages write to NVS on explicit "Save"; a dirty-state indicator appears on un
 - **Expander wiring:** 74HC595 data/clock/latch, optional `/OE` pin and `/OE` polarity; PCF8574 7-bit I2C address (`0x20–0x27`, `0x38–0x3F`, or another `0x08–0x77` address for compatible parts) plus SDA/SCL pins.
 - **Expander bit map:** one distinct bit 0–7 for each relay, both mixer channels and the optional current-MUX select lines.
 - Pin mapping for direct mode: pump relays, heater relay, mixer open/close (or 3-point config), sensor buses (1-Wire GPIO, etc.)
+- **Power meters:** each of the four current channels (floor, radiator 1, radiator 2, mixer) has its own enable checkbox, so a partially populated carrier can be described exactly. A disabled channel is never sampled and reports 0 W; it also drops out of the dry-run/welded checks. The Diagnostics page shows the four readings individually with a fitted/not-fitted state.
 - Sensor offset calibration values
 - Valve travel time, end-stop configuration (if applicable)
 - Warning banner: changes affect Layer 1 arbitration scope; validate on bench. Output-driver, wiring and bit-map changes require a reboot.

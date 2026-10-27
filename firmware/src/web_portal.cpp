@@ -534,6 +534,15 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   power["rad1"] = st.pump_power_w[1];
   power["rad2"] = st.pump_power_w[2];
   power["mixer"] = st.mixer_power_w;
+  // Per-channel meter presence (CurrentChannel order: floor, rad1, rad2,
+  // mixer), so the portal can mark a reading as "not fitted" instead of
+  // showing a bare 0 W. senseAvailable says whether the front end can measure
+  // at all, which is what gates dry-run/welded protection.
+  JsonArray meter_enabled = power["enabled"].to<JsonArray>();
+  for (uint8_t i = 0; i < kCurrentChannelCount; ++i) {
+    meter_enabled.add(power_meter_present(cfg, i));
+  }
+  power["senseAvailable"] = l0::power_measurement_available(cfg);
 
 #if defined(HPN_IO_EMULATION)
   const sim::Snapshot sim_state = sim::snapshot();
@@ -643,10 +652,13 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["gpio_onewire"] = c.gpio_onewire;
   o["gpio_led_data"] = c.gpio_led_data;
   o["num_leds"] = c.num_leds;
+  // One flag per power meter: three pumps plus the mixer. A meter that is not
+  // fitted is never sampled and reports 0 W.
   JsonArray pump_power = o["has_pump_power"].to<JsonArray>();
   for (uint8_t i = 0; i < 3; ++i) {
     pump_power.add(c.has_pump_power[i]);
   }
+  o["has_mixer_power"] = c.has_mixer_power;
   o["i2c_sda"] = c.i2c_sda;
   o["i2c_scl"] = c.i2c_scl;
   o["output_expander"] = c.output_expander;
@@ -786,6 +798,35 @@ bool json_bool(JsonObject obj, const char* key, bool& out, String& err) {
     return false;
   }
   out = v.as<bool>();
+  return true;
+}
+
+// Fixed-length array of booleans, used for the per-channel power-meter flags.
+// An absent key leaves the stored values untouched; a present key must hold
+// exactly `count` entries so a stale client cannot drop a channel.
+bool json_bool_array(JsonObject obj, const char* key, bool* out, size_t count, String& err) {
+  JsonVariant v = obj[key];
+  if (v.isNull()) {
+    return true;
+  }
+  if (!v.is<JsonArray>()) {
+    err = String(key) + " must be an array of true/false values";
+    return false;
+  }
+  JsonArray array = v.as<JsonArray>();
+  if (array.size() != count) {
+    err =
+        String(key) + " must contain exactly " + String(static_cast<unsigned>(count)) + " entries";
+    return false;
+  }
+  size_t i = 0;
+  for (JsonVariant entry : array) {
+    if (!entry.is<bool>()) {
+      err = String(key) + " entries must be true or false";
+      return false;
+    }
+    out[i++] = entry.as<bool>();
+  }
   return true;
 }
 
@@ -1058,6 +1099,10 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
     return false;
   if (!json_uint8(in, "ads1115_address", c.ads1115_address, 0x08, 0x77, err)) return false;
   if (!json_bool(in, "tlv9064_present", c.tlv9064_present, err)) return false;
+  // Power meters are optional per channel: three pumps plus the mixer. An
+  // absent entry keeps the stored flags, so older clients still save.
+  if (!json_bool_array(in, "has_pump_power", c.has_pump_power, 3, err)) return false;
+  if (!json_bool(in, "has_mixer_power", c.has_mixer_power, err)) return false;
 
   // Only assigned bits participate in the uniqueness check. 255 means "not
   // connected", which the v1.x board uses for the absent MUX select lines.
@@ -1112,8 +1157,9 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
     }
   }
 
-  // LED count and pump-power feedback are fixed by the carrier profile, not
-  // user-selectable. They are intentionally not parsed here.
+  // The LED count stays fixed by the carrier profile and is not parsed here.
+  // The four power-meter flags (has_pump_power[], has_mixer_power) are parsed
+  // above because they are per-installation, not per-carrier.
 
   if (!json_string(in, "sensor_id_boiler", c.sensor_id_boiler, sizeof(c.sensor_id_boiler), true, err))
     return false;

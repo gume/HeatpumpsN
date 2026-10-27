@@ -107,9 +107,12 @@ void board_apply_defaults(Config& config) {
   config.gpio_onewire = 18;   // D4 / 1-Wire bus
   config.gpio_led_data = 16;  // 5 x WS2812B/SK6812, GRB
   config.num_leds = 5;
+  // All four current channels are populated on this carrier: floor, radiator 1,
+  // radiator 2 and the mixer (one ring around both motor wires).
   config.has_pump_power[0] = true;  // floor
   config.has_pump_power[1] = true;  // radiator 1
   config.has_pump_power[2] = true;  // radiator 2
+  config.has_mixer_power = true;    // mixer
 
   // The old ESPHome configuration used a 145 s full mixer stroke.
   config.travel_time_ms = 145000;
@@ -177,9 +180,15 @@ void board_apply_defaults(Config& config) {
   config.gpio_led_data = HPN_GPIO_UNASSIGNED;
   config.num_leds = 0;
 #endif
+  // The carrier has a current ring on all three pumps and one on the mixer,
+  // but the TLV9064 assembly that makes those rings readable is optional.
+  // The per-channel flags therefore stay true, and L0/L1 gate the readings and
+  // the dry-run/welded checks on l0::power_measurement_available() so they stay
+  // inert until tlv9064_present is declared.
   config.has_pump_power[0] = true;  // floor
   config.has_pump_power[1] = true;  // radiator 1
   config.has_pump_power[2] = true;  // radiator 2
+  config.has_mixer_power = true;    // mixer
 
   config.travel_time_ms = 145000;
   config.setpoint_default = 35.0f;

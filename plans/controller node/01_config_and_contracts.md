@@ -94,7 +94,8 @@ struct Config {
   uint8_t  gpio_onewire;           // 1-Wire DS18B20 bus GPIO (TBD)
   uint8_t  gpio_led_data;          // Addressable RGB LED data GPIO (TBD, WS2812B/SK6812)
   uint8_t  num_leds;               // Addressable LED count (e.g. 5, see 02_hardware_and_l0.md)
-  bool     has_pump_power[3];      // optional power sensors [floor, rad1, rad2]
+  bool     has_pump_power[3];      // optional pump power meters [floor, rad1, rad2]
+  bool     has_mixer_power;        // optional mixer power meter (v5, appended)
   uint8_t  i2c_sda, i2c_scl;       // I2C bus (PCF8574 / future mixer encoder)
   char     sensor_id_boiler[17], sensor_id_ret[17], sensor_id_mix[17];
 

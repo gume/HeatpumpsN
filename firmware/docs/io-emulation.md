@@ -120,7 +120,9 @@ supervision: set `0 W` while the relay is on to simulate a dry run, or nonzero
 power while off to simulate a welded relay. In the emulation build L0 returns
 the model value directly; on hardware it converts the sampled RMS voltage with
 the shared `pump_current_offset_v` / `pump_current_w_per_v` calibration from
-Settings → Hardware.
+Settings → Hardware. A meter disabled in **Settings → Hardware → Power meters**
+is not sampled, so its emulated value is ignored as well; this keeps the bench
+build matching a partially populated carrier.
 
 All setters and `snapshot()` are safe to call from different tasks; the model
 uses a short critical section. Copy sizes are small, so no mutex is needed.

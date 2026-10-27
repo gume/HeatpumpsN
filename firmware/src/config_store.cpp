@@ -14,18 +14,22 @@ namespace {
 constexpr const char* kNamespace = "hpncfg";
 constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
-constexpr uint16_t kVersion = 4;
+constexpr uint16_t kVersion = 5;
 
 // v1 blobs contain the unchanged 1288-byte Config prefix (the first version
 // already used the former tail padding for mix_max_open_pct). v2 appended the
 // pump-calibration, operating-window, overshoot, sensor-role and inferred-DHW
 // fields. v3 appended the first output-driver/port-expander block. v4 adds
 // per-channel polarity, the PCF8574 fault input and the current-measurement
-// front end. Each migration starts from current defaults and copies the
-// unchanged old prefix, so the new fields receive a valid value.
+// front end. v5 adds the optional mixer power meter in the tail padding byte
+// v4 left unused, so the size does not change; the version still bumps because
+// a v4 blob left that byte undefined. Each migration starts from current
+// defaults and copies the unchanged old prefix, so the new fields receive a
+// valid value.
 constexpr size_t kV1ConfigSize = 1288;
 constexpr size_t kV2ConfigSize = 1348;
 constexpr size_t kV3ConfigSize = 1364;
+constexpr size_t kV4ConfigSize = 1376;
 constexpr size_t kCurrentConfigSize = 1376;
 
 struct ConfigBlobHeader {
@@ -50,8 +54,11 @@ static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
 static_assert(sizeof(Config) > kV3ConfigSize,
               "v4 fields must be appended after the v3 Config prefix");
-// Any future field addition must bump kVersion and extend the migration path
-// instead of silently invalidating stored settings.
+// v5 reuses the padding byte v4 left after tlv9064_present. If this fails, a
+// field was added somewhere else: bump the version and extend the migration
+// path instead of silently reinterpreting stored bytes.
+static_assert(offsetof(Config, has_mixer_power) == kV4ConfigSize - 1,
+              "v5 must reuse the v4 tail padding byte");
 static_assert(sizeof(Config) == kCurrentConfigSize,
               "Config layout changed; review the NVS format");
 
@@ -255,6 +262,24 @@ ConfigLoadResult config_load(Config& config) {
             migrated.output_active_low_pump_floor = legacy_low;
             migrated.output_active_low_mix_direction = legacy_low;
             migrated.output_active_low_mix_motion = legacy_low;
+            sanitize_config(migrated);
+            config = migrated;
+            result = ConfigLoadResult::Migrated;
+          } else {
+            result = ConfigLoadResult::Corrupt;
+          }
+        } else if (header->version == 4) {
+          const size_t v4_blob_size = sizeof(ConfigBlobHeader) + kV4ConfigSize;
+          if (stored != v4_blob_size || header->size != kV4ConfigSize) {
+            result = ConfigLoadResult::Corrupt;
+          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
+            Config migrated = config_defaults();
+            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV4ConfigSize);
+            // v4 stored the three pump meters only. Every v4 carrier wires the
+            // same four rings, so a board with any pump meter also had the
+            // mixer meter; a boardless build had none.
+            migrated.has_mixer_power = migrated.has_pump_power[0] || migrated.has_pump_power[1] ||
+                                       migrated.has_pump_power[2];
             sanitize_config(migrated);
             config = migrated;
             result = ConfigLoadResult::Migrated;

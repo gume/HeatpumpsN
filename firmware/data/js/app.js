@@ -995,11 +995,49 @@ function renderControllerInfo() {
   </section>`;
 }
 
+function renderPowerMeters() {
+  const live = state.live;
+  if (!live) return loadingCard('Waiting for live state…');
+
+  const power = live.power || {};
+  // `enabled` is one flag per CurrentChannel (floor, rad1, rad2, mixer). A
+  // controller that predates the field is assumed to have all meters fitted.
+  const enabled = Array.isArray(power.enabled) ? power.enabled : [true, true, true, true];
+  const sense = power.senseAvailable !== false;
+  const rows = [
+    ['Floor pump', power.floor, enabled[0] !== false],
+    ['Radiator 1', power.rad1, enabled[1] !== false],
+    ['Radiator 2', power.rad2, enabled[2] !== false],
+    ['Mixer', power.mixer, enabled[3] !== false]
+  ];
+  const fitted = rows.filter(([, , on]) => on).length;
+
+  const detail = (watts, on) => {
+    if (!on) return '<span class="faint">meter not fitted</span>';
+    if (!sense) return `<span class="faint">${fmtNum(watts, 1)} W · front end unavailable</span>`;
+    return `${fmtNum(watts, 1)} W`;
+  };
+
+  return `<section class="card readonly accent-top">
+    <div class="card-head">
+      <div><h2>Power meters</h2><p>Four optional current channels, checked individually</p></div>
+      <span class="chip ${sense && fitted ? 'chip-ok' : 'chip-warn'}">${fitted}/4 fitted</span>
+    </div>
+    <div class="kv">
+      ${rows.map(([label, watts, on]) => `<dt>${esc(label)}</dt><dd>${detail(watts, on)}</dd>`).join('')}
+      <dt>Front end</dt>
+      <dd>${sense ? 'measuring' : '<span class="faint">no usable current signal (protection skipped)</span>'}</dd>
+    </div>
+    <p class="small faint" style="margin-top:10px">A meter that is not fitted is never sampled and always reports 0 W. Dry-run and welded-relay detection only consider fitted channels.</p>
+  </section>`;
+}
+
 function renderDiagnostics() {
   return `<div class="stack">
     ${renderConnectivity()}
     ${renderControllerInfo()}
     ${renderSensors()}
+    ${renderPowerMeters()}
     ${renderCounters()}
   </div>`;
 }
@@ -1809,11 +1847,17 @@ function renderSettingsHardware() {
             ${fieldNumber('pump_current_w_per_v', 'Watts per volt', cfg.pump_current_w_per_v, 1, 5000, 0.1, 'Slope of the current-sense front end.', 'number', 'W/V')}
             ${fieldNumber('pump_current_offset_v', 'Zero-current offset', cfg.pump_current_offset_v, 0, 1, 0.001, 'RMS voltage reported with no pump current.', 'number', 'V')}
             ${fieldCheckbox('pump_power_check_enabled', 'Enable current-based protection', cfg.pump_power_check_enabled, 'Use the measured current for dry-run and welded-relay detection. Disable while the sensor is uncalibrated or absent.')}
-            <div class="field">
-              <label>Power sensors</label>
-              <div class="metric-row"><span class="k">Fitted by the board profile</span><span class="v">${pumpPower.filter(Boolean).length}/3 pumps</span></div>
-              <small>Defined by the carrier profile and not user-selectable.</small>
-            </div>
+          </div>
+        </div>
+
+        <div class="form-section" data-current-sense-section="1 2">
+          <h3>Power meters</h3>
+          <p class="small faint">Every meter is optional and enabled per channel. A channel without a meter is never sampled and reports 0 W; it takes no part in dry-run or welded-relay detection.</p>
+          <div class="form-grid">
+            ${fieldCheckbox('has_pump_power', 'Floor pump meter', pumpPower[0], 'Current ring on the floor circuit pump.', 0)}
+            ${fieldCheckbox('has_pump_power', 'Radiator 1 meter', pumpPower[1], 'Current ring on radiator circuit 1.', 1)}
+            ${fieldCheckbox('has_pump_power', 'Radiator 2 meter', pumpPower[2], 'Current ring on radiator circuit 2.', 2)}
+            ${fieldCheckbox('has_mixer_power', 'Mixer meter', !!cfg.has_mixer_power, 'One ring around both mixer motor wires.')}
           </div>
         </div>
       </section>

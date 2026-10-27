@@ -102,6 +102,7 @@ Config config_defaults() {
   c.has_pump_power[0] = false;
   c.has_pump_power[1] = false;
   c.has_pump_power[2] = false;
+  c.has_mixer_power = false;
   c.i2c_sda = HPN_GPIO_UNASSIGNED;
   c.i2c_scl = HPN_GPIO_UNASSIGNED;
   copy_str(c.sensor_id_boiler, "");

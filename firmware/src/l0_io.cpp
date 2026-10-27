@@ -578,6 +578,9 @@ bool power_measurement_available(const Config& config) {
 }
 
 float read_power_w(const Config& config, CurrentChannel channel) {
+  if (!power_meter_present(config, static_cast<uint8_t>(channel))) {
+    return 0.0f;  // no meter on this channel: never sample
+  }
   if (io::kEmulated) {
     return io::read_power_w(channel);
   }

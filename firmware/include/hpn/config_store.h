@@ -10,9 +10,9 @@
 //
 // Older formats are migrated by copying their unchanged Config prefix onto
 // current defaults, so existing settings survive while appended fields receive
-// their default values. v1 (1288-byte prefix), v2 (1348 bytes) and v3
-// (1364 bytes) are supported. Any other version is treated as stale and
-// discarded.
+// their default values. v1 (1288-byte prefix), v2 (1348 bytes), v3 (1364
+// bytes) and v4 (1376 bytes) are supported. Any other version is treated as
+// stale and discarded.
 namespace hpn {
 
 enum class ConfigLoadResult : uint8_t {
