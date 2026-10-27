@@ -246,11 +246,12 @@ function renderStage(snapshot) {
       </div>
 
       <div class="emu-block">
-        <h3>Carrier readout</h3>
+        <h3>Board readout</h3>
         <div class="emu-readout">
           <div class="kv"><dt>Controller mux</dt><dd>${num(snapshot.muxChannel, 0)}</dd></div>
           <div class="kv"><dt>Controller output byte</dt><dd>0x${outputByte.toString(16).padStart(2, '0')} (${outputByte})</dd></div>
           <div class="kv"><dt>Output enable</dt><dd>${snapshot.outputEnabled ? 'asserted' : 'deasserted'}</dd></div>
+          <div class="kv"><dt>Interlock fault</dt><dd>${snapshot.interlockFault || controller.interlockFault ? 'asserted' : 'released'}</dd></div>
           <div class="kv"><dt>Model revision</dt><dd>${num(snapshot.revision, 0)}</dd></div>
         </div>
         <p class="emu-note" style="margin-top:8px">The output byte is L0's last latch. Manual relay cards can override the emulated board without changing L0.</p>
@@ -334,6 +335,9 @@ function render() {
           <label class="checkbox-row"><input type="checkbox" data-sim-realistic-boiler ${snapshot.realisticBoiler ? 'checked' : ''}> Realistic boiler supply</label>
           <p class="small faint">Placeholder sine wave around 65 °C until the logged boiler shape is available.</p>
 
+          <label class="checkbox-row"><input type="checkbox" data-sim-interlock ${snapshot.interlockFault ? 'checked' : ''}> Board interlock fault</label>
+          <p class="small faint">Simulates the v1.x P7 input: L1 stops the mixer and raises error 402 while it is asserted.</p>
+
           <div class="form-actions">
             <button class="btn btn-sm" type="button" data-sim-clear-overrides>Clear manual overrides</button>
           </div>
@@ -341,7 +345,7 @@ function render() {
       </section>
 
       <section class="card writable">
-        <div class="card-head"><div><h2>Temperature inputs</h2><p>Feed the simulated carrier</p></div><span class="chip">15–85 °C</span></div>
+        <div class="card-head"><div><h2>Temperature inputs</h2><p>Feed the simulated board</p></div><span class="chip">15–85 °C</span></div>
         <div class="stack">${renderTemperatureControls(temps, snapshot)}</div>
       </section>
 
@@ -352,7 +356,7 @@ function render() {
 
       <section class="card readonly">
         <div class="card-head"><div><h2>Simulation controls</h2><p>Model state and reset</p></div></div>
-        <div class="banner info">This page drives the emulated carrier directly. It does not run L1 and has no heater/pump interlock.</div>
+        <div class="banner info">This page drives the emulated board directly. It does not run L1 and has no heater/pump interlock.</div>
         <div class="form-actions" style="margin-top:12px">
           <button class="btn btn-danger" type="button" data-sim-reset>Reset simulation model</button>
           <a class="btn" href="/">Back to portal</a>
@@ -452,6 +456,19 @@ root.addEventListener('change', async (event) => {
     payload = { realisticPower: target.checked };
   } else if (target.matches('[data-sim-realistic-boiler]')) {
     payload = { realisticBoiler: target.checked };
+  } else if (target.matches('[data-sim-interlock]')) {
+    try {
+      await api('/api/sim/interlock', {
+        method: 'POST',
+        body: JSON.stringify({ fault: target.checked })
+      });
+      toast(target.checked ? 'Interlock fault asserted.' : 'Interlock fault released.', target.checked ? 'warn' : 'ok');
+      await refreshSim();
+    } catch (err) {
+      target.checked = !target.checked;
+      toast(err.message, 'err', 6000);
+    }
+    return;
   }
   if (!payload) return;
 

@@ -655,7 +655,6 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["expander_latch_pin"] = c.expander_latch_pin;
   o["expander_oe_pin"] = c.expander_oe_pin;
   o["expander_oe_active_low"] = c.expander_oe_active_low;
-  o["output_active_low"] = c.output_active_low;
   o["expander_bit_heater"] = c.expander_bit_heater;
   o["expander_bit_pump_rad1"] = c.expander_bit_pump_rad1;
   o["expander_bit_pump_rad2"] = c.expander_bit_pump_rad2;
@@ -664,6 +663,17 @@ void fill_hardware(JsonObject o, const Config& c) {
   o["expander_bit_mix_motion"] = c.expander_bit_mix_motion;
   o["expander_bit_mux_s0"] = c.expander_bit_mux_s0;
   o["expander_bit_mux_s1"] = c.expander_bit_mux_s1;
+  o["expander_bit_mix_fault"] = c.expander_bit_mix_fault;
+  o["mix_fault_active_low"] = c.mix_fault_active_low;
+  o["output_active_low_heater"] = c.output_active_low_heater;
+  o["output_active_low_pump_rad1"] = c.output_active_low_pump_rad1;
+  o["output_active_low_pump_rad2"] = c.output_active_low_pump_rad2;
+  o["output_active_low_pump_floor"] = c.output_active_low_pump_floor;
+  o["output_active_low_mix_direction"] = c.output_active_low_mix_direction;
+  o["output_active_low_mix_motion"] = c.output_active_low_mix_motion;
+  o["current_sense"] = c.current_sense;
+  o["ads1115_address"] = c.ads1115_address;
+  o["tlv9064_present"] = c.tlv9064_present;
   o["sensor_id_boiler"] = c.sensor_id_boiler;
   o["sensor_id_ret"] = c.sensor_id_ret;
   o["sensor_id_mix"] = c.sensor_id_mix;
@@ -843,6 +853,25 @@ bool json_pin(JsonObject obj, const char* key, uint8_t& out, String& err) {
   return true;
 }
 
+// Expander bit that may also be "not connected" (255).
+bool json_optional_bit(JsonObject obj, const char* key, uint8_t& out, String& err) {
+  JsonVariant v = obj[key];
+  if (v.isNull()) {
+    return true;
+  }
+  if (!v.is<uint32_t>()) {
+    err = String(key) + " must be a bit number (0-7) or 255";
+    return false;
+  }
+  const uint32_t value = v.as<uint32_t>();
+  if (value != HPN_GPIO_UNASSIGNED && value > 7) {
+    err = String(key) + " must be a bit number (0-7) or 255";
+    return false;
+  }
+  out = static_cast<uint8_t>(value);
+  return true;
+}
+
 bool apply_network(JsonObject in, Config& c, String& err) {
   if (!json_string(in, "wifi_ssid", c.wifi_ssid, sizeof(c.wifi_ssid), true, err)) return false;
   if (!json_password(in, "wifi_password", c.wifi_password, sizeof(c.wifi_password), err)) return false;
@@ -995,7 +1024,17 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   if (!json_pin(in, "expander_latch_pin", c.expander_latch_pin, err)) return false;
   if (!json_pin(in, "expander_oe_pin", c.expander_oe_pin, err)) return false;
   if (!json_bool(in, "expander_oe_active_low", c.expander_oe_active_low, err)) return false;
-  if (!json_bool(in, "output_active_low", c.output_active_low, err)) return false;
+  if (!json_bool(in, "output_active_low_heater", c.output_active_low_heater, err)) return false;
+  if (!json_bool(in, "output_active_low_pump_rad1", c.output_active_low_pump_rad1, err))
+    return false;
+  if (!json_bool(in, "output_active_low_pump_rad2", c.output_active_low_pump_rad2, err))
+    return false;
+  if (!json_bool(in, "output_active_low_pump_floor", c.output_active_low_pump_floor, err))
+    return false;
+  if (!json_bool(in, "output_active_low_mix_direction", c.output_active_low_mix_direction, err))
+    return false;
+  if (!json_bool(in, "output_active_low_mix_motion", c.output_active_low_mix_motion, err))
+    return false;
   if (!json_uint8(in, "expander_bit_heater", c.expander_bit_heater, 0, 7, err)) return false;
   if (!json_uint8(in, "expander_bit_pump_rad1", c.expander_bit_pump_rad1, 0, 7, err))
     return false;
@@ -1007,15 +1046,31 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
     return false;
   if (!json_uint8(in, "expander_bit_mix_motion", c.expander_bit_mix_motion, 0, 7, err))
     return false;
-  if (!json_uint8(in, "expander_bit_mux_s0", c.expander_bit_mux_s0, 0, 7, err)) return false;
-  if (!json_uint8(in, "expander_bit_mux_s1", c.expander_bit_mux_s1, 0, 7, err)) return false;
+  if (!json_optional_bit(in, "expander_bit_mux_s0", c.expander_bit_mux_s0, err)) return false;
+  if (!json_optional_bit(in, "expander_bit_mux_s1", c.expander_bit_mux_s1, err)) return false;
+  if (!json_optional_bit(in, "expander_bit_mix_fault", c.expander_bit_mix_fault, err))
+    return false;
+  if (!json_bool(in, "mix_fault_active_low", c.mix_fault_active_low, err)) return false;
 
+  if (!json_uint8(in, "current_sense", c.current_sense, CURRENT_SENSE_NONE,
+                  CURRENT_SENSE_ADS1115, err))
+    return false;
+  if (!json_uint8(in, "ads1115_address", c.ads1115_address, 0x08, 0x77, err)) return false;
+  if (!json_bool(in, "tlv9064_present", c.tlv9064_present, err)) return false;
+
+  // Only assigned bits participate in the uniqueness check. 255 means "not
+  // connected", which the v1.x board uses for the absent MUX select lines.
   const uint8_t expander_bits[] = {
-      c.expander_bit_heater,     c.expander_bit_pump_rad1,   c.expander_bit_pump_rad2,
-      c.expander_bit_pump_floor, c.expander_bit_mix_direction, c.expander_bit_mix_motion,
-      c.expander_bit_mux_s0,     c.expander_bit_mux_s1,
+      c.expander_bit_heater,      c.expander_bit_pump_rad1,
+      c.expander_bit_pump_rad2,   c.expander_bit_pump_floor,
+      c.expander_bit_mix_direction, c.expander_bit_mix_motion,
+      c.expander_bit_mux_s0,      c.expander_bit_mux_s1,
+      c.expander_bit_mix_fault,
   };
   for (size_t i = 0; i < sizeof(expander_bits); ++i) {
+    if (expander_bits[i] > 7) {
+      continue;
+    }
     for (size_t j = i + 1; j < sizeof(expander_bits); ++j) {
       if (expander_bits[i] == expander_bits[j]) {
         err = "expander bit assignments must be unique";
@@ -1034,6 +1089,24 @@ bool apply_hardware(JsonObject in, Config& c, String& err) {
   } else if (c.output_expander == OUTPUT_EXPANDER_PCF8574) {
     if (c.i2c_sda == HPN_GPIO_UNASSIGNED || c.i2c_scl == HPN_GPIO_UNASSIGNED) {
       err = "PCF8574 needs I2C SDA and SCL pins";
+      return false;
+    }
+  }
+
+  // Current measurement is independent of the output driver, but each front
+  // end needs its own wiring.
+  if (c.current_sense == CURRENT_SENSE_MUX_ADC) {
+    if (c.output_expander == OUTPUT_EXPANDER_NONE) {
+      err = "the analogue current MUX needs an output expander for its select lines";
+      return false;
+    }
+    if (c.expander_bit_mux_s0 > 7 || c.expander_bit_mux_s1 > 7) {
+      err = "the analogue current MUX needs two expander bits";
+      return false;
+    }
+  } else if (c.current_sense == CURRENT_SENSE_ADS1115) {
+    if (c.i2c_sda == HPN_GPIO_UNASSIGNED || c.i2c_scl == HPN_GPIO_UNASSIGNED) {
+      err = "ADS1115 needs I2C SDA and SCL pins";
       return false;
     }
   }
@@ -1100,7 +1173,12 @@ bool hardware_requires_reboot(const Config& a, const Config& b) {
          a.expander_latch_pin != b.expander_latch_pin ||
          a.expander_oe_pin != b.expander_oe_pin ||
          a.expander_oe_active_low != b.expander_oe_active_low ||
-         a.output_active_low != b.output_active_low ||
+         a.output_active_low_heater != b.output_active_low_heater ||
+         a.output_active_low_pump_rad1 != b.output_active_low_pump_rad1 ||
+         a.output_active_low_pump_rad2 != b.output_active_low_pump_rad2 ||
+         a.output_active_low_pump_floor != b.output_active_low_pump_floor ||
+         a.output_active_low_mix_direction != b.output_active_low_mix_direction ||
+         a.output_active_low_mix_motion != b.output_active_low_mix_motion ||
          a.expander_bit_heater != b.expander_bit_heater ||
          a.expander_bit_pump_rad1 != b.expander_bit_pump_rad1 ||
          a.expander_bit_pump_rad2 != b.expander_bit_pump_rad2 ||
@@ -1108,7 +1186,12 @@ bool hardware_requires_reboot(const Config& a, const Config& b) {
          a.expander_bit_mix_direction != b.expander_bit_mix_direction ||
          a.expander_bit_mix_motion != b.expander_bit_mix_motion ||
          a.expander_bit_mux_s0 != b.expander_bit_mux_s0 ||
-         a.expander_bit_mux_s1 != b.expander_bit_mux_s1;
+         a.expander_bit_mux_s1 != b.expander_bit_mux_s1 ||
+         a.expander_bit_mix_fault != b.expander_bit_mix_fault ||
+         a.mix_fault_active_low != b.mix_fault_active_low ||
+         a.current_sense != b.current_sense ||
+         a.ads1115_address != b.ads1115_address ||
+         a.tlv9064_present != b.tlv9064_present;
 }
 
 bool hostname_valid(const char* hostname) {
@@ -2492,6 +2575,7 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   controller["targetPosition"] = g_state != nullptr ? g_state->mix_target_pos * 100.0f : 0.0f;
   controller["motion"] = g_state != nullptr && g_state->mix_motion;
   controller["direction"] = g_state != nullptr ? g_state->mix_dir : 0;
+  controller["interlockFault"] = g_state != nullptr && g_state->mix_interlock_fault;
 
   doc["followController"] = snapshot.follow_controller;
   doc["realisticPower"] = snapshot.realistic_power;
@@ -2500,6 +2584,7 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   doc["muxChannel"] = snapshot.mux_channel;
   doc["outputByte"] = snapshot.output_byte;
   doc["outputEnabled"] = snapshot.output_enabled;
+  doc["interlockFault"] = snapshot.interlock_fault;
   doc["ledCount"] = snapshot.led_count;
 
   JsonArray leds = doc["leds"].to<JsonArray>();
@@ -2604,6 +2689,18 @@ void handle_sim_power(AsyncWebServerRequest* request, JsonVariant& json) {
   doc["ok"] = true;
   doc["channel"] = channel_name;
   doc["watts"] = watts;
+  send_json(request, 200, doc);
+}
+
+void handle_sim_interlock(AsyncWebServerRequest* request, JsonVariant& json) {
+  if (!json.is<JsonObject>() || !json["fault"].is<bool>()) {
+    send_error(request, 400, "fault (true/false) is required");
+    return;
+  }
+  sim::set_interlock_fault(json["fault"].as<bool>());
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["interlockFault"] = json["fault"].as<bool>();
   send_json(request, 200, doc);
 }
 
@@ -3254,6 +3351,10 @@ void register_routes() {
   g_server.on(AsyncURIMatcher::exact("/api/sim/intent"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_sim_intent(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/sim/interlock"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_sim_interlock(request, json);
               });
   g_server.on(AsyncURIMatcher::exact("/api/sim/overrides/clear"), HTTP_POST,
               handle_sim_clear_overrides);

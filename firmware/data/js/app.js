@@ -880,7 +880,7 @@ function renderDashboard() {
 
     <section class="card readonly">
       <div class="card-head">
-        <div><h2>Status LEDs</h2><p>Carrier LED semantics from plan 02 §1.2</p></div>
+        <div><h2>Status LEDs</h2><p>Board LED semantics from plan 02 §1.2</p></div>
         <span class="chip">5 LEDs</span>
       </div>
       <div class="status-leds">
@@ -914,7 +914,7 @@ function renderSensors() {
         <span class="chip ${bad ? 'chip-warn' : 'chip-ok'}">${sensors.length - bad}/${sensors.length} healthy</span>
       </div>
       ${sensorTable(sensors)}
-      <p class="small faint" style="margin-top:10px">Offsets are not yet configurable from the portal. The displayed values are raw carrier readings.</p>
+      <p class="small faint" style="margin-top:10px">Offsets are not yet configurable from the portal. The displayed values are raw board readings.</p>
     </section>
   </div>`;
 }
@@ -1549,17 +1549,17 @@ function renderSettingsHardware() {
     <div class="banner warn">Writable configuration. GPIO and wiring changes require a reboot to take effect. Timing and control constants live under <a href="#settings/control">Control &amp; Timing</a>.</div>
     <form class="settings-form writable" data-section="hardware">
       <section class="card writable accent-top">
-        <div class="card-head"><div><h2>Hardware &amp; pins</h2><p>Carrier wiring, GPIO map and sensor identities</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
+        <div class="card-head"><div><h2>Hardware &amp; pins</h2><p>Board wiring, GPIO map and sensor identities</p></div><span class="chip chip-warn">REBOOT REQUIRED</span></div>
 
         <div class="form-section">
-          <h3>Carrier wiring</h3>
+          <h3>Board wiring</h3>
           <div class="form-grid">
             ${fieldSelect('mixer_wiring', 'Mixer wiring', cfg.mixer_wiring, [
-              { value: 0, label: 'Direction + motion (legacy)' },
-              { value: 1, label: 'Open + close (new carrier)' }
+              { value: 0, label: 'Direction + motion (HomeNet Heating control v0.1)' },
+              { value: 1, label: 'Open + close (HomeNet Heating control v1.x)' }
             ], 'The first mixer channel is open/direction; the second is close/motion.')}
           </div>
-          <p class="small faint" style="margin-top:8px">Legacy HHN 1.0 uses a direction bit plus a motion enable. The new carrier uses separate, interlocked open and close relays. Both map to the same two logical channels.</p>
+          <p class="small faint" style="margin-top:8px">HomeNet Heating control v0.1 uses a direction bit plus a motion enable. HomeNet Heating control v1.x uses separate, interlocked open and close relays. Both map to the same two logical channels.</p>
         </div>
 
         <div class="form-section">
@@ -1567,12 +1567,24 @@ function renderSettingsHardware() {
           <div class="form-grid">
             ${fieldSelect('output_expander', 'Output driver', cfg.output_expander, [
               { value: 0, label: 'Direct GPIO' },
-              { value: 1, label: '74HC595 shift register' },
-              { value: 2, label: 'PCF8574 / custom I2C expander' }
+              { value: 1, label: '74HC595 (HomeNet Heating control v0.1)' },
+              { value: 2, label: 'PCF8574 (HomeNet Heating control v1.x)' }
             ], 'Selects how the relay and mixer channels are reached. Expander outputs share one byte.')}
-            ${fieldCheckbox('output_active_low', 'Relay outputs are active low', cfg.output_active_low, 'On: a logical ON drives the output low. Off: ON drives it high. The PCF8574 board idles high, so active-low keeps its relays off at boot.')}
           </div>
-          <p class="small faint" style="margin-top:8px">The two current-MUX select bits stay active high regardless of this setting. With active-low outputs the safe boot byte becomes <span class="mono">0xFF</span> instead of <span class="mono">0x00</span>.</p>
+          <p class="small faint" style="margin-top:8px">Only the settings that belong to the selected driver are shown. Values for the other drivers are kept.</p>
+        </div>
+
+        <div class="form-section">
+          <h3>Output polarity</h3>
+          <div class="form-grid">
+            ${fieldCheckbox('output_active_low_heater', 'Heater is active low', cfg.output_active_low_heater, 'A logical ON drives this output low.')}
+            ${fieldCheckbox('output_active_low_pump_rad1', 'Heating loop 1 pump is active low', cfg.output_active_low_pump_rad1, 'A logical ON drives this output low.')}
+            ${fieldCheckbox('output_active_low_pump_rad2', 'Heating loop 2 pump is active low', cfg.output_active_low_pump_rad2, 'A logical ON drives this output low.')}
+            ${fieldCheckbox('output_active_low_pump_floor', 'Floor pump is active low', cfg.output_active_low_pump_floor, 'A logical ON drives this output low.')}
+            ${fieldCheckbox('output_active_low_mix_direction', 'Mixer channel 1 (open / direction) is active low', cfg.output_active_low_mix_direction, 'A logical ON drives this output low.')}
+            ${fieldCheckbox('output_active_low_mix_motion', 'Mixer channel 2 (close / motion) is active low', cfg.output_active_low_mix_motion, 'A logical ON drives this output low.')}
+          </div>
+          <p class="small faint" style="margin-top:8px">Each output has its own polarity because a board may mix active-high and active-low relay drivers. The current-MUX select bits always stay active high.</p>
         </div>
 
         <div class="form-section" data-expander-section="0">
@@ -1582,8 +1594,8 @@ function renderSettingsHardware() {
             ${fieldNumber('gpio_pump_rad1', 'Heating loop 1 pump GPIO', cfg.gpio_pump_rad1, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_pump_rad2', 'Heating loop 2 pump GPIO', cfg.gpio_pump_rad2, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('gpio_heater', 'Heater GPIO', cfg.gpio_heater, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_open', 'Mixer open / direction GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
-            ${fieldNumber('gpio_mix_close', 'Mixer close / motion GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_mix_open', 'Mixer channel 1 (open / direction) GPIO', cfg.gpio_mix_open, 0, 255, 1, pinHelp, 'int')}
+            ${fieldNumber('gpio_mix_close', 'Mixer channel 2 (close / motion) GPIO', cfg.gpio_mix_close, 0, 255, 1, pinHelp, 'int')}
           </div>
         </div>
 
@@ -1594,7 +1606,7 @@ function renderSettingsHardware() {
             ${fieldNumber('expander_clock_pin', 'Shift clock (SRCLK/SHCP) GPIO', cfg.expander_clock_pin, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('expander_latch_pin', 'Latch clock (RCLK/STCP) GPIO', cfg.expander_latch_pin, 0, 255, 1, pinHelp, 'int')}
             ${fieldNumber('expander_oe_pin', 'Output enable (/OE) GPIO', cfg.expander_oe_pin, 0, 255, 1, '255 when /OE is hard-wired on the board.', 'int')}
-            ${fieldCheckbox('expander_oe_active_low', '/OE is active low', cfg.expander_oe_active_low, 'Most 74HC595 boards enable the outputs with a low level; the legacy carrier pulls /OE up to disable them at boot.')}
+            ${fieldCheckbox('expander_oe_active_low', '/OE is active low', cfg.expander_oe_active_low, 'Most 74HC595 boards enable the outputs with a low level; HomeNet Heating control v0.1 pulls /OE up to disable them at boot.')}
           </div>
         </div>
 
@@ -1615,10 +1627,16 @@ function renderSettingsHardware() {
             ${fieldNumber('expander_bit_pump_rad1', 'Heating loop 1 pump bit', cfg.expander_bit_pump_rad1, 0, 7, 1, 'Output bit 0–7.', 'int')}
             ${fieldNumber('expander_bit_pump_rad2', 'Heating loop 2 pump bit', cfg.expander_bit_pump_rad2, 0, 7, 1, 'Output bit 0–7.', 'int')}
             ${fieldNumber('expander_bit_heater', 'Heater bit', cfg.expander_bit_heater, 0, 7, 1, 'Output bit 0–7.', 'int')}
-            ${fieldNumber('expander_bit_mix_direction', 'Mixer open / direction bit', cfg.expander_bit_mix_direction, 0, 7, 1, 'First mixer channel.', 'int')}
-            ${fieldNumber('expander_bit_mix_motion', 'Mixer close / motion bit', cfg.expander_bit_mix_motion, 0, 7, 1, 'Second mixer channel.', 'int')}
-            ${fieldNumber('expander_bit_mux_s0', 'Current MUX S0 bit', cfg.expander_bit_mux_s0, 0, 7, 1, 'Only used when the carrier has a current MUX.', 'int')}
-            ${fieldNumber('expander_bit_mux_s1', 'Current MUX S1 bit', cfg.expander_bit_mux_s1, 0, 7, 1, 'Only used when the carrier has a current MUX.', 'int')}
+            ${fieldNumber('expander_bit_mix_direction', 'Mixer channel 1 (open / direction) bit', cfg.expander_bit_mix_direction, 0, 7, 1, 'First mixer channel.', 'int')}
+            ${fieldNumber('expander_bit_mix_motion', 'Mixer channel 2 (close / motion) bit', cfg.expander_bit_mix_motion, 0, 7, 1, 'Second mixer channel.', 'int')}
+          </div>
+        </div>
+
+        <div class="form-section" data-expander-section="2">
+          <h3>Interlock fault input</h3>
+          <div class="form-grid">
+            ${fieldNumber('expander_bit_mix_fault', 'Fault input bit (255 = not connected)', cfg.expander_bit_mix_fault, 0, 255, 1, 'HomeNet Heating control v1.x uses P7 as an input that signals an open/close interlock failure.', 'int')}
+            ${fieldCheckbox('mix_fault_active_low', 'Fault input is active low', cfg.mix_fault_active_low, 'When set, a low level means the board reports the interlock fault.')}
           </div>
         </div>
 
@@ -1649,22 +1667,46 @@ function renderSettingsHardware() {
         </div>
 
         <div class="form-section">
+          <h3>Current measurement</h3>
+          <div class="form-grid">
+            ${fieldSelect('current_sense', 'Current sensing', cfg.current_sense, [
+              { value: 0, label: 'None' },
+              { value: 1, label: 'Analogue MUX + ADC (HomeNet Heating control v0.1)' },
+              { value: 2, label: 'ADS1115 (HomeNet Heating control v1.x)' }
+            ], 'Selects the current-sensor front end. Settings for the other options are kept.')}
+          </div>
+          <div class="form-grid" data-current-sense-section="2">
+            ${fieldHex('ads1115_address', 'ADS1115 I2C address (7-bit)', cfg.ads1115_address, '0x48–0x4B for the four address straps.')}
+            ${fieldCheckbox('tlv9064_present', 'TLV9064 sensor assembly fitted', cfg.tlv9064_present, 'The TLV9064 current-sensor assembly is an optional external part. When it is absent, current-based protection stays off.')}
+          </div>
+          <p class="small faint" data-current-sense-section="2" style="margin-top:8px">ADS1115 inputs: A0 pump 1, A1 pump 2, A3 pump 3 / floor, A4 mixer. A2 is unused.</p>
+        </div>
+
+        <div class="form-section" data-expander-section="1 2" data-current-sense-section="1">
+          <h3>Current MUX select bits</h3>
+          <div class="form-grid">
+            ${fieldNumber('expander_bit_mux_s0', 'Current MUX S0 bit', cfg.expander_bit_mux_s0, 0, 7, 1, 'Only used with the analogue current MUX.', 'int')}
+            ${fieldNumber('expander_bit_mux_s1', 'Current MUX S1 bit', cfg.expander_bit_mux_s1, 0, 7, 1, 'Only used with the analogue current MUX.', 'int')}
+          </div>
+        </div>
+
+        <div class="form-section" data-current-sense-section="1 2">
           <h3>Pump current calibration</h3>
-          <p class="small faint">All current channels share the same ACS712/CT front end. Power is computed as <span class="mono">(Vrms − offset) × W/V</span>. Calibrate against a clamp meter before enabling protection on a new carrier.</p>
+          <p class="small faint">Both front ends share the same calibration. Power is computed as <span class="mono">(Vrms − offset) × W/V</span>. Calibrate against a clamp meter before enabling protection on a board.</p>
           <div class="form-grid">
             ${fieldNumber('pump_current_w_per_v', 'Watts per volt', cfg.pump_current_w_per_v, 1, 5000, 0.1, 'Slope of the current-sense front end.', 'number', 'W/V')}
             ${fieldNumber('pump_current_offset_v', 'Zero-current offset', cfg.pump_current_offset_v, 0, 1, 0.001, 'RMS voltage reported with no pump current.', 'number', 'V')}
-            ${fieldCheckbox('pump_power_check_enabled', 'Enable current-based protection', cfg.pump_power_check_enabled, 'Use the measured current for dry-run and welded-relay detection. Disable while the shunt is uncalibrated.')}
+            ${fieldCheckbox('pump_power_check_enabled', 'Enable current-based protection', cfg.pump_power_check_enabled, 'Use the measured current for dry-run and welded-relay detection. Disable while the sensor is uncalibrated or absent.')}
           </div>
         </div>
 
         <div class="form-section">
-          <h3>Fixed carrier features</h3>
+          <h3>Fixed board features</h3>
           <div class="grid cols-2">
             <div class="metric-row"><span class="k">LED ring</span><span class="v">${esc(cfg.num_leds ?? 0)} LEDs (fixed)</span></div>
-            <div class="metric-row"><span class="k">Pump power</span><span class="v">${pumpPower.some(Boolean) ? 'On-board current sense' : 'Not present'}</span></div>
+            <div class="metric-row"><span class="k">Pump power</span><span class="v">${pumpPower.some(Boolean) ? 'Current sensors fitted' : 'Not present'}</span></div>
           </div>
-          <p class="small faint" style="margin-top:8px">The LED count and on-board pump-power sensors are defined by the carrier profile and are not user-selectable.</p>
+          <p class="small faint" style="margin-top:8px">The LED count and pump-power sensors are defined by the board profile and are not user-selectable.</p>
         </div>
 
         ${formActions('Save hardware settings')}
@@ -2029,14 +2071,23 @@ function bindFormBehaviors(root) {
   });
 
   const expanderSelect = root.querySelector('[data-field="output_expander"]');
-  if (expanderSelect) {
-    const syncExpanderSections = () => {
-      $$('[data-expander-section]', root).forEach((section) => {
-        section.hidden = !section.dataset.expanderSection.split(' ').includes(expanderSelect.value);
+  const senseSelect = root.querySelector('[data-field="current_sense"]');
+  if (expanderSelect || senseSelect) {
+    const syncConditionalSections = () => {
+      $$('[data-expander-section], [data-current-sense-section]', root).forEach((section) => {
+        let visible = true;
+        if (section.dataset.expanderSection && expanderSelect) {
+          visible = visible && section.dataset.expanderSection.split(' ').includes(expanderSelect.value);
+        }
+        if (section.dataset.currentSenseSection && senseSelect) {
+          visible = visible && section.dataset.currentSenseSection.split(' ').includes(senseSelect.value);
+        }
+        section.hidden = !visible;
       });
     };
-    expanderSelect.addEventListener('change', syncExpanderSections);
-    syncExpanderSections();
+    expanderSelect?.addEventListener('change', syncConditionalSections);
+    senseSelect?.addEventListener('change', syncConditionalSections);
+    syncConditionalSections();
   }
 
   $$('form.settings-form', root).forEach((form) => {
@@ -2615,7 +2666,7 @@ const routes = {
   },
   'settings/hardware': {
     title: 'Hardware & Pins',
-    subtitle: 'Carrier wiring, GPIO map and sensor identities',
+    subtitle: 'Board wiring, GPIO map and sensor identities',
     render: renderSettingsHardware,
     enter: async () => { await refreshConfig('hardware'); }
   },
