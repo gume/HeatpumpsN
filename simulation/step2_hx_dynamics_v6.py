@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 step2_hx_dynamics_v6.py
-Phase 2 (Version 6.0): Primary Heat Exchanger Dynamics (T_boiler -> T_incoming)
+Phase 2 (Version 6.1): Primary Heat Exchanger Dynamics (T_boiler -> T_incoming)
 Hardware-in-the-Loop (HIL) Floor Heating Simulator Project
 
-Version 6.0 is a correctness release.  It resolves the physics, leakage,
-portability and parity defects of v5:
+Version 6.1 is a HIL-correctness release.  It removes measured T_incoming
+from the runtime step() inputs, gates the cold-start plug-flow ring on real
+primary flow, fixes re-anchor/counter bookkeeping, identifies hot-manifold idle
+cooling on FIT, and tightens shutdown-window detection.  It resolves the
+physics, leakage, portability and parity defects of v5:
 
 1. Low-lift is decoupled from the pump-off hold.  Branch 2A (primary pump OFF)
    holds L_pump_off and then relaxes with tau_cutoff.  Branch 2B (primary pump
@@ -56,6 +59,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = Path(os.environ.get("HEATPUMPS_OUT_DIR", str(BASE_DIR / "simulation")))
 DB_PATH = Path(os.environ.get("HEATPUMPS_DB_PATH", str(BASE_DIR / "analysis" / "heatpumps.duckdb")))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _relative_db_path() -> str:
+    """Machine-independent database path for JSON artifacts."""
+    try:
+        return str(DB_PATH.resolve().relative_to(BASE_DIR.resolve()))
+    except ValueError:
+        return DB_PATH.name
+
 
 # Optional uv-cache fallback for machines where the environment is not
 # activated.  These paths are *never* required: they are only prepended when
@@ -323,7 +335,8 @@ def causal_majority_np(arr: np.ndarray, window: int = 31) -> np.ndarray:
 # FIT identification
 # ---------------------------------------------------------------------------
 def identify_fit_ratios(df_fit: pd.DataFrame) -> dict:
-    """Effectiveness ratios on the FIT window (1-24 Dec), plus tau_rad_off."""
+    """Effectiveness ratios on the FIT window (1-24 Dec), plus tau_rad_off
+    and tau_idle."""
     p1 = median_filter((df_fit["p1_w"].values >= 2.0).astype(int), 5).astype(bool)
     p2 = median_filter((df_fit["p2_w"].values >= 2.0).astype(int), 5).astype(bool)
     p3 = median_filter((df_fit["p3_w"].values >= 2.0).astype(int), 5).astype(bool)
@@ -383,6 +396,26 @@ def identify_fit_ratios(df_fit: pd.DataFrame) -> dict:
         ratio_min = float("nan")
         tau_rad_off = 2130.0
 
+    # tau_idle: one-step cooling ratio for hot-manifold pure-idle segments.
+    # Only samples with no secondary pump, no DHW and a manifold well above
+    # room temperature are used.  This is identified on FIT only and replaces
+    # the v5 tau_ambient design constant, which was derived from cold DHW idle
+    # episodes already close to room equilibrium.
+    xi = tinc
+    ri = df_fit["t_room"].values
+    mi = (~p1) & (~p2) & (~p3) & (~ww) & ((xi - ri) > 10.0)
+    mi[:-1] &= mi[1:]
+    di0 = xi[:-1] - ri[:-1]
+    di1 = xi[1:] - ri[1:]
+    sel_i = mi[:-1] & (di0 > 10.0) & (di1 > 0.0) & (di1 < di0)
+    if int(sel_i.sum()) >= 20:
+        ratio_idle = float(np.median(di1[sel_i] / di0[sel_i]))
+        ratio_idle = min(max(ratio_idle, 1e-4), 0.9999)
+        tau_idle = float(-60.0 / math.log(ratio_idle))
+    else:
+        ratio_idle = float("nan")
+        tau_idle = 36000.0
+
     # Hydraulic decoupling correlations, recomputed on FIT-only Regime A.
     mA = active & (regime == "A") & np.isfinite(eff)
     mstate = df_fit["mixer_state"].values.astype(float)
@@ -394,12 +427,15 @@ def identify_fit_ratios(df_fit: pd.DataFrame) -> dict:
         r_mstate_tinc = r_mstate_dthx = r_tb_tinc = float("nan")
 
     return dict(
-        regime_counts={k: int((regime == k).sum()) for k in "ABCDEother"},
+        regime_counts={k: int((regime == k).sum())
+                       for k in ("A", "B", "C", "D", "E", "other")},
         active_count=int(active.sum()),
         A=a, B1=b1, B2=b2, C=c,
         ratio_B1=float(ratio_B1), ratio_B2=float(ratio_B2), ratio_C=float(ratio_C),
         tau_rad_off=tau_rad_off, tau_rad_ratio_per_min=ratio_min,
         tau_rad_samples=int(sel.sum()),
+        tau_idle=tau_idle, tau_idle_ratio_per_min=ratio_idle,
+        tau_idle_samples=int(sel_i.sum()),
         fit_window=FIT_WINDOW,
         fit_regime_a_correlations=dict(
             r_mstate_tinc=r_mstate_tinc,
@@ -603,16 +639,21 @@ class HXSimulator:
         timers, but an unobserved pre-window transient must not bias the
         target window.  Only the thermal states are reset to the measured
         manifold/boiler values; filters and timers keep their warm-up history.
+        An active cold-start front is *not* wiped, and branch counters are
+        cleared so they describe the target window only.
         """
         self.sim = float(t_inc0)
         self.t_hx = float(t_inc0)
-        self.t_front = float(t_inc0)
         self.tb_active = float(tb0)
-        for i in range(self.n_cold):
-            self.ring[i] = float(t_inc0)
-        self.rpos = 0
+        if not self.cold_on:
+            self.t_front = float(t_inc0)
+            for i in range(self.n_cold):
+                self.ring[i] = float(t_inc0)
+            self.rpos = 0
+        for k in self.branch_counts:
+            self.branch_counts[k] = 0
 
-    def step(self, tb: float, tinc: float, tret: float, troom: float,
+    def step(self, tb: float, tret: float, troom: float,
              bp: float, pmod: float, p1w: float, p2w: float, p3w: float,
              ww: float, bp_age: float, pmod_age: float, tb_age: float):
         p = self.p
@@ -621,11 +662,8 @@ class HXSimulator:
         if self.mode == "v6":
             valid = (tb_age <= TB_MAX_AGE_S) and (bp_age <= EVT_MAX_AGE_S) and (pmod_age <= EVT_MAX_AGE_S)
             if not valid:
-                # Hold every state variable.  The ring still advances so that a
-                # cold-start front does not replay stale water after recovery.
-                if self.cold_on:
-                    self.ring[self.rpos] = self.t_hx
-                    self.rpos = (self.rpos + 1) % self.n_cold
+                # Hold every state variable.  The plug-flow ring must not
+                # advance without valid primary-flow telemetry.
                 self.branch_counts["stale_hold"] += 1
                 return self.sim, BR_STALE
 
@@ -668,27 +706,34 @@ class HXSimulator:
         active_now = (bp > 0.0) or (pmod > 0.0)
         if self.mode == "v6":
             if active_now:
+                # HIL-safe trigger: use the simulator's own outlet state, never
+                # the measured T_incoming (which is the Step 2 output).
                 if ((not self.cold_on) and (self.idle_timer >= L_IDLE_TRIGGER_S)
-                        and (tinc < COLD_EXIT_TEMP_C) and (tb - tinc > 15.0)):
+                        and (self.sim < COLD_EXIT_TEMP_C)
+                        and (tb - self.sim > 15.0)):
                     self.cold_on = True
                     self.cold_elapsed = 0.0
-                    self.t_front = float(tinc)
+                    self.t_front = float(self.sim)
                     for i in range(self.n_cold):
-                        self.ring[i] = float(tinc)
+                        self.ring[i] = float(self.sim)
                     self.rpos = 0
                 self.idle_timer = 0.0
             else:
                 self.idle_timer += DT
 
             if self.cold_on:
-                delayed = self.ring[self.rpos]
-                tau_cold = float(p["tau_cold_front"])
-                a_cold = 1.0 if tau_cold <= 0.0 else DT / (tau_cold + DT)
-                self.t_front = (1.0 - a_cold) * self.t_front + a_cold * delayed
-                self.ring[self.rpos] = float(tb)
-                self.rpos = (self.rpos + 1) % self.n_cold
+                # A plug-flow pipe advances only while primary water actually
+                # flows through the space-heating HX.  During a primary-pump
+                # stop or a DHW divert the front is held in place.
+                if pmod > 0.0 and not wwb:
+                    delayed = self.ring[self.rpos]
+                    tau_cold = float(p["tau_cold_front"])
+                    a_cold = 1.0 if tau_cold <= 0.0 else DT / (tau_cold + DT)
+                    self.t_front = (1.0 - a_cold) * self.t_front + a_cold * delayed
+                    self.ring[self.rpos] = float(tb)
+                    self.rpos = (self.rpos + 1) % self.n_cold
+                    self.cold_elapsed += DT
                 tb_use = self.t_front
-                self.cold_elapsed += DT
             else:
                 tb_use = float(tb)
         else:
@@ -805,7 +850,8 @@ class HXSimulator:
                     out = (1.0 - a) * prev + a * target
         else:
             branch = BR_IDLE
-            a = DT / (p["tau_ambient"] + DT)
+            tau_idle = p["tau_idle"] if self.mode == "v6" else p["tau_ambient"]
+            a = DT / (tau_idle + DT)
             out = (1.0 - a) * prev + a * tr
 
         self.sim = float(out)
@@ -863,11 +909,10 @@ def simulate_episode(df: pd.DataFrame, params: dict, mode: str = "v6",
     branches[0] = BR_ACTIVE
     for k in range(1, n):
         if k == reanchor_index:
+            # Re-anchor at the boundary, then still process this sample so
+            # timers and causal pump filters advance without a 10 s gap.
             s.reanchor(tinc[k], tb[k])
-            sim[k] = s.sim
-            branches[k] = BR_ACTIVE
-            continue
-        out, br = s.step(tb[k], tinc[k], tret[k], troom[k], bp[k], pmod[k],
+        out, br = s.step(tb[k], tret[k], troom[k], bp[k], pmod[k],
                          p1[k], p2[k], p3[k], ww[k], bpa[k], pmoda[k], tba[k])
         sim[k] = out
         branches[k] = br
@@ -902,14 +947,24 @@ def detect_shutdown_windows(df: pd.DataFrame, start: int = WARMUP_STEPS) -> dict
     tb = df["t_boiler"].values
     tret = df["t_ret"].values
     tinc = df["t_inc"].values
+    ww = df["ww_flag"].values >= 0.5
+    # Same 5-sample causal median filter as the simulator, so isolated
+    # one-sample pump blips cannot fabricate a shutdown window.
+    p1 = median_filter((df["p1_w"].values >= 2.0).astype(int), 5).astype(bool)
+    p2 = median_filter((df["p2_w"].values >= 2.0).astype(int), 5).astype(bool)
+    p3 = median_filter((df["p3_w"].values >= 2.0).astype(int), 5).astype(bool)
+    pany = p1 | p2 | p3
+    # Space-heating circulation only: DHW priority divert is not a shutdown.
+    sh_circ = pany & (~ww)
 
-    # Final pump shutdown: last run of pmod<=0 of at least 3 minutes.
+    # Final pump shutdown: last run of primary-pump-off with secondary
+    # space-heating circulation still active, at least 3 minutes long.
     final = None
     i = start
     while i < n:
-        if pmod[i] <= 0.0:
+        if pmod[i] <= 0.0 and sh_circ[i]:
             j = i
-            while j + 1 < n and pmod[j + 1] <= 0.0:
+            while j + 1 < n and pmod[j + 1] <= 0.0 and sh_circ[j + 1]:
                 j += 1
             if j - i + 1 >= 18:
                 final = (i, j + 1)
@@ -917,15 +972,17 @@ def detect_shutdown_windows(df: pd.DataFrame, start: int = WARMUP_STEPS) -> dict
         else:
             i += 1
 
-    # Mid-run burner cutoffs: burner off, primary pump on, usable boiler lift.
+    # Mid-run burner cutoffs: burner off, primary pump on, usable boiler lift,
+    # and active space-heating circulation (not a DHW divert).
     cutoffs = []
     i = start
     while i < n:
-        cond = (bp[i] <= 0.0) and (pmod[i] > 0.0) and (tb[i] > tret[i] + 1.0)
+        cond = (bp[i] <= 0.0) and (pmod[i] > 0.0) and sh_circ[i] \
+            and (tb[i] > tret[i] + 1.0)
         if cond:
             j = i
             while (j + 1 < n and bp[j + 1] <= 0.0 and pmod[j + 1] > 0.0
-                   and tb[j + 1] > tret[j + 1] + 1.0):
+                   and sh_circ[j + 1] and tb[j + 1] > tret[j + 1] + 1.0):
                 j += 1
             if j - i + 1 >= 12:
                 cutoffs.append((i, j + 1))
@@ -933,14 +990,21 @@ def detect_shutdown_windows(df: pd.DataFrame, start: int = WARMUP_STEPS) -> dict
         else:
             i += 1
 
-    # Cold-start window: from the first target sample until measured T_inc
-    # reaches 28 C (or 5 minutes, whichever is earlier).
-    cold_stop = min(n, start + 30)
+    # Cold-start window: from the first target sample with space-heating
+    # circulation until measured T_inc reaches 28 C (or 5 minutes).
+    cold = None
+    cold_start = None
     for k in range(start, min(n, start + 30)):
-        if tinc[k] >= COLD_EXIT_TEMP_C:
-            cold_stop = k + 1
+        if sh_circ[k] and tinc[k] < COLD_EXIT_TEMP_C:
+            cold_start = k
             break
-    cold = (start, cold_stop) if tinc[start] < COLD_EXIT_TEMP_C else None
+    if cold_start is not None:
+        cold_stop = min(n, cold_start + 30)
+        for k in range(cold_start, min(n, cold_start + 30)):
+            if tinc[k] >= COLD_EXIT_TEMP_C:
+                cold_stop = k + 1
+                break
+        cold = (cold_start, cold_stop)
 
     return dict(cold=cold, cutoffs=cutoffs, final=final)
 
@@ -985,7 +1049,7 @@ def base_params_from_fit(fit_ratios: dict, hx_fit: dict, dhw_fit: dict) -> dict:
         "L_burn_off": 30.0,
         "tau_burn_off": 2400.0,
         "tau_cutoff": 150.0,
-        "tau_ambient": 36000.0,
+        "tau_idle": float(fit_ratios["tau_idle"]),
         "tau_rad_off": float(fit_ratios["tau_rad_off"]),
         "L_cold_start": 140.0,
         "tau_cold_front": 5.0,
@@ -1161,26 +1225,57 @@ def _synth_frame(n: int, tb, tinc, tret, troom, bp, pmod,
     })
 
 
-def run_unit_tests(params: dict) -> list[dict]:
-    tests = []
+def build_unit_frames() -> dict[str, pd.DataFrame]:
+    """Build the five synthetic frames once; reused by Python and C++ tests."""
+    frames = {}
 
     # UT1: low-lift settles to T_return = 25.03 C with no pump-off hold.
-    n = 900
-    df = _synth_frame(n, tb=25.5, tinc=60.0, tret=25.03, troom=20.0,
-                      bp=0.0, pmod=60.0, p3=10.0)
-    res = simulate_episode(df, params, mode="v6")
+    frames["UT1_LowLift"] = _synth_frame(
+        900, tb=25.5, tinc=60.0, tret=25.03, troom=20.0,
+        bp=0.0, pmod=60.0, p3=10.0)
+
+    # UT2: pump-off hold then plunge.
+    n = 400
+    frames["UT2_PumpOffHoldPlunge"] = _synth_frame(
+        n, tb=65.0, tinc=60.0, tret=20.0, troom=20.0,
+        bp=np.r_[np.full(10, 60.0), np.zeros(n - 10)],
+        pmod=np.r_[np.full(10, 60.0), np.zeros(n - 10)], p3=10.0)
+
+    # UT3: burner-off with pump on keeps casing heat (no immediate plunge).
+    n = 400
+    frames["UT3_BurnerOffPumpOn"] = _synth_frame(
+        n, tb=70.0, tinc=68.0, tret=20.0, troom=20.0,
+        bp=np.r_[np.full(60, 60.0), np.zeros(n - 60)], pmod=60.0, p3=10.0)
+
+    # UT4: DHW entry hold + plunge, then post-DHW recovery.
+    n = 500
+    frames["UT4_DHWEntryReturn"] = _synth_frame(
+        n, tb=70.0, tinc=68.0, tret=25.0, troom=20.0, bp=60.0,
+        pmod=np.r_[np.full(50, 60.0), np.full(250, 100.0), np.full(200, 60.0)],
+        p3=10.0, ww=np.r_[np.zeros(50), np.ones(250), np.zeros(200)])
+
+    # UT5: cold-start dead time then warm-up.
+    n = 400
+    frames["UT5_ColdStartWarmup"] = _synth_frame(
+        n, tb=55.0, tinc=20.0, tret=20.0, troom=20.0,
+        bp=np.r_[np.zeros(200), np.full(200, 50.0)],
+        pmod=np.r_[np.zeros(200), np.full(200, 60.0)],
+        p3=np.r_[np.zeros(200), np.full(200, 10.0)])
+    return frames
+
+
+def run_unit_tests(params: dict, frames: dict[str, pd.DataFrame] | None = None) -> list[dict]:
+    if frames is None:
+        frames = build_unit_frames()
+    tests = []
+
+    res = simulate_episode(frames["UT1_LowLift"], params, mode="v6")
     final = float(res["sim"][-1])
     ok = abs(final - 25.03) < 0.05
     tests.append(dict(name="UT1_LowLift", passed=bool(ok), value=final,
                       expected="~25.03 C", detail=f"final={final:.4f} C"))
 
-    # UT2: pump-off hold then plunge.
-    n = 400
-    pmod = np.r_[np.full(10, 60.0), np.zeros(n - 10)]
-    bp = np.r_[np.full(10, 60.0), np.zeros(n - 10)]
-    df = _synth_frame(n, tb=65.0, tinc=60.0, tret=20.0, troom=20.0,
-                      bp=bp, pmod=pmod, p3=10.0)
-    res = simulate_episode(df, params, mode="v6")
+    res = simulate_episode(frames["UT2_PumpOffHoldPlunge"], params, mode="v6")
     n_hold = max(1, int(round(float(params["L_pump_off"]) / DT)) - 1)
     hold_slice = res["sim"][10 : 10 + n_hold]
     hold_delta = float(np.max(hold_slice) - np.min(hold_slice))
@@ -1190,24 +1285,13 @@ def run_unit_tests(params: dict) -> list[dict]:
                       value=plunge, expected="hold then <30 C",
                       detail=f"hold_delta={hold_delta:.4f} C, final={plunge:.2f} C"))
 
-    # UT3: burner-off with pump on keeps casing heat (no immediate plunge).
-    n = 400
-    bp = np.r_[np.full(60, 60.0), np.zeros(n - 60)]
-    df = _synth_frame(n, tb=70.0, tinc=68.0, tret=20.0, troom=20.0,
-                      bp=bp, pmod=60.0, p3=10.0)
-    res = simulate_episode(df, params, mode="v6")
+    res = simulate_episode(frames["UT3_BurnerOffPumpOn"], params, mode="v6")
     final = float(res["sim"][-1])
     ok = 25.0 < final < 50.0 and res["branch_counts"]["casing_decay"] > 250
     tests.append(dict(name="UT3_BurnerOffPumpOn", passed=bool(ok), value=final,
                       expected="25-50 C (casing decay)", detail=f"final={final:.2f} C"))
 
-    # UT4: DHW entry hold + plunge, then post-DHW recovery.
-    n = 500
-    ww = np.r_[np.zeros(50), np.ones(250), np.zeros(200)]
-    df = _synth_frame(n, tb=70.0, tinc=68.0, tret=25.0, troom=20.0,
-                      bp=60.0, pmod=np.r_[np.full(50, 60.0), np.full(250, 100.0), np.full(200, 60.0)],
-                      p3=10.0, ww=ww)
-    res = simulate_episode(df, params, mode="v6")
+    res = simulate_episode(frames["UT4_DHWEntryReturn"], params, mode="v6")
     dhw_end = float(res["sim"][299])
     rec_end = float(res["sim"][-1])
     ok = dhw_end < 32.0 and rec_end > 55.0 and res["branch_counts"]["dhw_divert"] > 200
@@ -1215,14 +1299,7 @@ def run_unit_tests(params: dict) -> list[dict]:
                       expected="DHW <32 C, recovery >55 C",
                       detail=f"dhw_end={dhw_end:.2f} C, rec_end={rec_end:.2f} C"))
 
-    # UT5: cold-start dead time then warm-up.
-    n = 400
-    bp = np.r_[np.zeros(200), np.full(200, 50.0)]
-    pmod = np.r_[np.zeros(200), np.full(200, 60.0)]
-    p3 = np.r_[np.zeros(200), np.full(200, 10.0)]
-    df = _synth_frame(n, tb=55.0, tinc=20.0, tret=20.0, troom=20.0,
-                      bp=bp, pmod=pmod, p3=p3)
-    res = simulate_episode(df, params, mode="v6")
+    res = simulate_episode(frames["UT5_ColdStartWarmup"], params, mode="v6")
     flat = float(np.max(res["sim"][200:210]))
     warm = float(res["sim"][-1])
     ok = flat < 21.0 and warm > 45.0
@@ -1237,7 +1314,7 @@ def run_unit_tests(params: dict) -> list[dict]:
 # C++ code generation, compilation and parity
 # ---------------------------------------------------------------------------
 HPP_TEMPLATE = r'''// Auto-generated by simulation/step2_hx_dynamics_v6.py
-// Phase 2, Version 6.0 -- exact fitted constants.
+// Phase 2, Version 6.1 -- exact fitted constants.
 // Do not edit by hand: re-run the Python identification to regenerate.
 #pragma once
 
@@ -1285,7 +1362,7 @@ struct Params {
     scalar L_burn_off = @@L_BURN_OFF@@;
     scalar tau_burn_off = @@TAU_BURN_OFF@@;
     scalar tau_cutoff = @@TAU_CUTOFF@@;
-    scalar tau_ambient = @@TAU_AMBIENT@@;
+    scalar tau_idle = @@TAU_IDLE@@;
     scalar tau_rad_off = @@TAU_RAD_OFF@@;
     scalar L_cold_start = @@L_COLD_START@@;
     scalar tau_cold_front = @@TAU_COLD_FRONT@@;
@@ -1359,20 +1436,21 @@ public:
     void reanchor(scalar t_inc0, scalar tb0) {
         sim_ = t_inc0;
         t_hx_ = t_inc0;
-        t_front_ = t_inc0;
         tb_active_ = tb0;
-        for (int i = 0; i < COLD_RING_N; ++i) ring_[i] = t_inc0;
-        rpos_ = 0;
+        if (!cold_on_) {
+            t_front_ = t_inc0;
+            for (int i = 0; i < COLD_RING_N; ++i) ring_[i] = t_inc0;
+            rpos_ = 0;
+        }
+        for (int i = 0; i < 8; ++i) branch_counts_[i] = 0;
     }
 
-    scalar step(scalar tb, scalar tinc, scalar tret, scalar troom,
+    scalar step(scalar tb, scalar tret, scalar troom,
                 scalar bp, scalar pmod, scalar p1w, scalar p2w, scalar p3w,
                 scalar ww, scalar bp_age, scalar pmod_age, scalar tb_age) {
         if (!(tb_age <= TB_MAX_AGE_S && bp_age <= EVT_MAX_AGE_S && pmod_age <= EVT_MAX_AGE_S)) {
-            if (cold_on_) {
-                ring_[rpos_] = t_hx_;
-                rpos_ = (rpos_ + 1) % COLD_RING_N;
-            }
+            // Hold all state; do not advance the plug-flow ring without
+            // valid primary-flow telemetry.
             branch_counts_[BR_STALE]++;
             last_branch_ = BR_STALE;
             return sim_;
@@ -1412,12 +1490,14 @@ public:
 
         bool active_now = (bp > scalar(0.0)) || (pmod > scalar(0.0));
         if (active_now) {
+            // HIL-safe trigger: use the simulator's own outlet state, never
+            // the measured T_incoming (which is the Step 2 output).
             if ((!cold_on_) && (idle_timer_ >= L_IDLE_TRIGGER_S)
-                && (tinc < COLD_EXIT_TEMP_C) && (tb - tinc > scalar(15.0))) {
+                && (sim_ < COLD_EXIT_TEMP_C) && (tb - sim_ > scalar(15.0))) {
                 cold_on_ = true;
                 cold_elapsed_ = scalar(0.0);
-                t_front_ = tinc;
-                for (int i = 0; i < COLD_RING_N; ++i) ring_[i] = tinc;
+                t_front_ = sim_;
+                for (int i = 0; i < COLD_RING_N; ++i) ring_[i] = sim_;
                 rpos_ = 0;
             }
             idle_timer_ = scalar(0.0);
@@ -1427,15 +1507,19 @@ public:
 
         scalar tb_use;
         if (cold_on_) {
-            scalar delayed = ring_[rpos_];
-            scalar a_cold = (p_.tau_cold_front <= scalar(0.0))
-                                ? scalar(1.0)
-                                : DT / (p_.tau_cold_front + DT);
-            t_front_ = (scalar(1.0) - a_cold) * t_front_ + a_cold * delayed;
-            ring_[rpos_] = tb;
-            rpos_ = (rpos_ + 1) % COLD_RING_N;
+            // Advance the plug-flow front only while primary water actually
+            // flows through the space-heating HX.
+            if (pmod > scalar(0.0) && !wwb) {
+                scalar delayed = ring_[rpos_];
+                scalar a_cold = (p_.tau_cold_front <= scalar(0.0))
+                                    ? scalar(1.0)
+                                    : DT / (p_.tau_cold_front + DT);
+                t_front_ = (scalar(1.0) - a_cold) * t_front_ + a_cold * delayed;
+                ring_[rpos_] = tb;
+                rpos_ = (rpos_ + 1) % COLD_RING_N;
+                cold_elapsed_ += DT;
+            }
             tb_use = t_front_;
-            cold_elapsed_ += DT;
         } else {
             tb_use = tb;
         }
@@ -1502,7 +1586,7 @@ public:
             }
         } else {
             branch = BR_IDLE;
-            scalar a = DT / (p_.tau_ambient + DT);
+            scalar a = DT / (p_.tau_idle + DT);
             out = (scalar(1.0) - a) * prev + a * tr;
         }
 
@@ -1592,15 +1676,17 @@ int main(int argc, char** argv) {
             sim.reset(v[1], v[0]);
             cur_ep = ep;
         }
-        double out;
         if (reanchor != 0) {
             sim.reanchor(v[1], v[0]);
-            out = static_cast<double>(sim.sim());
-        } else if (idx == 0) {
+        }
+        double out;
+        if (idx == 0) {
             out = static_cast<double>(sim.sim());
         } else {
+            // v[1] is measured t_inc, kept only for re-anchoring; it is not
+            // a step() input because it is the Step 2 simulated output.
             out = static_cast<double>(sim.step(
-                v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7],
+                v[0], v[2], v[3], v[4], v[5], v[6], v[7],
                 v[8], v[9], v[10], v[11], v[12]));
         }
         std::printf("%s,%d,%.10f\n", ep.c_str(), idx, out);
@@ -1627,7 +1713,7 @@ def generate_hpp(path: Path, params: dict) -> int:
         "@@L_BURN_OFF@@": f"{float(params['L_burn_off']):.17g}",
         "@@TAU_BURN_OFF@@": f"{float(params['tau_burn_off']):.17g}",
         "@@TAU_CUTOFF@@": f"{float(params['tau_cutoff']):.17g}",
-        "@@TAU_AMBIENT@@": f"{float(params['tau_ambient']):.17g}",
+        "@@TAU_IDLE@@": f"{float(params['tau_idle']):.17g}",
         "@@TAU_RAD_OFF@@": f"{float(params['tau_rad_off']):.17g}",
         "@@L_COLD_START@@": f"{float(params['L_cold_start']):.17g}",
         "@@TAU_COLD_FRONT@@": f"{float(params['tau_cold_front']):.17g}",
@@ -1840,10 +1926,10 @@ def build_report(path: Path, ctx: dict) -> None:
     cut_span = ", ".join(f"{a}-{b}" for a, b in four["windows"]["cutoffs"]) or "none"
     final_span = four["windows"]["final"] or (0, 0)
 
-    md = f"""# Phase 2 — Version 6.0: Primary Heat Exchanger Dynamics (T_boiler → T_incoming)
+    md = f"""# Phase 2 — Version 6.1: Primary Heat Exchanger Dynamics (T_boiler → T_incoming)
 
 **Project:** Hardware-in-the-Loop (HIL) Floor Heating Simulator
-**Version:** 6.0 (engineering sign-off)
+**Version:** 6.1 (engineering sign-off)
 **Generated:** {ts}
 **Script:** `simulation/step2_hx_dynamics_v6.py`
 **Database:** `analysis/heatpumps.duckdb` (read-only)
@@ -1853,7 +1939,7 @@ def build_report(path: Path, ctx: dict) -> None:
 
 ## 0. Sign-off summary
 
-Version 6.0 is the Phase 2 engineering sign-off release. It fixes the
+Version 6.1 is the Phase 2 engineering sign-off release. It fixes the
 low-lift/pump-off coupling,
 adds a cold-start transport front, removes all backward fills and hard-coded
 paths, enforces a strict FIT/TUNE/VAL split, and makes the Python and C++
@@ -1871,11 +1957,24 @@ implementations numerically identical.
 | Staleness | `tb_age_s`, `bp_age_s`, `pmod_age_s` guard holds state on gateway drops |
 | Portable paths | `BASE_DIR = Path(__file__).resolve().parent.parent`; `HEATPUMPS_DB_PATH` / `HEATPUMPS_OUT_DIR` overrides |
 
-**What is *not* claimed.** Residuals remain. The v6 final-shutdown RMSE on
+**What is *not* claimed.** Residuals remain. The v6.1 final-shutdown RMSE on
 TUNE-1 is `{_fmt(v6r['final']['rmse'])} °C` (v5: `{_fmt(v5r['final']['rmse'])} °C`),
 and VAL-5's post-pump-off idle cooling residual is material. Section 6 and
 Section 9 quantify these residuals rather than claiming that they are
 eliminated.
+
+### 0.1 v6.1 HIL audit corrections
+
+| # | Defect | Correction |
+|---|---|---|
+| 1 | Measured `T_incoming` was a `step()` input, so HIL/Step 3 would need the simulated output | Removed `tinc` from Python and C++ `step()`; the cold-start trigger and ring initialisation use internal `sim` / `sim_` |
+| 2 | Cold-start plug-flow ring advanced with the primary pump off or during DHW priority | Ring, `t_front` and `cold_elapsed` advance only when `pmod > 0.0 && !ww` |
+| 3 | Re-anchor skipped sample 180, wiped an active cold front and leaked warm-up branch counts | Re-anchor then still call `step()`; preserve an active `cold_on` ring; clear `branch_counts` at the boundary |
+| 4 | `tau_ambient = 36000 s` under-cooled a hot manifold (VAL-5 idle) | FIT-only hot-manifold idle identification (`~p1 & ~p2 & ~p3 & ~ww`, `T_inc - T_room > 10 °C`) gives `tau_idle` |
+| 5 | `detect_shutdown_windows()` labelled idle/DHW episodes as cold/cutoff/final shutdowns | Detection requires median-filtered secondary space-heating circulation (`p_any & ~ww`); VAL-7 now reports no windows |
+| 6 | `"ABCDEother"` iterated character-by-character | Tuple keys `("A", "B", "C", "D", "E", "other")` |
+| 7 | C++ parity skipped UT1–UT5 | The same five synthetic frames feed both the Python tests and the parity CSV |
+| 8 | JSON contained a machine-specific `/home/...` database path | JSON writes the database path relative to `BASE_DIR` |
 
 ---
 
@@ -1928,7 +2027,7 @@ majority (`2 * ones >= count`, window 31) so no future samples are used.
 | Burner-off casing | primary pump ON, burner OFF, usable lift | casing `tb_active` decays with `tau_burn_off` after `L_burn_off` |
 | DHW divert | `ww = 1` and any secondary pump | hold `dhw_delay_s`, then first-order toward `T_return` with `tau_dhw_fast` |
 | Post-DHW return | `ww = 0` and `post_dhw_timer < post_dhw_delay_s` | first-order toward `T_return` with `tau_cutoff` |
-| Idle | no secondary pump | first-order toward `T_room` with `tau_ambient` |
+| Idle | no secondary pump | first-order toward `T_room` with `tau_idle` (FIT-identified) |
 
 The low-lift branch is checked **after** the pump-off branch and **before** the
 casing branch. It therefore never inherits the `L_pump_off` hold. This is the
@@ -1941,16 +2040,19 @@ event:
 
 ```
 idle_timer >= L_idle_trigger (1800 s)
-T_incoming < 28 °C
-T_boiler - T_incoming > 15 °C
+T_hx (internal simulated outlet) < 28 °C
+T_boiler - T_hx > 15 °C
 ```
 
 The primary pipe is represented by a plug-flow ring buffer of length
-`N = round(L_cold_start / DT)` initialised with the cold manifold temperature,
-followed by a first-order dispersion `tau_cold_front`. The delayed/dispersed
-boiler temperature replaces `T_boiler` in the active and casing branches. The
-latch exits when `T_hx >= 28 °C` or `elapsed >= L_cold_start + 5*tau_cold_front`.
-The front is fitted on **TUNE-1 only**.
+`N = round(L_cold_start / DT)` initialised with the cold internal outlet
+temperature, followed by a first-order dispersion `tau_cold_front`. The
+delayed/dispersed boiler temperature replaces `T_boiler` in the active and
+casing branches. The ring and `cold_elapsed` advance only while primary water
+actually flows through the space-heating HX (`pmod > 0.0 && !ww`); during a
+pump stop or DHW priority the front is held. The latch exits when
+`T_hx >= 28 °C` or `elapsed >= L_cold_start + 5*tau_cold_front`. The front is
+fitted on **TUNE-1 only**.
 
 ### 2.4 Staleness and causality
 
@@ -2016,7 +2118,17 @@ gives a median ratio of {_fmt(fit['tau_rad_ratio_per_min'], 5)} per minute
 (N = {fit['tau_rad_samples']:,}), hence `tau_rad_off = {_fmt(fit['tau_rad_off'], 1)} s`.
 This parameter is identified on FIT and is **not** tuned on TUNE or VAL.
 
-### 3.5 Hydraulic decoupling (corrected claim)
+### 3.5 Hot-manifold idle cooling constant (FIT)
+
+Pure-idle FIT samples with no secondary pump and no DHW
+(`~p1 & ~p2 & ~p3 & ~ww`, `T_incoming - T_room > 10 °C`) give a median
+one-step cooling ratio of {_fmt(fit['tau_idle_ratio_per_min'], 5)} per minute
+(N = {fit['tau_idle_samples']:,}), hence `tau_idle = {_fmt(fit['tau_idle'], 1)} s`.
+This replaces the v5 `tau_ambient = 36000 s` design constant, which was derived
+from cold DHW idle episodes already near room equilibrium. It is identified on
+FIT only and is never tuned on TUNE or VAL.
+
+### 3.6 Hydraulic decoupling (corrected claim)
 
 On the FIT window, settled Regime A (N = {corr['samples']:,}):
 
@@ -2067,7 +2179,7 @@ larger residual because the diverter travel time in that episode is longer than
 the FIT-DHW-fitted 90 s. That is an honest, out-of-sample residual: the entry
 delay is **not** re-fitted on TUNE-2.
 
-### 4.4 Final v6 parameters
+### 4.4 Final v6.1 parameters
 
 | Parameter | Value | Source |
 |---|---|---|
@@ -2086,7 +2198,7 @@ delay is **not** re-fitted on TUNE-2.
 | `L_cold_start` | {_fmt(params['L_cold_start'], 1)} s | TUNE-1 |
 | `tau_cold_front` | {_fmt(params['tau_cold_front'], 1)} s | TUNE-1 |
 | `tau_rad_off` | {_fmt(params['tau_rad_off'], 1)} s | FIT |
-| `tau_ambient` | {_fmt(params['tau_ambient'], 1)} s | design constant |
+| `tau_idle` | {_fmt(params['tau_idle'], 1)} s | FIT pure-idle cooling |
 
 ---
 
@@ -2151,7 +2263,7 @@ constants, writes `step2_hx_parity_harness.cpp`, compiles with
 |---|---|
 | Compiler | `{parity['compiler']}` |
 | Flags | `{ ' '.join(parity['flags']) }` |
-| Episodes compared | FIT-1, FIT-DHW, TUNE-1, TUNE-2, VAL-1..VAL-7 |
+| Episodes compared | FIT-1, FIT-DHW, TUNE-1, TUNE-2, VAL-1..VAL-7, UT1..UT5 |
 | Rows compared | {parity['rows']:,} |
 | Max absolute difference | `{parity['max_abs_diff_c']:.3e} °C` |
 | Tolerance | `< 1e-4 °C` |
@@ -2161,7 +2273,8 @@ constants, writes `step2_hx_parity_harness.cpp`, compiles with
 
 The five tests cover the low-lift steady state (→ 25.03 °C), pump-off hold and
 plunge, burner-off/pump-on casing decay, DHW entry and return, and cold-start
-warm-up. All five are executed against the shipped v6 constants.
+warm-up. All five are executed against the shipped v6.1 constants, and the same
+five synthetic frames are included in the C++ parity input.
 
 ---
 
@@ -2190,11 +2303,12 @@ warm-up. All five are executed against the shipped v6 constants.
   over-deepens the plunge, leaving a residual. Re-fitting the delay or the
   DHW target on TUNE-2 would be leakage and is deliberately not done.
 - **Idle cooling after all pumps stop.** VAL-5 contains long periods with no
-  pump running. The idle branch relaxes toward `T_room` with the design
-  constant `tau_ambient = {_fmt(params['tau_ambient'], 1)} s`; the measured
-  manifold cools faster than that, so this is the largest branch-level
-  residual in VAL-5. The constant is a design choice, not fitted on TUNE or
-  VAL, and the branch is not a full building thermal model.
+  pump running. The idle branch relaxes toward `T_room` with the FIT-identified
+  `tau_idle = {_fmt(params['tau_idle'], 1)} s`; this removes the v5
+  `tau_ambient = 36000 s` design constant that badly under-cooled a hot
+  manifold. A single global constant still cannot represent every
+  manifold/air-path configuration, so a residual remains, and the branch is
+  not a full building thermal model.
 - **Mid-run pump-off with radiator circulation.** VAL-5 also contains two long
   primary-pump-off runs with only radiator pumps running. The FIT-identified
   `tau_rad_off = {_fmt(params['tau_rad_off'], 1)} s` is a single global
@@ -2240,7 +2354,7 @@ optional `os.path.exists()` fallback for an un-activated uv cache.
 | Artifact | Purpose |
 |---|---|
 | `simulation/step2_params_v6.json` | Versioned parameter and metric export |
-| `simulation/step2_params.json` | Canonical alias of the v6 export |
+| `simulation/step2_params.json` | Canonical alias of the v6.1 export |
 | `simulation/step2_hx_dynamics_v6.hpp` | Auto-generated C++ implementation with exact constants |
 | `simulation/step2_hx_parity_harness.cpp` | C++ parity harness |
 | `simulation/step2_hx_parity_input.csv` | Row-level parity input |
@@ -2340,7 +2454,7 @@ def plot_tune1(path: Path, four: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    print_banner("Phase 2 v6.0 — Primary Heat Exchanger Dynamics (T_boiler -> T_incoming)")
+    print_banner("Phase 2 v6.1 — Primary Heat Exchanger Dynamics (T_boiler -> T_incoming)")
     print(f"Base directory:   {BASE_DIR}")
     print(f"Database:         {DB_PATH}")
     print(f"Output directory: {OUT_DIR}")
@@ -2383,7 +2497,8 @@ def main() -> None:
 
     # -- Unit tests --------------------------------------------------------
     print_section("3. Five synthetic unit tests")
-    unit_tests = run_unit_tests(params)
+    unit_frames = build_unit_frames()
+    unit_tests = run_unit_tests(params, unit_frames)
     for t in unit_tests:
         print(f"  {'PASS' if t['passed'] else 'FAIL'}  {t['name']:<26} {t['detail']}")
     assert all(t["passed"] for t in unit_tests), "Synthetic unit test failure"
@@ -2407,7 +2522,7 @@ def main() -> None:
     print_section("6. Python/C++ parity (g++ -O2)")
     episodes = {eid: load_episode(con, meta["t_start"], meta["t_end"])
                 for eid, meta in EPISODES.items()}
-    parity = run_cpp_parity(OUT_DIR, episodes, {}, params)
+    parity = run_cpp_parity(OUT_DIR, episodes, unit_frames, params)
     print(f"  Compiled {parity['harness']} with {parity['compiler']}")
     print(f"  Rows={parity['rows']:,}  max|sim_py-sim_cpp|={parity['max_abs_diff_c']:.3e} C")
 
@@ -2434,12 +2549,12 @@ def main() -> None:
 
     payload = {
         "metadata": {
-            "version": "6.0",
+            "version": "6.1",
             "phase": 2,
-            "description": "Primary Heat Exchanger Dynamics (T_boiler -> T_incoming) - Version 6.0",
+            "description": "Primary Heat Exchanger Dynamics (T_boiler -> T_incoming) - Version 6.1",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "script": "simulation/step2_hx_dynamics_v6.py",
-            "database": str(DB_PATH),
+            "database": _relative_db_path(),
             "split_policy": "FIT / TUNE / VAL strictly disjoint; old VAL-5 and VAL-6 reclassified as TUNE-1 and TUNE-2",
         },
         "split": {eid: {k: v for k, v in meta.items()} for eid, meta in EPISODES.items()},
@@ -2455,7 +2570,7 @@ def main() -> None:
             "tau_cutoff": "TUNE", "L_cold_start": "TUNE-1 cold window",
             "tau_cold_front": "TUNE-1 cold window",
             "tau_rad_off": "FIT one-step radiator-only pump-off cooling",
-            "tau_ambient": "design constant",
+            "tau_idle": "FIT one-step hot-manifold pure-idle cooling",
         },
         "fit_identification": {
             "regime_ratios": fit_ratios,
@@ -2521,7 +2636,7 @@ def main() -> None:
     build_report(report_path, ctx)
     print(f"  Wrote {report_path}")
 
-    print_banner("Phase 2 v6.0 complete")
+    print_banner("Phase 2 v6.1 complete")
     print(f"Max Python/C++ difference: {parity['max_abs_diff_c']:.3e} C")
     print(f"TUNE-1 RMSE: {tune_metrics['TUNE-1']['rmse']:.3f} C; "
           f"TUNE-2 RMSE: {tune_metrics['TUNE-2']['rmse']:.3f} C")

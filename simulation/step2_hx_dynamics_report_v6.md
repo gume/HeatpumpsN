@@ -1,8 +1,8 @@
-# Phase 2 — Version 6.0: Primary Heat Exchanger Dynamics (T_boiler → T_incoming)
+# Phase 2 — Version 6.1: Primary Heat Exchanger Dynamics (T_boiler → T_incoming)
 
 **Project:** Hardware-in-the-Loop (HIL) Floor Heating Simulator
-**Version:** 6.0 (engineering sign-off)
-**Generated:** 2026-10-28 18:56:40
+**Version:** 6.1 (engineering sign-off)
+**Generated:** 2026-10-28 19:32:21
 **Script:** `simulation/step2_hx_dynamics_v6.py`
 **Database:** `analysis/heatpumps.duckdb` (read-only)
 **Generated C++:** `simulation/step2_hx_dynamics_v6.hpp`
@@ -11,7 +11,7 @@
 
 ## 0. Sign-off summary
 
-Version 6.0 is the Phase 2 engineering sign-off release. It fixes the
+Version 6.1 is the Phase 2 engineering sign-off release. It fixes the
 low-lift/pump-off coupling,
 adds a cold-start transport front, removes all backward fills and hard-coded
 paths, enforces a strict FIT/TUNE/VAL split, and makes the Python and C++
@@ -21,19 +21,32 @@ implementations numerically identical.
 |---|---|
 | Low-lift decoupled from pump-off hold | Branch 2A (pump OFF) and 2B (pump ON, `t_boiler <= t_return + 1.0`) are separate |
 | Single-step firing glitch | Fixed (`consec_bp == 1` → `max(tb_active, t_boiler)`; `consec_bp >= 2` → hard sync + timer clear) |
-| Cold-start dead time | `L_cold_start = 140.0 s`, `tau_cold_front = 5.0 s`, fitted on TUNE-1 only |
-| Python/C++ parity | `g++ -O2 -std=c++17`, 13,169 rows, max |Δ| = `4.999e-11 °C` (< 1e-4) |
+| Cold-start dead time | `L_cold_start = 120.0 s`, `tau_cold_front = 5.0 s`, fitted on TUNE-1 only |
+| Python/C++ parity | `g++ -O2 -std=c++17`, 15,769 rows, max |Δ| = `4.999e-11 °C` (< 1e-4) |
 | Five synthetic unit tests | 5/5 passed |
 | Strict split | FIT (1–24 Dec, FIT-1, FIT-DHW) / TUNE (TUNE-1, TUNE-2) / VAL (VAL-1..4, VAL-7 untouched + new VAL-5, VAL-6) |
 | Backward fill | Zero `.bfill()`; 30-min warm-up + ASOF join; evaluation-boundary re-anchor; NaN asserted away |
 | Staleness | `tb_age_s`, `bp_age_s`, `pmod_age_s` guard holds state on gateway drops |
 | Portable paths | `BASE_DIR = Path(__file__).resolve().parent.parent`; `HEATPUMPS_DB_PATH` / `HEATPUMPS_OUT_DIR` overrides |
 
-**What is *not* claimed.** Residuals remain. The v6 final-shutdown RMSE on
+**What is *not* claimed.** Residuals remain. The v6.1 final-shutdown RMSE on
 TUNE-1 is `1.771 °C` (v5: `1.748 °C`),
 and VAL-5's post-pump-off idle cooling residual is material. Section 6 and
 Section 9 quantify these residuals rather than claiming that they are
 eliminated.
+
+### 0.1 v6.1 HIL audit corrections
+
+| # | Defect | Correction |
+|---|---|---|
+| 1 | Measured `T_incoming` was a `step()` input, so HIL/Step 3 would need the simulated output | Removed `tinc` from Python and C++ `step()`; the cold-start trigger and ring initialisation use internal `sim` / `sim_` |
+| 2 | Cold-start plug-flow ring advanced with the primary pump off or during DHW priority | Ring, `t_front` and `cold_elapsed` advance only when `pmod > 0.0 && !ww` |
+| 3 | Re-anchor skipped sample 180, wiped an active cold front and leaked warm-up branch counts | Re-anchor then still call `step()`; preserve an active `cold_on` ring; clear `branch_counts` at the boundary |
+| 4 | `tau_ambient = 36000 s` under-cooled a hot manifold (VAL-5 idle) | FIT-only hot-manifold idle identification (`~p1 & ~p2 & ~p3 & ~ww`, `T_inc - T_room > 10 °C`) gives `tau_idle` |
+| 5 | `detect_shutdown_windows()` labelled idle/DHW episodes as cold/cutoff/final shutdowns | Detection requires median-filtered secondary space-heating circulation (`p_any & ~ww`); VAL-7 now reports no windows |
+| 6 | `"ABCDEother"` iterated character-by-character | Tuple keys `("A", "B", "C", "D", "E", "other")` |
+| 7 | C++ parity skipped UT1–UT5 | The same five synthetic frames feed both the Python tests and the parity CSV |
+| 8 | JSON contained a machine-specific `/home/...` database path | JSON writes the database path relative to `BASE_DIR` |
 
 ---
 
@@ -86,7 +99,7 @@ majority (`2 * ones >= count`, window 31) so no future samples are used.
 | Burner-off casing | primary pump ON, burner OFF, usable lift | casing `tb_active` decays with `tau_burn_off` after `L_burn_off` |
 | DHW divert | `ww = 1` and any secondary pump | hold `dhw_delay_s`, then first-order toward `T_return` with `tau_dhw_fast` |
 | Post-DHW return | `ww = 0` and `post_dhw_timer < post_dhw_delay_s` | first-order toward `T_return` with `tau_cutoff` |
-| Idle | no secondary pump | first-order toward `T_room` with `tau_ambient` |
+| Idle | no secondary pump | first-order toward `T_room` with `tau_idle` (FIT-identified) |
 
 The low-lift branch is checked **after** the pump-off branch and **before** the
 casing branch. It therefore never inherits the `L_pump_off` hold. This is the
@@ -99,16 +112,19 @@ event:
 
 ```
 idle_timer >= L_idle_trigger (1800 s)
-T_incoming < 28 °C
-T_boiler - T_incoming > 15 °C
+T_hx (internal simulated outlet) < 28 °C
+T_boiler - T_hx > 15 °C
 ```
 
 The primary pipe is represented by a plug-flow ring buffer of length
-`N = round(L_cold_start / DT)` initialised with the cold manifold temperature,
-followed by a first-order dispersion `tau_cold_front`. The delayed/dispersed
-boiler temperature replaces `T_boiler` in the active and casing branches. The
-latch exits when `T_hx >= 28 °C` or `elapsed >= L_cold_start + 5*tau_cold_front`.
-The front is fitted on **TUNE-1 only**.
+`N = round(L_cold_start / DT)` initialised with the cold internal outlet
+temperature, followed by a first-order dispersion `tau_cold_front`. The
+delayed/dispersed boiler temperature replaces `T_boiler` in the active and
+casing branches. The ring and `cold_elapsed` advance only while primary water
+actually flows through the space-heating HX (`pmod > 0.0 && !ww`); during a
+pump stop or DHW priority the front is held. The latch exits when
+`T_hx >= 28 °C` or `elapsed >= L_cold_start + 5*tau_cold_front`. The front is
+fitted on **TUNE-1 only**.
 
 ### 2.4 Staleness and causality
 
@@ -179,7 +195,17 @@ gives a median ratio of 0.97222 per minute
 (N = 1,427), hence `tau_rad_off = 2129.9 s`.
 This parameter is identified on FIT and is **not** tuned on TUNE or VAL.
 
-### 3.5 Hydraulic decoupling (corrected claim)
+### 3.5 Hot-manifold idle cooling constant (FIT)
+
+Pure-idle FIT samples with no secondary pump and no DHW
+(`~p1 & ~p2 & ~p3 & ~ww`, `T_incoming - T_room > 10 °C`) give a median
+one-step cooling ratio of 0.98995 per minute
+(N = 2,169), hence `tau_idle = 5939.9 s`.
+This replaces the v5 `tau_ambient = 36000 s` design constant, which was derived
+from cold DHW idle episodes already near room equilibrium. It is identified on
+FIT only and is never tuned on TUNE or VAL.
+
+### 3.6 Hydraulic decoupling (corrected claim)
 
 On the FIT window, settled Regime A (N = 7,530):
 
@@ -203,9 +229,9 @@ incoming supply.
 ### 4.1 Dedicated cold-start fit (TUNE-1)
 
 Grid search on the first five minutes of TUNE-1 selected
-`L_cold_start = 140.0 s` and
+`L_cold_start = 120.0 s` and
 `tau_cold_front = 5.0 s`
-(cold-window RMSE = 0.2273 °C).
+(cold-window RMSE = 0.2193 °C).
 
 ### 4.2 Coordinate grid search
 
@@ -215,10 +241,10 @@ the required grid were run; the accepted moves are listed below.
 
 | Pass | Parameter | Value | Objective (mean RMSE) | TUNE-1 RMSE | TUNE-2 RMSE |
 |---|---|---|---|---|---|
-| 0 | initial | n/a | 1.682903 | 0.7831 | 2.5827 |
-| 1 | L_pump_off | 60.0 | 1.682867 | 0.7831 | 2.5827 |
-| 1 | L_burn_off | 10.0 | 1.680196 | 0.7777 | 2.5827 |
-| 1 | tau_burn_off | 3200.0 | 1.665048 | 0.7474 | 2.5827 |
+| 0 | initial | n/a | 1.682917 | 0.7831 | 2.5827 |
+| 1 | L_pump_off | 60.0 | 1.682882 | 0.7831 | 2.5827 |
+| 1 | L_burn_off | 10.0 | 1.680211 | 0.7777 | 2.5827 |
+| 1 | tau_burn_off | 3200.0 | 1.665064 | 0.7474 | 2.5827 |
 
 The grid also covered `tau_cutoff` (60–300 s), `L_cold_start` (100–180 s),
 `tau_cold_front` (0–80 s) and `post_dhw_delay_s` (0–180 s). No candidate for
@@ -229,7 +255,7 @@ the dedicated cold-start fit, so they remained unchanged.
 
 | Episode | Samples | RMSE (°C) | MAE (°C) | P95 (°C) | R² | Bias (°C) |
 |---|---|---|---|---|---|---|
-| TUNE-1 | 1753 | 0.747 | 0.313 | 1.128 | 0.9866 | 0.124 |
+| TUNE-1 | 1753 | 0.747 | 0.313 | 1.128 | 0.9866 | 0.123 |
 | TUNE-2 | 211 | 2.583 | 1.247 | 6.965 | 0.9797 | -0.802 |
 
 TUNE-1 is dominated by active heating, a cold start, burner cutoffs and a final
@@ -238,7 +264,7 @@ larger residual because the diverter travel time in that episode is longer than
 the FIT-DHW-fitted 90 s. That is an honest, out-of-sample residual: the entry
 delay is **not** re-fitted on TUNE-2.
 
-### 4.4 Final v6 parameters
+### 4.4 Final v6.1 parameters
 
 | Parameter | Value | Source |
 |---|---|---|
@@ -254,10 +280,10 @@ delay is **not** re-fitted on TUNE-2.
 | `L_burn_off` | 10.0 s | TUNE |
 | `tau_burn_off` | 3200.0 s | TUNE |
 | `tau_cutoff` | 150.0 s | TUNE |
-| `L_cold_start` | 140.0 s | TUNE-1 |
+| `L_cold_start` | 120.0 s | TUNE-1 |
 | `tau_cold_front` | 5.0 s | TUNE-1 |
 | `tau_rad_off` | 2129.9 s | FIT |
-| `tau_ambient` | 36000.0 s | design constant |
+| `tau_idle` | 5939.9 s | FIT pure-idle cooling |
 
 ---
 
@@ -266,12 +292,12 @@ delay is **not** re-fitted on TUNE-2.
 | ID | Episode | Samples | RMSE (°C) | MAE (°C) | P95 (°C) | R² | Offline Centered-Filter Comparison RMSE (°C) |
 |---|---|---|---|---|---|---|---|
 | VAL-1 | VAL-1 Regime A Heated Run 2 | 1801 | 0.868 | 0.560 | 1.483 | 0.7463 | 0.868 |
-| VAL-2 | VAL-2 Regime B Combined Run 1 | 991 | 0.760 | 0.656 | 1.361 | 0.9680 | 0.755 |
+| VAL-2 | VAL-2 Regime B Combined Run 1 | 991 | 0.760 | 0.657 | 1.364 | 0.9680 | 0.755 |
 | VAL-3 | VAL-3 Regime B Combined Run 2 | 931 | 0.830 | 0.750 | 1.244 | 0.9806 | 0.830 |
 | VAL-4 | VAL-4 Hydraulic Transition A->B | 901 | 0.555 | 0.485 | 1.096 | 0.9900 | 0.555 |
-| VAL-5 | VAL-5 Cold Start + Mid-Run Cutoffs + Final Shutdown | 2065 | 2.931 | 1.798 | 6.728 | 0.9342 | 2.931 |
-| VAL-6 | VAL-6 Circulating DHW Divert + Return | 391 | 4.422 | 2.949 | 11.204 | 0.9207 | 4.422 |
-| VAL-7 | VAL-7 DHW Priority Divert (Idle) | 181 | 0.767 | 0.705 | 1.091 | -3.3656 | 0.767 |
+| VAL-5 | VAL-5 Cold Start + Mid-Run Cutoffs + Final Shutdown | 2065 | 1.916 | 1.260 | 4.414 | 0.9719 | 1.916 |
+| VAL-6 | VAL-6 Circulating DHW Divert + Return | 391 | 4.422 | 2.952 | 11.204 | 0.9207 | 4.422 |
+| VAL-7 | VAL-7 DHW Priority Divert (Idle) | 181 | 0.199 | 0.191 | 0.272 | 0.7063 | 0.199 |
 
 **Offline Centered-Filter Comparison.** The last column applies a centred
 31-sample median filter to the pump signals before simulation. It is an
@@ -279,10 +305,10 @@ offline diagnostic comparison, **not** a causal result and **not** an upper
 bound on achievable causal performance. The causal RMSE is the sign-off metric.
 
 **Space-heating validation (VAL-1..VAL-5).** Mean causal RMSE =
-1.189 °C, mean MAE = 0.850 °C, mean P95 =
-2.383 °C, mean R² = 0.9238; pooled RMSE =
-1.754 °C, pooled MAE = 0.973 °C, pooled R² =
-0.9522.
+0.986 °C, mean MAE = 0.742 °C, mean P95 =
+1.920 °C, mean R² = 0.9314; pooled RMSE =
+1.249 °C, pooled MAE = 0.807 °C, pooled R² =
+0.9758.
 
 **DHW validation (VAL-6, VAL-7).** Reported in the table above and kept
 separate from the space-heating summary. VAL-6 is the new circulating-DHW
@@ -302,10 +328,10 @@ explicitly because the constants differ.
 
 | Model | Overall RMSE (°C) | Cold-start RMSE (°C) | Mid-run cutoffs RMSE (°C) | Final shutdown RMSE (°C) | Max |error| (°C) |
 |---|---|---|---|---|---|
-| v3 Baseline | 2.408 | 2.771 | 5.027 | 13.344 | 21.64 |
-| v4 Clamped | 1.160 | 2.771 | 3.220 | 4.318 | 8.12 |
-| v5 Two-Stage | 0.868 | 2.771 | 2.617 | 1.748 | 5.92 |
-| v6 Final | 0.747 | 0.216 | 2.458 | 1.771 | 4.85 |
+| v3 Baseline | 2.428 | 3.664 | 5.027 | 13.344 | 21.64 |
+| v4 Clamped | 1.200 | 3.664 | 3.220 | 4.318 | 8.12 |
+| v5 Two-Stage | 0.920 | 3.664 | 2.617 | 1.748 | 7.44 |
+| v6 Final | 0.747 | 0.221 | 2.458 | 1.771 | 4.85 |
 
 **Residuals, quantified.** The cold-start window is the first five minutes of
 the target (or until measured `T_incoming` reaches 28 °C). The mid-run cutoffs
@@ -313,8 +339,8 @@ are the 2 detected burner-off / pump-on windows (indices 1098-1150, 1820-1896).
 The final shutdown is the last pump-off run of at least three minutes
 (indices 1896-1933 if detected).
 
-Relative to v5, v6 reduced the overall RMSE by 13.9%,
-reduced the cold-start RMSE by 92.2%, reduced the mid-run-cutoff RMSE by 6.1%, and
+Relative to v5, v6 reduced the overall RMSE by 18.8%,
+reduced the cold-start RMSE by 94.0%, reduced the mid-run-cutoff RMSE by 6.1%, and
 increased the final-shutdown RMSE by 1.3%. The final-shutdown residual is
 `1.771 °C` (v5: `1.748 °C`), and
 the mid-run-cutoff residual is `2.458 °C` (v5:
@@ -335,11 +361,11 @@ constants, writes `step2_hx_parity_harness.cpp`, compiles with
 |---|---|
 | Compiler | `/usr/bin/g++` |
 | Flags | `-O2 -std=c++17` |
-| Episodes compared | FIT-1, FIT-DHW, TUNE-1, TUNE-2, VAL-1..VAL-7 |
-| Rows compared | 13,169 |
+| Episodes compared | FIT-1, FIT-DHW, TUNE-1, TUNE-2, VAL-1..VAL-7, UT1..UT5 |
+| Rows compared | 15,769 |
 | Max absolute difference | `4.999e-11 °C` |
 | Tolerance | `< 1e-4 °C` |
-| Cold-start ring length | 14 samples |
+| Cold-start ring length | 12 samples |
 
 | Synthetic test | Result | Expected | Detail |
 |---|---|---|---|
@@ -351,7 +377,8 @@ constants, writes `step2_hx_parity_harness.cpp`, compiles with
 
 The five tests cover the low-lift steady state (→ 25.03 °C), pump-off hold and
 plunge, burner-off/pump-on casing decay, DHW entry and return, and cold-start
-warm-up. All five are executed against the shipped v6 constants.
+warm-up. All five are executed against the shipped v6.1 constants, and the same
+five synthetic frames are included in the C++ parity input.
 
 ---
 
@@ -380,11 +407,12 @@ warm-up. All five are executed against the shipped v6 constants.
   over-deepens the plunge, leaving a residual. Re-fitting the delay or the
   DHW target on TUNE-2 would be leakage and is deliberately not done.
 - **Idle cooling after all pumps stop.** VAL-5 contains long periods with no
-  pump running. The idle branch relaxes toward `T_room` with the design
-  constant `tau_ambient = 36000.0 s`; the measured
-  manifold cools faster than that, so this is the largest branch-level
-  residual in VAL-5. The constant is a design choice, not fitted on TUNE or
-  VAL, and the branch is not a full building thermal model.
+  pump running. The idle branch relaxes toward `T_room` with the FIT-identified
+  `tau_idle = 5939.9 s`; this removes the v5
+  `tau_ambient = 36000 s` design constant that badly under-cooled a hot
+  manifold. A single global constant still cannot represent every
+  manifold/air-path configuration, so a residual remains, and the branch is
+  not a full building thermal model.
 - **Mid-run pump-off with radiator circulation.** VAL-5 also contains two long
   primary-pump-off runs with only radiator pumps running. The FIT-identified
   `tau_rad_off = 2129.9 s` is a single global
@@ -430,7 +458,7 @@ optional `os.path.exists()` fallback for an un-activated uv cache.
 | Artifact | Purpose |
 |---|---|
 | `simulation/step2_params_v6.json` | Versioned parameter and metric export |
-| `simulation/step2_params.json` | Canonical alias of the v6 export |
+| `simulation/step2_params.json` | Canonical alias of the v6.1 export |
 | `simulation/step2_hx_dynamics_v6.hpp` | Auto-generated C++ implementation with exact constants |
 | `simulation/step2_hx_parity_harness.cpp` | C++ parity harness |
 | `simulation/step2_hx_parity_input.csv` | Row-level parity input |

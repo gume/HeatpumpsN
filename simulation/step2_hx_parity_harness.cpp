@@ -41,15 +41,17 @@ int main(int argc, char** argv) {
             sim.reset(v[1], v[0]);
             cur_ep = ep;
         }
-        double out;
         if (reanchor != 0) {
             sim.reanchor(v[1], v[0]);
-            out = static_cast<double>(sim.sim());
-        } else if (idx == 0) {
+        }
+        double out;
+        if (idx == 0) {
             out = static_cast<double>(sim.sim());
         } else {
+            // v[1] is measured t_inc, kept only for re-anchoring; it is not
+            // a step() input because it is the Step 2 simulated output.
             out = static_cast<double>(sim.step(
-                v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7],
+                v[0], v[2], v[3], v[4], v[5], v[6], v[7],
                 v[8], v[9], v[10], v[11], v[12]));
         }
         std::printf("%s,%d,%.10f\n", ep.c_str(), idx, out);
