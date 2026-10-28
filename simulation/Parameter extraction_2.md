@@ -1,8 +1,8 @@
 # Parameter Extraction & System Identification Plan
 **Project:** ESP32 Floor Heating Hardware-in-the-Loop (HIL) Simulator  
 **Location:** `/home/gume/HeatpumpsN/simulation/`  
-**Document Version:** 2.1  
-**Status:** Ready for Phase 1 Execution (Version 2 Audit)  
+**Document Version:** 2.5  
+**Status:** Phase 1 Accepted; Phase 2 Version 5.0 Complete (Awaiting User Review)  
 
 ---
 
@@ -86,21 +86,17 @@ To ensure total reproducibility, mathematical rigor, and engineering reliability
    * No files outside `simulation/` may be created or modified. Read-only access to `/home/gume/HeatpumpsN/analysis/` and `/home/gume/HeatpumpsN/firmware/` is allowed.
 3. **Telemetry Hold Horizon & Outage Handling:**
    * Unconstrained Zero-Order Hold (ZOH / ASOF JOIN) across multi-day outages is strictly forbidden.
-   * A maximum hold horizon (`max_hold_dt`) must be enforced:
-     * Fast polled pumps: $180\,\text{s}$ ($3\,\text{mins}$).
-     * Temperatures: $1,800\,\text{s}$ ($30\,\text{mins}$).
-   * Periods exceeding hold horizons must be explicitly classified as **Regime O: Telemetry Outage / Offline** to prevent hallucinating multi-day continuous operations.
+   * State-aware hold horizons must be enforced:
+     * When pump was active ($> 0\,\text{W}$): $180\,\text{s}$ timeout if node goes silent.
+     * When global system silence exceeds $15\,\text{minutes}$ ($900\,\text{s}$): classified as **Regime O: Telemetry Outage / Offline**.
+     * When pump is $0\,\text{W}$ (idle) or temperatures are holding steady within deadband during active system operation: forward-fill is physically valid and retained in **Regime E: Pure Idle / Cooldown**.
 4. **Standalone Versioning:**
-   * Every script and report must carry an explicit step and version tag (e.g., `step1_data_audit_v2.py`, `step1_data_audit_report_v2.md`).
+   * Every script and report must carry an explicit step and version tag (e.g., `step1_data_audit_v5.py`, `step1_data_audit_report_v5.md`).
    * When iterating, create a new version.
    * **New versions must be 100% self-contained and standalone.** Do not require the reader to cross-reference previous versions.
 5. **Independent Verification:**
    * Any figures, formulas, or inferences derived from prior notes in `/home/gume/HeatpumpsN/analysis/` must be independently verified against the raw DuckDB database. Unverified prior claims cannot be assumed true.
 6. **Full Reproducibility:**
-   * Every report must document the exact script invocation, runtime parameters, data filtering logic, and mathematical formulations so that any result can be re-derived identically.
-4. **Independent Verification:**
-   * Any figures, formulas, or inferences derived from prior notes in `/home/gume/HeatpumpsN/analysis/` must be independently verified against the raw DuckDB database. Unverified prior claims cannot be assumed true.
-5. **Full Reproducibility:**
    * Every report must document the exact script invocation, runtime parameters, data filtering logic, and mathematical formulations so that any result can be re-derived identically.
 
 ---
@@ -118,11 +114,12 @@ flowchart TD
 
 ### Phase 1: Database Audit, Sensor Quality & Regime Segmentation
 * **Objective:** Comprehensive schema inspection of `analysis/heatpumps.duckdb`, measurement intervals, threshold deadband effects, dual mixer sensor cross-validation, and operating regime segmentation.
-* **Deliverables:** `step1_data_audit_v1.py`, `step1_data_audit_report_v1.md`.
+* **Deliverables:** `step1_data_audit_v5.py`, `step1_data_audit_report_v5.md`.
 
 ### Phase 2: Primary Heat Exchanger Dynamics ($T_{\text{boiler}} \to T_{\text{incoming}}$)
 * **Objective:** Model the heat transfer from boiler supply water through the plate heat exchanger to the common manifold fork.
-* **Key Tasks:** Isolate space heating periods from DHW charging; quantify radiator pump cross-coupling effects on $T_{\text{incoming}}$ flow rate and temperature droop; establish the upstream thermal boundary condition for the mixer.
+* **Key Tasks:** Isolate space heating periods from DHW charging; quantify radiator pump cross-coupling effects on $T_{\text{incoming}}$ flow rate and temperature droop; establish the upstream thermal boundary condition for the mixer; model circulating-but-unheated relaxation; investigate VAL-5 failure mode.
+* **Deliverables:** `step2_hx_dynamics_v5.py`, `step2_hx_dynamics_report_v5.md`, `step2_params.json` (v5.0), `val5_diagnostic_overlay.png`.
 
 ### Phase 3: 3-Way Mixer Valve Static Characteristic
 * **Objective:** Determine the static mixing law relating valve position, incoming supply temperature, and return loop temperature to the mixed forward temperature:
@@ -145,7 +142,7 @@ flowchart TD
 
 ## 5. Specification for Step 1 Execution
 
-When triggered, the Step 1 script (`step1_data_audit_v1.py`) will perform the following exhaustive audit:
+When triggered, the Step 1 script (`step1_data_audit_v5.py`) will perform the following exhaustive audit:
 
 1. **Schema & Coverage Analysis:**
    * Query DuckDB for all tables, views, and row counts.
@@ -164,5 +161,5 @@ When triggered, the Step 1 script (`step1_data_audit_v1.py`) will perform the fo
      * **Regime E (Idle / Standby):** All pumps OFF, burner OFF, DHW OFF.
    * Calculate cumulative hours and identify continuous segments ($> 15\,\text{min}$) suitable for dynamic parameter identification.
 4. **Deliverables:**
-   * Standalone script: `/home/gume/HeatpumpsN/simulation/step1_data_audit_v1.py`
-   * Standalone report: `/home/gume/HeatpumpsN/simulation/step1_data_audit_report_v1.md`
+   * Standalone script: `/home/gume/HeatpumpsN/simulation/step1_data_audit_v5.py`
+   * Standalone report: `/home/gume/HeatpumpsN/simulation/step1_data_audit_report_v5.md`
