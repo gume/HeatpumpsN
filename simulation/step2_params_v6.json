@@ -1,0 +1,844 @@
+{
+  "metadata": {
+    "version": "6.0",
+    "phase": 2,
+    "description": "Primary Heat Exchanger Dynamics (T_boiler -> T_incoming) - Version 6.0",
+    "timestamp": "2026-10-28T18:56:30+0100",
+    "script": "simulation/step2_hx_dynamics_v6.py",
+    "database": "/home/gume/HeatpumpsN/analysis/heatpumps.duckdb",
+    "split_policy": "FIT / TUNE / VAL strictly disjoint; old VAL-5 and VAL-6 reclassified as TUNE-1 and TUNE-2"
+  },
+  "split": {
+    "FIT-1": {
+      "name": "FIT-1 Space-Heating Identification",
+      "kind": "FIT",
+      "t_start": "2026-01-14 00:00:00+01:00",
+      "t_end": "2026-01-14 05:00:00+01:00",
+      "role": "tau_hx / eps_A identification"
+    },
+    "FIT-DHW": {
+      "name": "FIT-DHW Divert Identification",
+      "kind": "FIT",
+      "t_start": "2025-12-03 08:18:00+01:00",
+      "t_end": "2025-12-03 08:45:00+01:00",
+      "role": "dhw_delay_s / tau_dhw_fast identification"
+    },
+    "TUNE-1": {
+      "name": "TUNE-1 Cold Start + Cutoffs + Final Shutdown",
+      "kind": "TUNE",
+      "t_start": "2025-12-27 16:06:00+01:00",
+      "t_end": "2025-12-27 20:58:00+01:00",
+      "role": "Cutoff / cold-start / post-DHW tuning"
+    },
+    "TUNE-2": {
+      "name": "TUNE-2 DHW Divert + Return",
+      "kind": "TUNE",
+      "t_start": "2026-01-01 14:50:00+01:00",
+      "t_end": "2026-01-01 15:25:00+01:00",
+      "role": "DHW return / post-DHW tuning"
+    },
+    "VAL-1": {
+      "name": "VAL-1 Regime A Heated Run 2",
+      "kind": "VAL",
+      "t_start": "2026-01-15 00:00:00+01:00",
+      "t_end": "2026-01-15 05:00:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-2": {
+      "name": "VAL-2 Regime B Combined Run 1",
+      "kind": "VAL",
+      "t_start": "2026-02-19 14:40:00+01:00",
+      "t_end": "2026-02-19 17:25:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-3": {
+      "name": "VAL-3 Regime B Combined Run 2",
+      "kind": "VAL",
+      "t_start": "2026-01-13 05:00:00+01:00",
+      "t_end": "2026-01-13 07:35:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-4": {
+      "name": "VAL-4 Hydraulic Transition A->B",
+      "kind": "VAL",
+      "t_start": "2026-01-14 05:00:00+01:00",
+      "t_end": "2026-01-14 07:30:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-5": {
+      "name": "VAL-5 Cold Start + Mid-Run Cutoffs + Final Shutdown",
+      "kind": "VAL",
+      "t_start": "2026-02-08 04:27:00+01:00",
+      "t_end": "2026-02-08 10:11:00+01:00",
+      "role": "New untouched validation (replaces old VAL-5)"
+    },
+    "VAL-6": {
+      "name": "VAL-6 Circulating DHW Divert + Return",
+      "kind": "VAL",
+      "t_start": "2026-02-18 05:50:00+01:00",
+      "t_end": "2026-02-18 06:55:00+01:00",
+      "role": "New untouched validation (replaces old VAL-6)"
+    },
+    "VAL-7": {
+      "name": "VAL-7 DHW Priority Divert (Idle)",
+      "kind": "VAL",
+      "t_start": "2026-01-03 03:20:00+01:00",
+      "t_end": "2026-01-03 03:50:00+01:00",
+      "role": "Untouched validation"
+    }
+  },
+  "identified_parameters": {
+    "tau_hx": 77.67474700531193,
+    "eps_A": 0.9450097040079984,
+    "eps_B1": 0.9528983984525919,
+    "eps_B2": 0.9488175938578879,
+    "eps_C": 0.9130154859542569,
+    "dhw_delay_s": 90.0,
+    "tau_dhw_fast": 87.84400549785536,
+    "post_dhw_delay_s": 90.0,
+    "L_pump_off": 60.0,
+    "L_burn_off": 10.0,
+    "tau_burn_off": 3200.0,
+    "tau_cutoff": 150.0,
+    "tau_ambient": 36000.0,
+    "tau_rad_off": 2129.85914747816,
+    "L_cold_start": 140.0,
+    "tau_cold_front": 5.0
+  },
+  "parameter_provenance": {
+    "tau_hx": "FIT-1",
+    "eps_A": "FIT-1",
+    "eps_B1": "FIT 1-24 Dec ratio B1/A * eps_A",
+    "eps_B2": "FIT 1-24 Dec ratio B2/A * eps_A",
+    "eps_C": "FIT 1-24 Dec ratio C/A * eps_A",
+    "dhw_delay_s": "FIT-DHW",
+    "tau_dhw_fast": "FIT-DHW",
+    "post_dhw_delay_s": "TUNE",
+    "L_pump_off": "TUNE",
+    "L_burn_off": "TUNE",
+    "tau_burn_off": "TUNE",
+    "tau_cutoff": "TUNE",
+    "L_cold_start": "TUNE-1 cold window",
+    "tau_cold_front": "TUNE-1 cold window",
+    "tau_rad_off": "FIT one-step radiator-only pump-off cooling",
+    "tau_ambient": "design constant"
+  },
+  "fit_identification": {
+    "regime_ratios": {
+      "regime_counts": {
+        "A": 8543,
+        "B": 1891,
+        "C": 7575,
+        "D": 1313,
+        "E": 13367,
+        "o": 0,
+        "t": 0,
+        "h": 0,
+        "e": 0,
+        "r": 0
+      },
+      "active_count": 11213,
+      "A": {
+        "count": 7530,
+        "eff_mean": 0.9398024539471954,
+        "dt_mean": 2.6953867861885787
+      },
+      "B1": {
+        "count": 1646,
+        "eff_mean": 0.9476476796269159,
+        "dt_mean": 2.36738304981774
+      },
+      "B2": {
+        "count": 180,
+        "eff_mean": 0.9435893613303777,
+        "dt_mean": 2.1809722222222216
+      },
+      "C": {
+        "count": 1446,
+        "eff_mean": 0.9079845323835312,
+        "dt_mean": 3.8153959197787
+      },
+      "ratio_B1": 1.0083477390879012,
+      "ratio_B2": 1.0040294716908613,
+      "ratio_C": 0.9661440322590901,
+      "tau_rad_off": 2129.85914747816,
+      "tau_rad_ratio_per_min": 0.9722222222222222,
+      "tau_rad_samples": 1427,
+      "fit_window": {
+        "t_start": "2025-12-01 22:00:00+01:00",
+        "t_end": "2025-12-24 23:59:00+01:00"
+      },
+      "fit_regime_a_correlations": {
+        "r_mstate_tinc": -0.3786154254379898,
+        "r_mstate_dthx": -0.03612883368681349,
+        "r_tb_tinc": 0.7931013054987256,
+        "samples": 7530
+      }
+    },
+    "hx_fit1": {
+      "tau_hx": 77.67474700531193,
+      "eps_A": 0.9450097040079984,
+      "mse": 0.12426103931365762,
+      "rmse": 0.3525067932872466,
+      "samples": 1609
+    },
+    "dhw_fitdhw": {
+      "dhw_delay_s": 90.0,
+      "tau_dhw_fast": 87.84400549785536,
+      "mse": 0.5953889964328792,
+      "rmse": 0.7716145387645824,
+      "edge_index": 15,
+      "edge_time": "2025-12-03 08:20:30+01:00"
+    },
+    "cold_start_tune1": {
+      "rmse": 0.22725618897362082,
+      "L_cold_start": 140.0,
+      "tau_cold_front": 5.0
+    }
+  },
+  "tuning": {
+    "params": {
+      "tau_hx": 77.67474700531193,
+      "eps_A": 0.9450097040079984,
+      "eps_B1": 0.9528983984525919,
+      "eps_B2": 0.9488175938578879,
+      "eps_C": 0.9130154859542569,
+      "dhw_delay_s": 90.0,
+      "tau_dhw_fast": 87.84400549785536,
+      "post_dhw_delay_s": 90.0,
+      "L_pump_off": 60.0,
+      "L_burn_off": 10.0,
+      "tau_burn_off": 3200.0,
+      "tau_cutoff": 150.0,
+      "tau_ambient": 36000.0,
+      "tau_rad_off": 2129.85914747816,
+      "L_cold_start": 140.0,
+      "tau_cold_front": 5.0
+    },
+    "history": [
+      {
+        "pass_no": 0,
+        "parameter": "initial",
+        "value": null,
+        "objective": 1.6829026080617133,
+        "tune_rmse": [
+          0.7831218292063519,
+          2.5826833869170747
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "L_pump_off",
+        "value": 60.0,
+        "objective": 1.6828672267626255,
+        "tune_rmse": [
+          0.7830510666081762,
+          2.5826833869170747
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "L_burn_off",
+        "value": 10.0,
+        "objective": 1.6801959009239065,
+        "tune_rmse": [
+          0.7777084149307381,
+          2.5826833869170747
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "tau_burn_off",
+        "value": 3200.0,
+        "objective": 1.6650484193751738,
+        "tune_rmse": [
+          0.7474134518332727,
+          2.5826833869170747
+        ]
+      }
+    ],
+    "objective": 1.6650484193751738,
+    "tune_rmse": [
+      0.7474134518332727,
+      2.5826833869170747
+    ]
+  },
+  "tune_metrics": {
+    "TUNE-1": {
+      "rmse": 0.7474134518332727,
+      "mae": 0.31257713851255625,
+      "p95": 1.1282072582294402,
+      "bias": 0.12442743480961942,
+      "maxabs": 4.848859052267798,
+      "r2": 0.9866110531255093,
+      "samples": 1753
+    },
+    "TUNE-2": {
+      "rmse": 2.5826833869170747,
+      "mae": 1.2469107565793336,
+      "p95": 6.96517737011018,
+      "bias": -0.8022075083709487,
+      "maxabs": 11.065524813219952,
+      "r2": 0.9796719676274738,
+      "samples": 211
+    }
+  },
+  "validation_scenarios": [
+    {
+      "id": "VAL-1",
+      "name": "VAL-1 Regime A Heated Run 2",
+      "type": "Untouched validation",
+      "t_start": "2026-01-15 00:00:00+01:00",
+      "t_end": "2026-01-15 05:00:00+01:00",
+      "samples": 1801,
+      "rmse": 0.8682310862142514,
+      "mae": 0.5598855105805864,
+      "p95": 1.4832016999274629,
+      "bias": 0.490378629512344,
+      "maxabs": 5.868975961592028,
+      "r2": 0.7463256457392142,
+      "offline_centered_filter_rmse_c": 0.8682310862142514,
+      "branch_counts": {
+        "active_heating": 1774,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 205,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [
+          [
+            194,
+            209
+          ],
+          [
+            552,
+            599
+          ],
+          [
+            1399,
+            1445
+          ],
+          [
+            1558,
+            1604
+          ],
+          [
+            1858,
+            1903
+          ]
+        ],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-2",
+      "name": "VAL-2 Regime B Combined Run 1",
+      "type": "Untouched validation",
+      "t_start": "2026-02-19 14:40:00+01:00",
+      "t_end": "2026-02-19 17:25:00+01:00",
+      "samples": 991,
+      "rmse": 0.7598262967416985,
+      "mae": 0.6560348062616276,
+      "p95": 1.3613765389268124,
+      "bias": 0.6432172293763224,
+      "maxabs": 4.187822730570332,
+      "r2": 0.968038529441473,
+      "offline_centered_filter_rmse_c": 0.7551405824319117,
+      "branch_counts": {
+        "active_heating": 1074,
+        "circ_unheated_cutoff": 37,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 48,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 10
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [
+          [
+            1030,
+            1052
+          ]
+        ],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-3",
+      "name": "VAL-3 Regime B Combined Run 2",
+      "type": "Untouched validation",
+      "t_start": "2026-01-13 05:00:00+01:00",
+      "t_end": "2026-01-13 07:35:00+01:00",
+      "samples": 931,
+      "rmse": 0.829736610123521,
+      "mae": 0.7498066787313709,
+      "p95": 1.2442179443104138,
+      "bias": 0.7439263857982809,
+      "maxabs": 2.1067123554273053,
+      "r2": 0.9806381645336889,
+      "offline_centered_filter_rmse_c": 0.829736610123521,
+      "branch_counts": {
+        "active_heating": 1058,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 51,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-4",
+      "name": "VAL-4 Hydraulic Transition A->B",
+      "type": "Untouched validation",
+      "t_start": "2026-01-14 05:00:00+01:00",
+      "t_end": "2026-01-14 07:30:00+01:00",
+      "samples": 901,
+      "rmse": 0.5553251108968191,
+      "mae": 0.4853166653531277,
+      "p95": 1.0957234525890485,
+      "bias": 0.4749863468998819,
+      "maxabs": 1.3775063528642448,
+      "r2": 0.9899840909391217,
+      "offline_centered_filter_rmse_c": 0.5553251108968191,
+      "branch_counts": {
+        "active_heating": 1042,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 37,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-5",
+      "name": "VAL-5 Cold Start + Mid-Run Cutoffs + Final Shutdown",
+      "type": "New untouched validation (replaces old VAL-5)",
+      "t_start": "2026-02-08 04:27:00+01:00",
+      "t_end": "2026-02-08 10:11:00+01:00",
+      "samples": 2065,
+      "rmse": 2.931103683757993,
+      "mae": 1.7975502146030762,
+      "p95": 6.728268733575633,
+      "bias": 1.5298190220291805,
+      "maxabs": 10.333408808448283,
+      "r2": 0.9341735014903977,
+      "offline_centered_filter_rmse_c": 2.931147127466122,
+      "branch_counts": {
+        "active_heating": 1496,
+        "circ_unheated_cutoff": 139,
+        "dhw_divert": 0,
+        "idle": 532,
+        "casing_decay": 61,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 15
+      },
+      "windows": {
+        "cold": [
+          180,
+          198
+        ],
+        "cutoffs": [
+          [
+            926,
+            946
+          ],
+          [
+            1201,
+            1222
+          ],
+          [
+            2184,
+            2204
+          ]
+        ],
+        "final": [
+          2204,
+          2245
+        ]
+      }
+    },
+    {
+      "id": "VAL-6",
+      "name": "VAL-6 Circulating DHW Divert + Return",
+      "type": "New untouched validation (replaces old VAL-6)",
+      "t_start": "2026-02-18 05:50:00+01:00",
+      "t_end": "2026-02-18 06:55:00+01:00",
+      "samples": 391,
+      "rmse": 4.421750894519074,
+      "mae": 2.9486702910714024,
+      "p95": 11.203612966238524,
+      "bias": -2.081052942459884,
+      "maxabs": 12.087723652775018,
+      "r2": 0.9207065261049726,
+      "offline_centered_filter_rmse_c": 4.421750894519074,
+      "branch_counts": {
+        "active_heating": 340,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 214,
+        "idle": 0,
+        "casing_decay": 7,
+        "post_dhw_return": 8,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-7",
+      "name": "VAL-7 DHW Priority Divert (Idle)",
+      "type": "Untouched validation",
+      "t_start": "2026-01-03 03:20:00+01:00",
+      "t_end": "2026-01-03 03:50:00+01:00",
+      "samples": 181,
+      "rmse": 0.7673478788732455,
+      "mae": 0.7045345885379377,
+      "p95": 1.0911108585885607,
+      "bias": 0.7044939728260776,
+      "maxabs": 1.1021008411743054,
+      "r2": -3.3656376627820253,
+      "offline_centered_filter_rmse_c": 0.7673478788732455,
+      "branch_counts": {
+        "active_heating": 0,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 359,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": [
+          180,
+          210
+        ],
+        "cutoffs": [
+          [
+            324,
+            342
+          ]
+        ],
+        "final": [
+          342,
+          361
+        ]
+      }
+    }
+  ],
+  "validation_summary": {
+    "space_heating_mean_rmse_c": 1.1888445575468567,
+    "space_heating_mean_mae_c": 0.8497187751059577,
+    "space_heating_mean_p95_c": 2.382557673865874,
+    "space_heating_mean_r2": 0.9238319864287791,
+    "space_heating_pooled_rmse_c": 1.7544668001177544,
+    "space_heating_pooled_mae_c": 0.9726066413661735,
+    "space_heating_pooled_r2": 0.9522127412782924
+  },
+  "four_way_tune1": {
+    "v3 Baseline": {
+      "mode": "v3",
+      "overall": {
+        "rmse": 2.40836314131409,
+        "mae": 0.7008532150176858,
+        "p95": 3.813123831850462,
+        "bias": 0.5874814042076733,
+        "maxabs": 21.639461281967513,
+        "r2": 0.8609827982817336,
+        "samples": 1753
+      },
+      "cold": {
+        "rmse": 2.771466689572535,
+        "mae": 1.5084734583402768,
+        "bias": 1.424259869655594,
+        "maxabs": 5.916901877418219,
+        "samples": 20
+      },
+      "cutoffs": {
+        "rmse": 5.026946368188341,
+        "mae": 4.024267050264562,
+        "bias": 4.024267050264562,
+        "maxabs": 9.334426153169446,
+        "samples": 128
+      },
+      "final": {
+        "rmse": 13.343975152748285,
+        "mae": 10.760660080442962,
+        "bias": 10.760660080442962,
+        "maxabs": 21.639461281967513,
+        "samples": 37
+      },
+      "branch_counts": {
+        "active_heating": 1739,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 192,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v4 Clamped": {
+      "mode": "v4",
+      "overall": {
+        "rmse": 1.1604376738581823,
+        "mae": 0.4470349405268475,
+        "p95": 2.574412863189838,
+        "bias": 0.1972754315163525,
+        "maxabs": 8.116138843293655,
+        "r2": 0.9677248523227046,
+        "samples": 1753
+      },
+      "cold": {
+        "rmse": 2.771466689572535,
+        "mae": 1.5084734583402768,
+        "bias": 1.424259869655594,
+        "maxabs": 5.916901877418219,
+        "samples": 20
+      },
+      "cutoffs": {
+        "rmse": 3.2197037699477966,
+        "mae": 2.707922135793357,
+        "bias": 2.707922135793357,
+        "maxabs": 5.784079105490491,
+        "samples": 128
+      },
+      "final": {
+        "rmse": 4.318311530959092,
+        "mae": 3.30568083166516,
+        "bias": -3.1559049400714163,
+        "maxabs": 8.116138843293655,
+        "samples": 37
+      },
+      "branch_counts": {
+        "active_heating": 1574,
+        "circ_unheated_cutoff": 37,
+        "dhw_divert": 0,
+        "idle": 192,
+        "casing_decay": 128,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v5 Two-Stage": {
+      "mode": "v5",
+      "overall": {
+        "rmse": 0.8676235606596292,
+        "mae": 0.3624250558363178,
+        "p95": 1.949670299496943,
+        "bias": 0.1273657828917968,
+        "maxabs": 5.916901877418219,
+        "r2": 0.9819578922432055,
+        "samples": 1753
+      },
+      "cold": {
+        "rmse": 2.771466689572535,
+        "mae": 1.5084734583402768,
+        "bias": 1.424259869655594,
+        "maxabs": 5.916901877418219,
+        "samples": 20
+      },
+      "cutoffs": {
+        "rmse": 2.6168918569106614,
+        "mae": 2.141814611489451,
+        "bias": 0.6567740038092664,
+        "maxabs": 4.848187540535093,
+        "samples": 128
+      },
+      "final": {
+        "rmse": 1.7480090609432732,
+        "mae": 1.5412195697946607,
+        "bias": 0.9986307448230897,
+        "maxabs": 3.9851970619720234,
+        "samples": 37
+      },
+      "branch_counts": {
+        "active_heating": 1573,
+        "circ_unheated_cutoff": 31,
+        "dhw_divert": 0,
+        "idle": 192,
+        "casing_decay": 129,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 6
+      }
+    },
+    "v6 Final": {
+      "mode": "v6",
+      "overall": {
+        "rmse": 0.7474134518332727,
+        "mae": 0.31257713851255625,
+        "p95": 1.1282072582294402,
+        "bias": 0.12442743480961942,
+        "maxabs": 4.848859052267798,
+        "r2": 0.9866110531255093,
+        "samples": 1753
+      },
+      "cold": {
+        "rmse": 0.2155180002946072,
+        "mae": 0.14856047618445894,
+        "bias": -0.024951313272331,
+        "maxabs": 0.471919555437438,
+        "samples": 20
+      },
+      "cutoffs": {
+        "rmse": 2.4578932634328914,
+        "mae": 1.8399699638986895,
+        "bias": 1.250680178463231,
+        "maxabs": 4.848859052267798,
+        "samples": 128
+      },
+      "final": {
+        "rmse": 1.770578724905643,
+        "mae": 1.5680941012156364,
+        "bias": 0.4375225517112032,
+        "maxabs": 3.716276816031943,
+        "samples": 37
+      },
+      "branch_counts": {
+        "active_heating": 1573,
+        "circ_unheated_cutoff": 32,
+        "dhw_divert": 0,
+        "idle": 192,
+        "casing_decay": 129,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 5
+      }
+    }
+  },
+  "four_way_windows": {
+    "cold": [
+      180,
+      200
+    ],
+    "cutoffs": [
+      [
+        1098,
+        1150
+      ],
+      [
+        1820,
+        1896
+      ]
+    ],
+    "final": [
+      1896,
+      1933
+    ]
+  },
+  "parity": {
+    "compiled": true,
+    "compiler": "/usr/bin/g++",
+    "flags": [
+      "-O2",
+      "-std=c++17"
+    ],
+    "header": "step2_hx_dynamics_v6.hpp",
+    "harness": "step2_hx_parity_harness.cpp",
+    "csv": "step2_hx_parity_input.csv",
+    "binary": "step2_hx_parity_harness",
+    "cold_ring_n": 14,
+    "rows": 13169,
+    "max_abs_diff_c": 4.999378688808065e-11,
+    "tolerance_c": 0.0001,
+    "worst": [
+      "FIT-1",
+      174,
+      65.05322695385,
+      65.0532269539
+    ]
+  },
+  "unit_tests": [
+    {
+      "name": "UT1_LowLift",
+      "passed": true,
+      "value": 25.03000000000005,
+      "expected": "~25.03 C",
+      "detail": "final=25.0300 C"
+    },
+    {
+      "name": "UT2_PumpOffHoldPlunge",
+      "passed": true,
+      "value": 20.00000000067417,
+      "expected": "hold then <30 C",
+      "detail": "hold_delta=0.0000 C, final=20.00 C"
+    },
+    {
+      "name": "UT3_BurnerOffPumpOn",
+      "passed": true,
+      "value": 36.76330783643676,
+      "expected": "25-50 C (casing decay)",
+      "detail": "final=36.76 C"
+    },
+    {
+      "name": "UT4_DHWEntryReturn",
+      "passed": true,
+      "value": [
+        25.000000000198472,
+        67.52543667696781
+      ],
+      "expected": "DHW <32 C, recovery >55 C",
+      "detail": "dhw_end=25.00 C, rec_end=67.53 C"
+    },
+    {
+      "name": "UT5_ColdStartWarmup",
+      "passed": true,
+      "value": [
+        20.0,
+        53.075339633999974
+      ],
+      "expected": "flat <21 C then >45 C",
+      "detail": "flat=20.00 C, warm=53.08 C"
+    }
+  ],
+  "staleness": {
+    "tb_max_age_s": 900.0,
+    "event_max_age_s": 14400.0,
+    "policy": "hold all state during invalid telemetry; no backward fill"
+  },
+  "hydraulic_decoupling": {
+    "fit_regime_a": {
+      "r_mstate_tinc": -0.3786154254379898,
+      "r_mstate_dthx": -0.03612883368681349,
+      "r_tb_tinc": 0.7931013054987256,
+      "samples": 7530
+    },
+    "full_season_r_mstate_dthx": -0.0089,
+    "interpretation": "no material linear association observed during settled Regime A operation"
+  },
+  "notes": [
+    "Residuals are reduced, not eliminated; see four_way_tune1 and validation_scenarios.",
+    "Offline centered-filter RMSE is a diagnostic, not an upper bound.",
+    "v3/v4/v5 rows in four_way_tune1 use frozen v5 constants; v6 uses v6 constants.",
+    "At the first evaluation sample the thermal state is re-anchored to measured t_inc/t_boiler; causal filters and timers retain the 30-minute warm-up history.",
+    "VAL-7 has very little target variance; its R2 is not a meaningful goodness-of-fit statistic."
+  ]
+}
