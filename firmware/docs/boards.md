@@ -367,9 +367,15 @@ current sensing is on the ADS1115, so the unconnected `A0` is irrelevant.
 
 The chosen GPIOs avoid the ESP32-S3 strapping pins (0, 3, 45, 46), the native
 USB pins (19, 20), UART0 (43, 44) and the in-package flash/PSRAM range (26–37).
-The ESP32-C3 bring-up build keeps the same I²C pins but leaves 1-Wire and the
-LED chain unassigned (`HPN_GPIO_UNASSIGNED`, `num_leds = 0`), because a bare
-devkit has neither.
+They are equally valid on the ESP32-C3: 4 and 5 are ordinary GPIOs there, and
+the I²C pair is held high by the carrier pull-ups, which keeps the C3 boot
+strapping pins (8, 9) in their normal-boot state.
+
+The same v1.x pin defaults are applied **regardless of the MCU**. The carrier
+profile owns the feature set — temperature jack, five status LEDs, fault input,
+current front end — so a C3, S3 or ESP32 build of this profile all expose the
+same features. A bare bring-up devkit has nothing wired to those pins; the
+values can be changed on the Hardware page or set to unassigned there.
 
 These numbers are a **firmware default, not a verified board fact**. The
 schematic names the carrier nets, not the S3 pad each net lands on, and no

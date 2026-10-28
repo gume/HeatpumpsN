@@ -17,14 +17,16 @@
 //
 //   HomeNet Heating control v0.1   legacy board with an ESP32-S2 (LOLIN S2
 //                                  Mini) and a 74HC595 output extender.
-//   HomeNet Heating control v1.x   current board with an ESP32-C3, a
-//                                  PCF8574 expander, a fault input and an
+//   HomeNet Heating control v1.x   current board with an ESP32-C3 or ESP32-S3,
+//                                  a PCF8574 expander, a fault input and an
 //                                  ADS1115 current front end.
 //   boardless                      bare devkit, no board. Direct GPIO with all
 //                                  assignments still unset.
 //
 // The board profile is independent of the I/O backend: the same profile can
 // be run against real pins or against the emulation model (HPN_IO_EMULATION).
+// The MCU only supplies capabilities (core count, pin numbers); it never
+// enables or removes a feature. Anything a board offers is described here.
 namespace hpn {
 
 struct BoardConfig {

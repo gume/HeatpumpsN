@@ -2,9 +2,14 @@
 
 // Compile-time target description.
 //
-// Exactly one HPN_TARGET_* macro is supplied by platformio.ini. The dual-core
-// flag matters because the controller plan assigns safety/control/IO to Core 1;
-// ESP32-S2 and ESP32-C3 are single-core parts and must not use xTaskCreatePinnedToCore.
+// Exactly one HPN_TARGET_* macro is supplied by platformio.ini. This header
+// describes MCU capabilities only: the target name and whether a second core
+// exists to pin real-time tasks to. Features are never gated here — the carrier
+// profile in board.cpp and the runtime Config decide what the controller does,
+// so every MCU build exposes the same feature set.
+//
+// ESP32-S2 and ESP32-C3 are single-core parts and must not use
+// xTaskCreatePinnedToCore.
 
 #if defined(HPN_TARGET_ESP32DEV)
 #define HPN_TARGET_NAME "esp32dev"

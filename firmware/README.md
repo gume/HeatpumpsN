@@ -37,11 +37,19 @@ are independent compile-time choices:
   on the same board.
 - `-DHPN_CARRIER_HHN1X` — HomeNet Heating control v1.x: PCF8574 relay board,
   P7 interlock fault input, ADS1115 current sensing with an optional TLV9064
-  assembly. No analogue MUX.
+  assembly, 5 status LEDs and the DS18B20 temperature jack. No analogue MUX.
 - `-DHPN_CARRIER_BOARDLESS` — bare devkit, pins unassigned
   (`HPN_GPIO_UNASSIGNED`) until a board layout is selected.
 - `-DHPN_IO_EMULATION` — L0 runs against an in-memory model of the board
   instead of pins.
+
+The MCU is a capability choice, not a feature choice: it supplies the core
+count (`HPN_HAS_DUAL_CORE`, used only to decide whether the real-time tasks can
+be pinned to Core 1) and the set of pins the board profile may reference. Every
+carrier profile builds the same controller — same tasks, same MQTT/HA surface,
+same portal, same LEDs, same sensors — on every MCU, and the remaining choices
+(output driver, current front end, baud rates, ...) are runtime fields in the
+web UI. Emulation is likewise MCU-independent and stays on `esp32dev` for now.
 
 Both boards are documented in [`docs/boards.md`](docs/boards.md): pin maps,
 74HC595/PCF8574 bit maps, per-output polarity, the v1.x fault input, MUX and
