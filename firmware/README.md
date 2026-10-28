@@ -25,8 +25,6 @@ steps are described in
 | `esp32s2` | `lolin_s2_mini` | single-core Xtensa | HomeNet Heating control v0.1 | hardware, runtime output driver + MUX |
 | `esp32c3_hhn1x` | `esp32-c3-devkitm-1` | single-core RISC-V | HomeNet Heating control v1.x | hardware, PCF8574 + ADS1115 |
 | `esp32s3_hhn1x` | `esp32-s3-devkitc-1` | dual-core Xtensa | HomeNet Heating control v1.x | hardware, PCF8574 + ADS1115 |
-| `esp32s3` | `esp32-s3-devkitc-1` | dual-core Xtensa | boardless | hardware (no pins assigned) |
-| `esp32c3` | `esp32-c3-devkitm-1` | single-core RISC-V | boardless | hardware, future board |
 
 Boards describe wiring; the backend describes whether writes reach pins. They
 are independent compile-time choices:
@@ -282,12 +280,22 @@ The event, access and slow logs are RAM-only in this build; they reset on
 reboot. Event and slow records can optionally be mirrored to MQTT (see above).
 Relay counters are persisted hourly in hardware builds and stay in RAM under
 emulation (see above). Configuration, counters and the anti-seize schedule are
-persisted as CRC32-protected NVS blobs. The config blob is versioned: v1 and
-v2 blobs are migrated to v3 by copying their unchanged prefix over current
-defaults, preserving every existing setting while initialising the appended
-fields, and the upgraded blob is saved immediately. Counters and the anti-seize
-schedule still have no migration path; an old-format blob of those is
-discarded. The
+persisted as CRC32-protected NVS blobs.
+
+The configuration is **one store shared by every build**: the same `hpncfg`
+namespace, the same `config` key, the same layout and the same version on every
+carrier and MCU. The carrier profile only seeds the compiled defaults of a
+fresh device (no blob yet, or a blob that cannot be read or migrated). A blob
+that loads is never re-seeded, so switching between the v0.1 and v1.x boards, or
+reflashing a firmware that still understands the stored format, leaves every
+saved value untouched. To return to the compiled defaults of the currently
+flashed carrier, run the portal's factory reset.
+
+The blob is versioned (currently v5). v1–v4 blobs are migrated by copying their
+unchanged prefix over current defaults, preserving every existing setting while
+initialising the appended fields, and the upgraded blob is saved immediately.
+Counters and the anti-seize schedule still have no migration path; an
+old-format blob of those is discarded. The
 `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` latch is held for the current
 boot: saving settings rewrites the config blob, but the live flag clears only
 on the next boot once every persisted blob validates. This keeps unrelated
@@ -437,7 +445,7 @@ firmware/
 │   ├── io_backend.h      # real pins vs emulation seam
 │   ├── sim.h             # emulation model and UI hooks
 │   ├── config.h          # struct Config (plan 01 §1)
-│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1/v2/v3→v4)
+│   ├── config_store.h    # NVS-backed config load/save (CRC32, versioned, v1-v4→v5)
 │   ├── crc32.h           # portable CRC32 helper
 │   ├── state.h           # SystemState, enums, alarms (plan 01 §3-§4)
 │   ├── tasks.h           # RTOS task set start/health

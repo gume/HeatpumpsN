@@ -8,6 +8,13 @@
 // struct size, a format version and a CRC32 checksum. Settings are written only
 // on an explicit Save from the portal, not on every tick.
 //
+// One store for every build. The namespace ("hpncfg"), key ("config"), layout
+// and version are identical on every carrier and MCU, so a device can switch
+// between the v0.1 and v1.x profiles (or be reflashed) without losing its
+// settings. board_apply_defaults() only seeds a device that has no usable blob;
+// a successful load always replaces those defaults. Consequently a carrier
+// change is not visible in the stored values until the config is cleared.
+//
 // Older formats are migrated by copying their unchanged Config prefix onto
 // current defaults, so existing settings survive while appended fields receive
 // their default values. v1 (1288-byte prefix), v2 (1348 bytes), v3 (1364

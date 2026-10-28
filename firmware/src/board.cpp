@@ -71,6 +71,9 @@ const BoardConfig& board_config() {
 }
 
 void board_apply_defaults(Config& config) {
+  // Seed values for a device with no saved configuration. main.cpp loads the
+  // NVS blob after config_defaults() and a successful load overwrites all of
+  // this, so the carrier profile only decides how a *fresh* unit starts.
 #if defined(HPN_CARRIER_HHN1)
   // HomeNet Heating control v0.1 wiring. The output driver is runtime
   // selectable, so the 74HC595 values below are defaults rather than the only

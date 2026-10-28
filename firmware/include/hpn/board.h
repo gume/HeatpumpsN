@@ -47,6 +47,11 @@ const BoardConfig& board_config();
 
 // Apply carrier-specific values to the generic configuration (pins, sensor ROM
 // IDs, LED count, mixer travel time, ...).
+// Seed the carrier's compiled default pins and sensors into `config`. Called
+// from config_defaults(), i.e. only when no saved configuration is available
+// (fresh device, unreadable or unmigratable blob). A loaded blob is never
+// re-seeded, so this must stay free of side effects and must not encode the
+// MCU: every MCU running this carrier profile gets the same defaults.
 void board_apply_defaults(Config& config);
 
 }  // namespace hpn
