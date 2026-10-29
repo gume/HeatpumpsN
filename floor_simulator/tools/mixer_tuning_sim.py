@@ -22,7 +22,7 @@ BASE = dict(kp=0.5, ki=0.02, delay_s=120.0, deadband_temp=2.0, deadband_pos=0.02
             sensor_res=0.0, grad_filter_s=0.0,
             # ctrl="model": steady-state inverse of the identified mixing law
             ctrl="firmware", avg_s=300.0, trim_tau_s=1800.0, move_db=0.05, supply_margin=3.0,
-            fast_up=False)
+            fast_up=False, mpc=None)
 
 
 def inverse_law(knots, xk, x):
@@ -40,7 +40,7 @@ def clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
-def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tout=2.0):
+def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tout=2.0, trace=None):
     c = dict(BASE, **cfg)
     P = PlantParams.load()
     plant = PlantEngine(P, act_mode=0)
@@ -71,6 +71,11 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
     avg_inc = sens["boiler"]
     avg_ret = sens["return"]
     trim = 0.0
+    mpc = None
+    if c["ctrl"] == "mpc":
+        from floor_simulator.tools.mpc_proto import MixerMPC
+        mpc = MixerMPC(P.knots, P.xk, setpoint=setpoint, pmin=c["min_pos"], pmax=c["max_pos"],
+                       **(c["mpc"] or {}))
     n_s = int(hours * 3600)
     for s in range(n_s):
         # ---- plant tick every 10 s
@@ -101,8 +106,20 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
             if sens["boiler"] >= setpoint + 5.0:
                 sq_ok += (meas - setpoint) ** 2
                 n_ok += 1
+        if mpc is not None:
+            if s % int(DT) == 0:
+                mpc.model_step(pos_est, sens["boiler"], sens["return"], meas)
+            if not ovs:
+                t = mpc.decide(s, pos_est, meas, supply_ok=sens["boiler"] >= setpoint + c["supply_margin"])
+                if t is not None:
+                    target = t
         # ---- L2 every tick_s
-        if s % int(c["tick_s"]) == 0:
+        if mpc is not None:
+            if not ovs and meas >= setpoint + c["ovs_delta"]:
+                ovs, target = True, c["ovs_target"]
+            elif ovs and meas <= setpoint - c["ovs_recovery"]:
+                ovs = False
+        elif s % int(c["tick_s"]) == 0:
             if not ovs and meas >= setpoint + c["ovs_delta"]:
                 ovs = True
             elif ovs and meas <= setpoint - c["ovs_recovery"]:
@@ -137,6 +154,8 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                     target = clamp(max(t, c["min_pos"]), 0.0, c["max_pos"])
                 else:
                     target = clamp(max(min(pos_est, c["max_pos"]), c["min_pos"]), 0.0, 1.0)
+        if trace is not None and s % 10 == 0:
+            trace.append((s, meas, pos * 100, sens["boiler"], sens["return"], target * 100))
         # ---- L1 motor
         e = target - pos_est
         want = 0 if abs(e) <= c["deadband_pos"] else (1 if e > 0 else -1)
@@ -153,6 +172,8 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
             pos = newp
             pos_est = clamp(pos_est + step, 0.0, 1.0)
     h = hours
+    if mpc is not None:
+        mpc_decisions = mpc.decisions
     return dict(travel_pct_h=travel * 100 / h, starts_h=starts / h, reversals_h=reversals / h,
                 rmse=math.sqrt(sq / max(n, 1)), rmse_ok=math.sqrt(sq_ok / max(n_ok, 1)), fwd_max=fwd_max)
 
