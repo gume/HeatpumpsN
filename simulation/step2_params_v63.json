@@ -1,0 +1,2222 @@
+{
+  "metadata": {
+    "version": "6.3",
+    "phase": 2,
+    "description": "Primary Heat Exchanger Dynamics (T_boiler -> T_incoming)",
+    "timestamp": "2026-10-29T02:00:21+0100",
+    "script": "simulation/step2_hx_dynamics_v63.py",
+    "database": "analysis/heatpumps.duckdb",
+    "commit": "facafaec6df652dfb72c6a70cbb6674487b21933",
+    "phase0_commit": "facafae",
+    "gates_sha256": "270ee734cb4b458ac8f0891e66048098c4ad8e9cb42745182360434a801efbbf",
+    "holdout_sha256": "2fb8386ed273ea6803a097a38bc03b9f810f62f347e0d0cf58c1cb613d88a4b2",
+    "parameter_sha256": "bf9fe353e10a2de59fb58e5461e684967105cff14827a7d0c07b6ad0cae2b31d"
+  },
+  "split": {
+    "FIT-1": {
+      "name": "FIT-1 Space-Heating Identification (shortened)",
+      "kind": "FIT",
+      "t_start": "2026-01-14 00:00:00+01:00",
+      "t_end": "2026-01-14 04:00:00+01:00",
+      "role": "tau_hx / eps_A identification (ends 30 min before VAL-4 warm-up)"
+    },
+    "FIT-DHW": {
+      "name": "FIT-DHW Divert Identification",
+      "kind": "FIT",
+      "t_start": "2025-12-03 08:18:00+01:00",
+      "t_end": "2025-12-03 08:45:00+01:00",
+      "role": "dhw_delay_s / tau_dhw_fast identification"
+    },
+    "TUNE-1": {
+      "name": "TUNE-1 Cold Start + Cutoffs + Final Shutdown",
+      "kind": "TUNE",
+      "t_start": "2025-12-27 16:06:00+01:00",
+      "t_end": "2025-12-27 20:58:00+01:00",
+      "role": "Cutoff / cold-start / post-DHW tuning"
+    },
+    "TUNE-2": {
+      "name": "TUNE-2 DHW Divert + Return",
+      "kind": "TUNE",
+      "t_start": "2026-01-01 14:50:00+01:00",
+      "t_end": "2026-01-01 15:25:00+01:00",
+      "role": "DHW return / post-DHW tuning (in-partition)"
+    },
+    "TUNE-3": {
+      "name": "TUNE-3 Model-Selection: Cold Start, Cutoffs & Post-Heating Idle",
+      "kind": "TUNE",
+      "t_start": "2026-02-08 04:27:00+01:00",
+      "t_end": "2026-02-08 10:11:00+01:00",
+      "role": "Model-selection episode (former VAL-5); idle/cutoff structure selection"
+    },
+    "VAL-1": {
+      "name": "VAL-1 Regime A Heated Run 2",
+      "kind": "VAL",
+      "t_start": "2026-01-15 00:00:00+01:00",
+      "t_end": "2026-01-15 05:00:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-2": {
+      "name": "VAL-2 Regime B Combined Run 1",
+      "kind": "VAL",
+      "t_start": "2026-02-19 14:40:00+01:00",
+      "t_end": "2026-02-19 17:25:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-3": {
+      "name": "VAL-3 Regime B Combined Run 2",
+      "kind": "VAL",
+      "t_start": "2026-01-13 05:00:00+01:00",
+      "t_end": "2026-01-13 07:35:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-4": {
+      "name": "VAL-4 Hydraulic Transition A->B",
+      "kind": "VAL",
+      "t_start": "2026-01-14 05:00:00+01:00",
+      "t_end": "2026-01-14 07:30:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-5": {
+      "name": "VAL-5 Observed Holdout (seen in v6.2)",
+      "kind": "VAL",
+      "t_start": "2026-02-26 00:00:00+01:00",
+      "t_end": "2026-02-26 12:00:00+01:00",
+      "role": "Observed holdout (seen in v6.2) - reported, cannot support sign-off"
+    },
+    "VAL-6": {
+      "name": "VAL-6 Circulating DHW Divert + Return",
+      "kind": "VAL",
+      "t_start": "2026-02-18 05:50:00+01:00",
+      "t_end": "2026-02-18 06:55:00+01:00",
+      "role": "New untouched validation (replaces old VAL-6)"
+    },
+    "VAL-7": {
+      "name": "VAL-7 DHW Priority Divert (Idle)",
+      "kind": "VAL",
+      "t_start": "2026-01-03 03:20:00+01:00",
+      "t_end": "2026-01-03 03:50:00+01:00",
+      "role": "Untouched validation"
+    },
+    "VAL-8": {
+      "name": "VAL-8 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "kind": "HOLDOUT",
+      "t_start": "2026-03-16T00:00:00+01:00",
+      "t_end": "2026-03-16T12:00:00+01:00",
+      "role": "untouched v6.3 holdout, selected from telemetry only"
+    },
+    "VAL-9": {
+      "name": "VAL-9 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "kind": "HOLDOUT",
+      "t_start": "2026-03-22T12:00:00+01:00",
+      "t_end": "2026-03-23T00:00:00+01:00",
+      "role": "untouched v6.3 holdout, selected from telemetry only"
+    }
+  },
+  "disjointness": [
+    {
+      "first": "FIT-DHW",
+      "second": "FIT_WINDOW",
+      "allowed_nested_fit": true
+    }
+  ],
+  "identified_parameters": {
+    "tau_hx": 79.82108995467848,
+    "eps_A": 0.9449626523857075,
+    "eps_B1": 0.9231370503449952,
+    "eps_B2": 0.9060176252216703,
+    "eps_C": 0.9090441455931075,
+    "dhw_delay_s": 135.0,
+    "tau_dhw_fast": 87.84400549785536,
+    "post_dhw_delay_s": 90.0,
+    "L_pump_off": 0.0,
+    "L_burn_off": 0.0,
+    "tau_burn_off": 3200.0,
+    "tau_cutoff": 180.0,
+    "tau_idle": 8669.890409522093,
+    "tau_rad_off": 1897.3127013816516,
+    "L_cold_start": 100.0,
+    "tau_cold_front": 10.0
+  },
+  "parameter_provenance": {
+    "tau_hx": "FIT-1 (shortened, input-only mask, fresh samples)",
+    "eps_A": "FIT-1 (shortened, input-only mask, fresh samples)",
+    "eps_B1": "FIT 1-24 Dec input-only ratio B1/A * eps_A",
+    "eps_B2": "FIT 1-24 Dec input-only ratio B2/A * eps_A",
+    "eps_C": "FIT 1-24 Dec input-only ratio C/A * eps_A",
+    "tau_rad_off": "FIT per-segment exponential fit (median)",
+    "tau_idle": "FIT per-segment exponential fit (median)",
+    "L_pump_off": "TUNE grid search (moved from 70 to 0)",
+    "L_burn_off": "TUNE grid search (moved from 30 to 0)",
+    "tau_burn_off": "TUNE grid search (moved from 2400 to 3200)",
+    "tau_cutoff": "TUNE grid search (moved from 150 to 180)",
+    "L_cold_start": "all-TUNE cold-start fit (100 s); stationary on the TUNE search",
+    "tau_cold_front": "all-TUNE cold-start fit (10 s); stationary on the TUNE search",
+    "post_dhw_delay_s": "TUNE grid search (stationary)",
+    "dhw_delay_s": "TUNE grid search (moved from 90 to 135)",
+    "tau_dhw_fast": "TUNE grid search (stationary)"
+  },
+  "fit_identification": {
+    "regime_ratios": {
+      "regime_counts": {
+        "A": 8540,
+        "B": 1887,
+        "C": 7575,
+        "D": 1292,
+        "E": 13367,
+        "other": 491
+      },
+      "new_active_count": 7091,
+      "old_active_count": 10760,
+      "new": {
+        "A": {
+          "count": 5858,
+          "eff_mean": 0.9386081171193233,
+          "dt_mean": 2.6740995220211676
+        },
+        "B1": {
+          "count": 553,
+          "eff_mean": 0.9169292844324343,
+          "dt_mean": 3.4397151898734175
+        },
+        "B2": {
+          "count": 60,
+          "eff_mean": 0.8999249813093405,
+          "dt_mean": 3.423958333333333
+        },
+        "C": {
+          "count": 463,
+          "eff_mean": 0.9029311494156527,
+          "dt_mean": 4.098947084233261
+        },
+        "ratio_B1": 0.976903212009903,
+        "ratio_B2": 0.9587867022408617,
+        "ratio_C": 0.9619894958791038
+      },
+      "old": {
+        "A": {
+          "count": 7524,
+          "eff_mean": 0.9397857483764072,
+          "dt_mean": 2.6960592769803298
+        },
+        "B1": {
+          "count": 1645,
+          "eff_mean": 0.947601944448277,
+          "dt_mean": 2.369460486322188
+        },
+        "B2": {
+          "count": 180,
+          "eff_mean": 0.9435893613303777,
+          "dt_mean": 2.1809722222222216
+        },
+        "C": {
+          "count": 1097,
+          "eff_mean": 0.8992679742586456,
+          "dt_mean": 4.0759913400182315
+        },
+        "ratio_B1": 1.0083169978746467,
+        "ratio_B2": 1.0040473192539277,
+        "ratio_C": 0.9568861581613034
+      },
+      "ratio_B1": 0.976903212009903,
+      "ratio_B2": 0.9587867022408617,
+      "ratio_C": 0.9619894958791038,
+      "tau_rad_off": 1897.3127013816516,
+      "tau_rad_off_stats": {
+        "median_s": NaN,
+        "q25_s": NaN,
+        "q75_s": NaN,
+        "iqr_s": NaN,
+        "segments": 0
+      },
+      "tau_rad_off_segments": [],
+      "tau_rad_off_legacy": 1897.3127013816516,
+      "tau_rad_ratio_per_min_legacy": 0.9688711240310077,
+      "tau_rad_samples_legacy": 850,
+      "tau_idle": 8669.890409522093,
+      "tau_idle_stats": {
+        "median_s": 8669.890409522093,
+        "q25_s": 6993.0935209374575,
+        "q75_s": 11375.538832815118,
+        "iqr_s": 4382.445311877661,
+        "segments": 50
+      },
+      "tau_idle_segments": [
+        {
+          "start": 912,
+          "stop": 937,
+          "samples": 25,
+          "tau_s": 7301.79332730913,
+          "sse": 3.021692592152027,
+          "y0_c": 23.683690523951874
+        },
+        {
+          "start": 965,
+          "stop": 987,
+          "samples": 22,
+          "tau_s": 6890.193585480233,
+          "sse": 2.1647811262271413,
+          "y0_c": 24.42414159519682
+        },
+        {
+          "start": 1348,
+          "stop": 1388,
+          "samples": 40,
+          "tau_s": 4759.828371017582,
+          "sse": 11.904339892344238,
+          "y0_c": 24.330328914885033
+        },
+        {
+          "start": 1404,
+          "stop": 1444,
+          "samples": 40,
+          "tau_s": 8883.848920083905,
+          "sse": 5.809931251788061,
+          "y0_c": 10.353667907668045
+        },
+        {
+          "start": 2762,
+          "stop": 2793,
+          "samples": 31,
+          "tau_s": 7722.097127837501,
+          "sse": 1.0351614472678219,
+          "y0_c": 15.558923356695209
+        },
+        {
+          "start": 2867,
+          "stop": 3010,
+          "samples": 143,
+          "tau_s": 9927.534338681302,
+          "sse": 18.382475244813502,
+          "y0_c": 12.732523474322138
+        },
+        {
+          "start": 3651,
+          "stop": 3685,
+          "samples": 34,
+          "tau_s": 7825.440021643419,
+          "sse": 0.9818563980201397,
+          "y0_c": 13.817864438911055
+        },
+        {
+          "start": 3707,
+          "stop": 3742,
+          "samples": 35,
+          "tau_s": 8703.05981345037,
+          "sse": 3.98311074397026,
+          "y0_c": 18.068566402419542
+        },
+        {
+          "start": 3759,
+          "stop": 3798,
+          "samples": 39,
+          "tau_s": 8275.846391701427,
+          "sse": 2.579439665768482,
+          "y0_c": 15.276555125498444
+        },
+        {
+          "start": 3823,
+          "stop": 3873,
+          "samples": 50,
+          "tau_s": 11585.307833077874,
+          "sse": 9.26734038275694,
+          "y0_c": 21.288682564724663
+        },
+        {
+          "start": 4208,
+          "stop": 4233,
+          "samples": 25,
+          "tau_s": 7551.989076849886,
+          "sse": 0.10772727502258915,
+          "y0_c": 14.232403645088292
+        },
+        {
+          "start": 4269,
+          "stop": 4307,
+          "samples": 38,
+          "tau_s": 7691.466139309063,
+          "sse": 0.8462819240722583,
+          "y0_c": 10.067218243399392
+        },
+        {
+          "start": 4383,
+          "stop": 4411,
+          "samples": 28,
+          "tau_s": 4971.02163685484,
+          "sse": 4.364492494014383,
+          "y0_c": 21.212386546666927
+        },
+        {
+          "start": 4449,
+          "stop": 4469,
+          "samples": 20,
+          "tau_s": 8286.72019600528,
+          "sse": 0.01083559957998147,
+          "y0_c": 12.294747850064157
+        },
+        {
+          "start": 5220,
+          "stop": 5313,
+          "samples": 93,
+          "tau_s": 17700.25474127216,
+          "sse": 4.9991819980426,
+          "y0_c": 10.72601807749298
+        },
+        {
+          "start": 5693,
+          "stop": 5725,
+          "samples": 32,
+          "tau_s": 7687.894104037479,
+          "sse": 4.325037994179413,
+          "y0_c": 14.14428332143635
+        },
+        {
+          "start": 6229,
+          "stop": 6255,
+          "samples": 26,
+          "tau_s": 6390.733882364642,
+          "sse": 0.0493354827602367,
+          "y0_c": 10.610084784846556
+        },
+        {
+          "start": 7137,
+          "stop": 7213,
+          "samples": 76,
+          "tau_s": 7954.856066777528,
+          "sse": 48.16095096464833,
+          "y0_c": 13.8523581466998
+        },
+        {
+          "start": 7628,
+          "stop": 7662,
+          "samples": 34,
+          "tau_s": 11339.270504854065,
+          "sse": 8.733021337828445,
+          "y0_c": 28.30241042500778
+        },
+        {
+          "start": 7678,
+          "stop": 7713,
+          "samples": 35,
+          "tau_s": 9702.466715448027,
+          "sse": 0.24363760770886292,
+          "y0_c": 18.534258180831333
+        },
+        {
+          "start": 8212,
+          "stop": 8236,
+          "samples": 24,
+          "tau_s": 5660.081656927887,
+          "sse": 0.054486194295966746,
+          "y0_c": 10.076040938081784
+        },
+        {
+          "start": 9404,
+          "stop": 9478,
+          "samples": 74,
+          "tau_s": 11387.628275468804,
+          "sse": 6.274804410364309,
+          "y0_c": 9.234417620410282
+        },
+        {
+          "start": 10014,
+          "stop": 10078,
+          "samples": 64,
+          "tau_s": 9279.331079724905,
+          "sse": 39.127059126903944,
+          "y0_c": 11.635722940057414
+        },
+        {
+          "start": 10510,
+          "stop": 10533,
+          "samples": 23,
+          "tau_s": 11702.69992516102,
+          "sse": 1.9675927070152288,
+          "y0_c": 24.92934979477229
+        },
+        {
+          "start": 11285,
+          "stop": 11387,
+          "samples": 102,
+          "tau_s": 12255.70949476116,
+          "sse": 16.811858901693977,
+          "y0_c": 14.574090365671902
+        },
+        {
+          "start": 12293,
+          "stop": 12329,
+          "samples": 36,
+          "tau_s": 9784.960019879054,
+          "sse": 9.994486924455487,
+          "y0_c": 21.729134210930038
+        },
+        {
+          "start": 12343,
+          "stop": 12389,
+          "samples": 46,
+          "tau_s": 8636.721005593814,
+          "sse": 2.8104158348197643,
+          "y0_c": 12.787176055412887
+        },
+        {
+          "start": 12403,
+          "stop": 12508,
+          "samples": 105,
+          "tau_s": 13661.115323887801,
+          "sse": 9.066693510387397,
+          "y0_c": 9.007187479036459
+        },
+        {
+          "start": 12782,
+          "stop": 12805,
+          "samples": 23,
+          "tau_s": 6225.338790139896,
+          "sse": 1.0579493079531097,
+          "y0_c": 21.521130232272462
+        },
+        {
+          "start": 12839,
+          "stop": 12873,
+          "samples": 34,
+          "tau_s": 9350.31269850815,
+          "sse": 7.539979886557587,
+          "y0_c": 21.76585858370886
+        },
+        {
+          "start": 12962,
+          "stop": 13003,
+          "samples": 41,
+          "tau_s": 8985.826319797889,
+          "sse": 6.722951567746664,
+          "y0_c": 18.68106592075263
+        },
+        {
+          "start": 13025,
+          "stop": 13066,
+          "samples": 41,
+          "tau_s": 5601.1895619064235,
+          "sse": 0.6291342822378038,
+          "y0_c": 14.086582306955306
+        },
+        {
+          "start": 13799,
+          "stop": 13840,
+          "samples": 41,
+          "tau_s": 8365.73917537082,
+          "sse": 2.309827150038642,
+          "y0_c": 12.923716481438106
+        },
+        {
+          "start": 14164,
+          "stop": 14286,
+          "samples": 122,
+          "tau_s": 10357.29452247735,
+          "sse": 14.643624438572674,
+          "y0_c": 16.191446931495612
+        },
+        {
+          "start": 14372,
+          "stop": 14421,
+          "samples": 49,
+          "tau_s": 12279.187722550796,
+          "sse": 12.10476505246739,
+          "y0_c": 21.87845030906354
+        },
+        {
+          "start": 14823,
+          "stop": 14848,
+          "samples": 25,
+          "tau_s": 11935.339988511332,
+          "sse": 1.0403959671324252,
+          "y0_c": 18.65599299632029
+        },
+        {
+          "start": 15677,
+          "stop": 15714,
+          "samples": 37,
+          "tau_s": 4285.758034162734,
+          "sse": 132.8484451046092,
+          "y0_c": 27.017482423146983
+        },
+        {
+          "start": 15733,
+          "stop": 15786,
+          "samples": 53,
+          "tau_s": 12094.142963865299,
+          "sse": 15.04597524901225,
+          "y0_c": 17.65866138555042
+        },
+        {
+          "start": 15810,
+          "stop": 16018,
+          "samples": 208,
+          "tau_s": 11442.399090368723,
+          "sse": 8.29459051263975,
+          "y0_c": 11.34551789803257
+        },
+        {
+          "start": 16207,
+          "stop": 16236,
+          "samples": 29,
+          "tau_s": 3717.336569694014,
+          "sse": 71.46949823232431,
+          "y0_c": 26.605949647978285
+        },
+        {
+          "start": 16331,
+          "stop": 16351,
+          "samples": 20,
+          "tau_s": 12997.826080303346,
+          "sse": 0.06934394383282816,
+          "y0_c": 10.330337692826912
+        },
+        {
+          "start": 17068,
+          "stop": 17091,
+          "samples": 23,
+          "tau_s": 8737.646080838738,
+          "sse": 0.45906045483808716,
+          "y0_c": 11.929127032090934
+        },
+        {
+          "start": 19479,
+          "stop": 19661,
+          "samples": 182,
+          "tau_s": 13167.900811154297,
+          "sse": 58.005985883310785,
+          "y0_c": 7.56056721015605
+        },
+        {
+          "start": 20067,
+          "stop": 20103,
+          "samples": 36,
+          "tau_s": 6116.840680052584,
+          "sse": 31.22485079941374,
+          "y0_c": 23.006487388702364
+        },
+        {
+          "start": 20127,
+          "stop": 20150,
+          "samples": 23,
+          "tau_s": 9360.89499539218,
+          "sse": 0.34949327457103124,
+          "y0_c": 16.244878311800605
+        },
+        {
+          "start": 21319,
+          "stop": 21389,
+          "samples": 70,
+          "tau_s": 34614.48312831861,
+          "sse": 30.23229275246158,
+          "y0_c": 9.185417697630472
+        },
+        {
+          "start": 22846,
+          "stop": 23153,
+          "samples": 307,
+          "tau_s": 8479.383521572008,
+          "sse": 597.3906005679996,
+          "y0_c": 8.887083012324297
+        },
+        {
+          "start": 31175,
+          "stop": 31200,
+          "samples": 25,
+          "tau_s": 2352.1722647923525,
+          "sse": 87.66773711964348,
+          "y0_c": 24.46414265605967
+        },
+        {
+          "start": 31239,
+          "stop": 31363,
+          "samples": 124,
+          "tau_s": 6627.324895895707,
+          "sse": 22645.588145183556,
+          "y0_c": 36.26414819735341
+        },
+        {
+          "start": 32079,
+          "stop": 32103,
+          "samples": 24,
+          "tau_s": 859.330062936319,
+          "sse": 387.3833240614821,
+          "y0_c": 51.49466131163114
+        }
+      ],
+      "tau_idle_legacy": 5927.949392366947,
+      "tau_idle_ratio_per_min_legacy": 0.9899295065458208,
+      "tau_idle_samples_legacy": 1795,
+      "room_offset_c": 0.0,
+      "room_offset_adopted": false,
+      "room_offset_boundary": true,
+      "room_offset_range": [
+        -5.0,
+        5.0
+      ],
+      "room_offset_sse": 22933.430948578585,
+      "room_offset_sse_adopted": 24329.1559998253,
+      "room_offset_sse_zero": 24329.1559998253,
+      "fit_window": {
+        "t_start": "2025-12-01 22:00:00+01:00",
+        "t_end": "2025-12-24 23:59:00+01:00"
+      },
+      "fit_regime_a_correlations": {
+        "samples": 20730,
+        "full_samples": 33152,
+        "r_mstate_tinc": 0.775877620489161,
+        "r_mstate_dthx": -0.35403734829456585,
+        "r_tb_tinc": 0.7612317940283161
+      },
+      "fit_full_window_correlations": {
+        "samples": 33152,
+        "r_mstate_tinc": 0.7466225712431398,
+        "r_mstate_dthx": -0.40457623042197005
+      },
+      "fresh_samples": 27943,
+      "stale_samples": 5209
+    },
+    "hx_fit1": {
+      "tau_hx": 79.82108995467848,
+      "eps_A": 0.9449626523857075,
+      "mse": 0.10496196954770819,
+      "rmse": 0.3239783473439362,
+      "samples": 1110,
+      "excluded_stale": 20,
+      "window": [
+        "2026-01-14 00:00:00+01:00",
+        "2026-01-14 04:00:00+01:00"
+      ]
+    },
+    "dhw_fitdhw": {
+      "dhw_delay_s": 90.0,
+      "tau_dhw_fast": 87.84400549785536,
+      "mse": 0.5953889964328792,
+      "rmse": 0.7716145387645824,
+      "edge_index": 15,
+      "edge_time": "2025-12-03 08:20:30+01:00"
+    },
+    "cold_fit_tune": {
+      "rmse": 1.0202478460642843,
+      "L_cold_start": 100.0,
+      "tau_cold_front": 10.0
+    },
+    "cold_transient": [
+      {
+        "episode": "TUNE-1",
+        "model": "v5",
+        "duration_s": 190.0,
+        "cold_start": 193
+      },
+      {
+        "episode": "TUNE-1",
+        "model": "v6.2",
+        "duration_s": 0.0,
+        "cold_start": 193
+      },
+      {
+        "episode": "TUNE-3",
+        "model": "v5",
+        "duration_s": 130.0,
+        "cold_start": 191
+      },
+      {
+        "episode": "TUNE-3",
+        "model": "v6.2",
+        "duration_s": 0.0,
+        "cold_start": 191
+      }
+    ],
+    "fit_dhw_final_rmse_c": 4.709607742136802,
+    "v62_val5_attribution": {
+      "branches": [
+        {
+          "branch": "active_heating",
+          "samples": 1431,
+          "rmse_c": 1.8081421177521708,
+          "bias_c": 0.9584510643588505
+        },
+        {
+          "branch": "circ_unheated_cutoff",
+          "samples": 989,
+          "rmse_c": 3.8004011357221845,
+          "bias_c": -1.9489451255808947
+        },
+        {
+          "branch": "dhw_divert",
+          "samples": 226,
+          "rmse_c": 2.0022612455907405,
+          "bias_c": 0.5414251155764527
+        },
+        {
+          "branch": "idle",
+          "samples": 1183,
+          "rmse_c": 4.966892806693109,
+          "bias_c": -4.563254132858299
+        },
+        {
+          "branch": "casing_decay",
+          "samples": 122,
+          "rmse_c": 1.0230406760766577,
+          "bias_c": -0.4036009257151308
+        },
+        {
+          "branch": "post_dhw_return",
+          "samples": 16,
+          "rmse_c": 0.44166621032173925,
+          "bias_c": -0.43881521055222406
+        },
+        {
+          "branch": "stale_hold",
+          "samples": 346,
+          "rmse_c": 3.3155403958195584,
+          "bias_c": -3.3036419460611106
+        },
+        {
+          "branch": "pump_off_hold",
+          "samples": 8,
+          "rmse_c": 1.1592152779024907,
+          "bias_c": 0.8538289344241932
+        }
+      ],
+      "windows": [
+        {
+          "window": "cold_start",
+          "samples": 30,
+          "rmse_c": 4.264042373561719,
+          "bias_c": -3.88823846002616
+        },
+        {
+          "window": "cutoff_0",
+          "samples": 21,
+          "rmse_c": 0.7373202220799583,
+          "bias_c": -0.1379779243181983
+        },
+        {
+          "window": "cutoff_1",
+          "samples": 22,
+          "rmse_c": 0.5073996591414436,
+          "bias_c": 0.184578330242842
+        },
+        {
+          "window": "cutoff_2",
+          "samples": 23,
+          "rmse_c": 0.912942991838179,
+          "bias_c": -0.8201388099240263
+        },
+        {
+          "window": "cutoff_3",
+          "samples": 18,
+          "rmse_c": 1.8748398158653716,
+          "bias_c": -1.7237673850102075
+        },
+        {
+          "window": "run_down_0",
+          "samples": 23,
+          "rmse_c": 0.6417443891081194,
+          "bias_c": -0.37678154734527886
+        },
+        {
+          "window": "final_shutdown",
+          "samples": 496,
+          "rmse_c": 1.2971842838372118,
+          "bias_c": -0.2278157375116521
+        }
+      ],
+      "worst_branch": "idle",
+      "worst_branch_rmse": 4.966892806693109,
+      "worst_window": "cold_start",
+      "worst_window_rmse": 4.264042373561719,
+      "stale_samples": 346,
+      "stale_samples_v63": 0
+    }
+  },
+  "tuning": {
+    "params": {
+      "tau_hx": 79.82108995467848,
+      "eps_A": 0.9449626523857075,
+      "eps_B1": 0.9231370503449952,
+      "eps_B2": 0.9060176252216703,
+      "eps_C": 0.9090441455931075,
+      "dhw_delay_s": 135.0,
+      "tau_dhw_fast": 87.84400549785536,
+      "post_dhw_delay_s": 90.0,
+      "L_pump_off": 0.0,
+      "L_burn_off": 0.0,
+      "tau_burn_off": 3200.0,
+      "tau_cutoff": 180.0,
+      "tau_idle": 8669.890409522093,
+      "tau_rad_off": 1897.3127013816516,
+      "L_cold_start": 100.0,
+      "tau_cold_front": 10.0
+    },
+    "initial": {
+      "tau_hx": 79.82108995467848,
+      "eps_A": 0.9449626523857075,
+      "eps_B1": 0.9231370503449952,
+      "eps_B2": 0.9060176252216703,
+      "eps_C": 0.9090441455931075,
+      "dhw_delay_s": 90.0,
+      "tau_dhw_fast": 87.84400549785536,
+      "post_dhw_delay_s": 90.0,
+      "L_pump_off": 70.0,
+      "L_burn_off": 30.0,
+      "tau_burn_off": 2400.0,
+      "tau_cutoff": 150.0,
+      "tau_idle": 8669.890409522093,
+      "tau_rad_off": 1897.3127013816516,
+      "L_cold_start": 100.0,
+      "tau_cold_front": 10.0
+    },
+    "history": [
+      {
+        "pass_no": 0,
+        "parameter": "initial",
+        "value": null,
+        "objective": 1.8062160667494809,
+        "tune_rmse": [
+          0.7880715365263836,
+          2.5707281011972607,
+          2.059848562524799
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "L_pump_off",
+        "value": 30.0,
+        "objective": 1.753635900883807,
+        "tune_rmse": [
+          0.8709797021641394,
+          2.5707281011972607,
+          1.8191998992900205
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "L_burn_off",
+        "value": 0.0,
+        "objective": 1.751501814478764,
+        "tune_rmse": [
+          0.8676792914220824,
+          2.5707281011972607,
+          1.8160980508169489
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "tau_burn_off",
+        "value": 3200.0,
+        "objective": 1.7402057945843172,
+        "tune_rmse": [
+          0.8327489749951532,
+          2.5707281011972607,
+          1.8171403075605383
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "tau_cutoff",
+        "value": 180.0,
+        "objective": 1.735084712609315,
+        "tune_rmse": [
+          0.7873457020668791,
+          2.5708615029118502,
+          1.8470469328492154
+        ]
+      },
+      {
+        "pass_no": 1,
+        "parameter": "dhw_delay_s",
+        "value": 135.0,
+        "objective": 1.1697880043422135,
+        "tune_rmse": [
+          0.7873457020668791,
+          0.8749713781105464,
+          1.8470469328492154
+        ]
+      },
+      {
+        "pass_no": 2,
+        "parameter": "L_pump_off",
+        "value": 0.0,
+        "objective": 1.157937164722859,
+        "tune_rmse": [
+          0.851804758882841,
+          0.8749713781105464,
+          1.7470353571751893
+        ]
+      }
+    ],
+    "objective": 1.157937164722859,
+    "tune_rmse": [
+      0.851804758882841,
+      0.8749713781105464,
+      1.7470353571751893
+    ],
+    "tune_ids": [
+      "TUNE-1",
+      "TUNE-2",
+      "TUNE-3"
+    ],
+    "boundary_limited": {
+      "L_pump_off": true,
+      "L_burn_off": true,
+      "tau_burn_off": false,
+      "tau_cutoff": false,
+      "L_cold_start": false,
+      "tau_cold_front": false,
+      "post_dhw_delay_s": false,
+      "dhw_delay_s": false,
+      "tau_dhw_fast": false
+    },
+    "grids": {
+      "L_pump_off": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        10.0,
+        20.0,
+        30.0,
+        45.0,
+        60.0,
+        75.0,
+        90.0,
+        105.0,
+        120.0,
+        150.0,
+        180.0
+      ],
+      "L_burn_off": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        10.0,
+        20.0,
+        30.0,
+        45.0,
+        60.0,
+        90.0,
+        120.0
+      ],
+      "tau_burn_off": [
+        1200.0,
+        1600.0,
+        2000.0,
+        2400.0,
+        2800.0,
+        3200.0,
+        4000.0,
+        4800.0,
+        5600.0
+      ],
+      "tau_cutoff": [
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        240.0,
+        300.0,
+        360.0
+      ],
+      "L_cold_start": [
+        0.0,
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0,
+        70.0,
+        80.0,
+        90.0,
+        100.0,
+        110.0,
+        120.0,
+        130.0,
+        140.0,
+        150.0,
+        160.0,
+        170.0,
+        180.0,
+        190.0,
+        200.0,
+        210.0,
+        220.0,
+        230.0,
+        240.0,
+        250.0,
+        260.0,
+        270.0,
+        280.0,
+        290.0,
+        300.0,
+        310.0,
+        320.0
+      ],
+      "tau_cold_front": [
+        0.0,
+        0.0,
+        10.0,
+        20.0,
+        30.0,
+        50.0,
+        80.0,
+        120.0,
+        160.0
+      ],
+      "post_dhw_delay_s": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0
+      ],
+      "dhw_delay_s": [
+        60.0,
+        75.0,
+        90.0,
+        105.0,
+        120.0,
+        135.0,
+        150.0,
+        165.0,
+        180.0
+      ],
+      "tau_dhw_fast": [
+        50.0,
+        60.0,
+        75.0,
+        90.0,
+        110.0,
+        130.0,
+        150.0,
+        170.0,
+        190.0
+      ]
+    },
+    "cold_fit_steps": 30
+  },
+  "tune_metrics": {
+    "TUNE-1": {
+      "rmse": 0.851804758882841,
+      "mae": 0.33966231602691194,
+      "p95": 1.3028326458531996,
+      "bias": 0.08694066567333604,
+      "maxabs": 6.319830088707548,
+      "r2": 0.9826097941598101,
+      "samples": 1753,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 182.92289900779724
+    },
+    "TUNE-2": {
+      "rmse": 0.8749713781105464,
+      "mae": 0.5019755877769385,
+      "p95": 1.4813652480649218,
+      "bias": 0.13552918186548343,
+      "maxabs": 6.196997799916019,
+      "r2": 0.9976668605385568,
+      "samples": 211,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 70.31912899017334
+    },
+    "TUNE-3": {
+      "rmse": 1.7470353571751893,
+      "mae": 1.2133054252744446,
+      "p95": 3.585618302378708,
+      "bias": 0.6127705110008879,
+      "maxabs": 7.820577399093025,
+      "r2": 0.9766147627222598,
+      "samples": 2065,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 268.1877329349518
+    }
+  },
+  "validation_scenarios": [
+    {
+      "id": "VAL-1",
+      "name": "VAL-1 Regime A Heated Run 2",
+      "type": "Untouched validation",
+      "t_start": "2026-01-15 00:00:00+01:00",
+      "t_end": "2026-01-15 05:00:00+01:00",
+      "samples": 1801,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 166.36525583267212,
+      "rmse": 0.8602908073357273,
+      "mae": 0.5543236071562541,
+      "p95": 1.4913618167367986,
+      "bias": 0.4756281818988821,
+      "maxabs": 5.83760796409787,
+      "r2": 0.7509443115730376,
+      "offline_centered_filter_rmse_c": 0.8602908073357273,
+      "branch_counts": {
+        "active_heating": 1597,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 204,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [
+          [
+            194,
+            209
+          ],
+          [
+            552,
+            599
+          ],
+          [
+            1399,
+            1445
+          ],
+          [
+            1558,
+            1604
+          ],
+          [
+            1858,
+            1903
+          ]
+        ],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-2",
+      "name": "VAL-2 Regime B Combined Run 1",
+      "type": "Untouched validation",
+      "t_start": "2026-02-19 14:40:00+01:00",
+      "t_end": "2026-02-19 17:25:00+01:00",
+      "samples": 991,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 95.9562029838562,
+      "rmse": 0.9932236035772212,
+      "mae": 0.8358965708463741,
+      "p95": 1.5018532622457315,
+      "bias": -0.23508282782743073,
+      "maxabs": 5.0251193330454385,
+      "r2": 0.9453874850023793,
+      "offline_centered_filter_rmse_c": 1.0037953001658342,
+      "branch_counts": {
+        "active_heating": 949,
+        "circ_unheated_cutoff": 17,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 25,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [
+          [
+            1030,
+            1052
+          ]
+        ],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-3",
+      "name": "VAL-3 Regime B Combined Run 2",
+      "type": "Untouched validation",
+      "t_start": "2026-01-13 05:00:00+01:00",
+      "t_end": "2026-01-13 07:35:00+01:00",
+      "samples": 931,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 194.38268184661865,
+      "rmse": 0.7857922150216125,
+      "mae": 0.7199849691980293,
+      "p95": 1.1861709646427698,
+      "bias": -0.6321262699968164,
+      "maxabs": 2.291524131169851,
+      "r2": 0.9826347330657694,
+      "offline_centered_filter_rmse_c": 0.7857922150216125,
+      "branch_counts": {
+        "active_heating": 921,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 10,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-4",
+      "name": "VAL-4 Hydraulic Transition A->B",
+      "type": "Untouched validation",
+      "t_start": "2026-01-14 05:00:00+01:00",
+      "t_end": "2026-01-14 07:30:00+01:00",
+      "samples": 901,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 184.97960495948792,
+      "rmse": 1.0697069442439646,
+      "mae": 1.0279111021236316,
+      "p95": 1.3352138464786378,
+      "bias": -0.9791225460263937,
+      "maxabs": 1.8011660931984466,
+      "r2": 0.9628357494770696,
+      "offline_centered_filter_rmse_c": 1.0697069442439646,
+      "branch_counts": {
+        "active_heating": 901,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 0,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-5",
+      "name": "VAL-5 Observed Holdout (seen in v6.2)",
+      "type": "Observed holdout (seen in v6.2) - reported, cannot support sign-off",
+      "t_start": "2026-02-26 00:00:00+01:00",
+      "t_end": "2026-02-26 12:00:00+01:00",
+      "samples": 4321,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 295.8947739601135,
+      "rmse": 3.4355663268089938,
+      "mae": 2.5107714904674046,
+      "p95": 6.763114862640368,
+      "bias": -1.8334423618559779,
+      "maxabs": 13.351815654269402,
+      "r2": 0.9646633076917304,
+      "offline_centered_filter_rmse_c": 3.4107155279045465,
+      "branch_counts": {
+        "active_heating": 1431,
+        "circ_unheated_cutoff": 1325,
+        "dhw_divert": 226,
+        "idle": 1201,
+        "casing_decay": 122,
+        "post_dhw_return": 16,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": [
+          185,
+          215
+        ],
+        "cutoffs": [
+          [
+            1828,
+            1849
+          ],
+          [
+            2576,
+            2598
+          ],
+          [
+            2766,
+            2789
+          ],
+          [
+            2945,
+            2963
+          ]
+        ],
+        "final": [
+          3928,
+          4424
+        ]
+      }
+    },
+    {
+      "id": "VAL-6",
+      "name": "VAL-6 Circulating DHW Divert + Return",
+      "type": "New untouched validation (replaces old VAL-6)",
+      "t_start": "2026-02-18 05:50:00+01:00",
+      "t_end": "2026-02-18 06:55:00+01:00",
+      "samples": 391,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 76.13760805130005,
+      "rmse": 4.432665733797686,
+      "mae": 3.029163282936389,
+      "p95": 10.761897100637322,
+      "bias": -2.22583322339559,
+      "maxabs": 15.979124272437893,
+      "r2": 0.920314580139448,
+      "offline_centered_filter_rmse_c": 4.432665733797686,
+      "branch_counts": {
+        "active_heating": 163,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 214,
+        "idle": 0,
+        "casing_decay": 6,
+        "post_dhw_return": 8,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    },
+    {
+      "id": "VAL-7",
+      "name": "VAL-7 DHW Priority Divert (Idle)",
+      "type": "Untouched validation",
+      "t_start": "2026-01-03 03:20:00+01:00",
+      "t_end": "2026-01-03 03:50:00+01:00",
+      "samples": 181,
+      "excluded_samples": 0,
+      "tinc_max_age_s": 205.3000202178955,
+      "rmse": 0.3956818787094618,
+      "mae": 0.3742627006894575,
+      "p95": 0.5049141112338056,
+      "bias": 0.37392592591656537,
+      "maxabs": 0.5294377852799812,
+      "r2": -0.16079469780015376,
+      "offline_centered_filter_rmse_c": 0.3956818787094618,
+      "branch_counts": {
+        "active_heating": 0,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 181,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      },
+      "windows": {
+        "cold": null,
+        "cutoffs": [],
+        "final": null
+      }
+    }
+  ],
+  "holdout_scenarios": [
+    {
+      "id": "VAL-8",
+      "name": "VAL-8 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "t_start": "2026-03-16T00:00:00+01:00",
+      "t_end": "2026-03-16T12:00:00+01:00",
+      "samples": 4321,
+      "excluded_samples": 0,
+      "rmse": 3.4207071012541856,
+      "mae": 2.674759614572643,
+      "p95": 6.260866046744415,
+      "bias": -2.348543708516437,
+      "r2": 0.9600139481415909,
+      "branch_counts": {
+        "active_heating": 1168,
+        "circ_unheated_cutoff": 2888,
+        "dhw_divert": 144,
+        "idle": 0,
+        "casing_decay": 113,
+        "post_dhw_return": 8,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    {
+      "id": "VAL-9",
+      "name": "VAL-9 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "t_start": "2026-03-22T12:00:00+01:00",
+      "t_end": "2026-03-23T00:00:00+01:00",
+      "samples": 4321,
+      "excluded_samples": 0,
+      "rmse": 3.687388380045394,
+      "mae": 2.0995592398937966,
+      "p95": 3.1100229510072452,
+      "bias": -0.9741646993134266,
+      "r2": 0.9624789363123789,
+      "branch_counts": {
+        "active_heating": 956,
+        "circ_unheated_cutoff": 2982,
+        "dhw_divert": 317,
+        "idle": 0,
+        "casing_decay": 41,
+        "post_dhw_return": 24,
+        "stale_hold": 1,
+        "pump_off_hold": 0
+      }
+    }
+  ],
+  "acceptance_criteria": {
+    "gates": [
+      {
+        "suite": "space_heating",
+        "label": "Mean episode RMSE (degC)",
+        "op": "<",
+        "threshold": 1.25,
+        "actual": 3.6279232359537126,
+        "passed": false,
+        "margin": -2.3779232359537126,
+        "margin_fraction": -1.90233858876297,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "label": "Pooled RMSE (degC)",
+        "op": "<",
+        "threshold": 1.5,
+        "actual": 3.6283419902415153,
+        "passed": false,
+        "margin": -2.1283419902415153,
+        "margin_fraction": -1.4188946601610102,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "label": "Mean episode MAE (degC)",
+        "op": "<",
+        "threshold": 0.85,
+        "actual": 2.4376915427981762,
+        "passed": false,
+        "margin": -1.5876915427981761,
+        "margin_fraction": -1.867872403291972,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "label": "Minimum per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": 0.959745163638576,
+        "passed": true,
+        "margin": 0.05974516363857596,
+        "margin_fraction": 0.06638351515397328,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "label": "DHW plunge RMSE (degC)",
+        "op": "<",
+        "threshold": 4.5,
+        "actual": 15.852258673142698,
+        "passed": false,
+        "margin": -11.352258673142698,
+        "margin_fraction": -2.5227241495872663,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "label": "DHW per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": -1.775572670756043,
+        "passed": false,
+        "margin": -2.675572670756043,
+        "margin_fraction": -2.97285852306227,
+        "marginal": false
+      }
+    ],
+    "overall_pass": false
+  },
+  "five_way_tune1": {
+    "v3 baseline (frozen v5 constants)": {
+      "mode": "v3",
+      "overall": {
+        "rmse": 2.4277009518818273,
+        "mae": 0.71212916113408,
+        "p95": 4.065017213672044,
+        "bias": 0.599859204300113,
+        "maxabs": 21.639461281967513,
+        "r2": 0.8587413746418862,
+        "samples": 1753,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 182.92289900779724
+      },
+      "cold": {
+        "rmse": 3.723729800942786,
+        "mae": 2.838921003419965,
+        "bias": 2.7884137169047283,
+        "maxabs": 7.442477546209986,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 15.343477010726929
+      },
+      "cutoffs": {
+        "rmse": 5.408192711341493,
+        "mae": 4.544509703095994,
+        "bias": 4.544509703095994,
+        "maxabs": 9.138953379986503,
+        "samples": 52,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 42.78389382362366
+      },
+      "final": {
+        "rmse": 8.571377390805875,
+        "mae": 5.990584963267805,
+        "bias": 5.990584963267805,
+        "maxabs": 21.639461281967513,
+        "samples": 113,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 40.04858994483948
+      },
+      "branch_counts": {
+        "active_heating": 1740,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 13,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v4 clamped (frozen v5 constants)": {
+      "mode": "v4",
+      "overall": {
+        "rmse": 1.200056034623821,
+        "mae": 0.45831088664324166,
+        "p95": 2.6474099430929607,
+        "bias": 0.20965323160879218,
+        "maxabs": 8.116138843293655,
+        "r2": 0.9654834286828571,
+        "samples": 1753,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 182.92289900779724
+      },
+      "cold": {
+        "rmse": 3.723729800942786,
+        "mae": 2.838921003419965,
+        "bias": 2.7884137169047283,
+        "maxabs": 7.442477546209986,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 15.343477010726929
+      },
+      "cutoffs": {
+        "rmse": 3.381830763787553,
+        "mae": 2.9354933383835498,
+        "bias": 2.9354933383835498,
+        "maxabs": 5.529260999691232,
+        "samples": 52,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 42.78389382362366
+      },
+      "final": {
+        "rmse": 3.5476124767193937,
+        "mae": 2.7989254031612036,
+        "bias": 0.6831849292297585,
+        "maxabs": 8.116138843293655,
+        "samples": 113,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 40.04858994483948
+      },
+      "branch_counts": {
+        "active_heating": 1575,
+        "circ_unheated_cutoff": 37,
+        "dhw_divert": 0,
+        "idle": 13,
+        "casing_decay": 128,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v5 two-stage (frozen v5 constants)": {
+      "mode": "v5",
+      "overall": {
+        "rmse": 0.9199399623558883,
+        "mae": 0.3737010019527119,
+        "p95": 1.9594776385724795,
+        "bias": 0.13974358298423653,
+        "maxabs": 7.442477546209986,
+        "r2": 0.979716468603358,
+        "samples": 1753,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 182.92289900779724
+      },
+      "cold": {
+        "rmse": 3.723729800942786,
+        "mae": 2.838921003419965,
+        "bias": 2.7884137169047283,
+        "maxabs": 7.442477546209986,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 15.343477010726929
+      },
+      "cutoffs": {
+        "rmse": 2.818747944201238,
+        "mae": 2.4734264177660923,
+        "bias": 0.8032705677036335,
+        "maxabs": 4.7392298236721615,
+        "samples": 52,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 42.78389382362366
+      },
+      "final": {
+        "rmse": 2.258625324495892,
+        "mae": 1.7925594745948263,
+        "bias": 0.7012950488978008,
+        "maxabs": 4.848187540535093,
+        "samples": 113,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 40.04858994483948
+      },
+      "branch_counts": {
+        "active_heating": 1574,
+        "circ_unheated_cutoff": 31,
+        "dhw_divert": 0,
+        "idle": 13,
+        "casing_decay": 129,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 6
+      }
+    },
+    "v6.3 architecture (frozen v5 constants + fitted cold front)": {
+      "mode": "v6",
+      "overall": {
+        "rmse": 0.7922098062665368,
+        "mae": 0.33921502282790855,
+        "p95": 1.8541505970008119,
+        "bias": 0.10087949555759082,
+        "maxabs": 4.848187540535093,
+        "r2": 0.9849580193258871,
+        "samples": 1753,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 182.92289900779724
+      },
+      "cold": {
+        "rmse": 0.9928362839772681,
+        "mae": 0.7525435960095693,
+        "bias": 0.5948195710241062,
+        "maxabs": 2.0920810097885827,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 15.343477010726929
+      },
+      "cutoffs": {
+        "rmse": 2.818747944201238,
+        "mae": 2.4734264177660923,
+        "bias": 0.8032705677036335,
+        "maxabs": 4.7392298236721615,
+        "samples": 52,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 42.78389382362366
+      },
+      "final": {
+        "rmse": 2.258625324495892,
+        "mae": 1.7925594745948263,
+        "bias": 0.7012950488978008,
+        "maxabs": 4.848187540535093,
+        "samples": 113,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 40.04858994483948
+      },
+      "branch_counts": {
+        "active_heating": 1574,
+        "circ_unheated_cutoff": 31,
+        "dhw_divert": 0,
+        "idle": 13,
+        "casing_decay": 129,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 6
+      }
+    },
+    "v6.3 final (fitted v6.3 constants)": {
+      "mode": "v6",
+      "overall": {
+        "rmse": 0.851804758882841,
+        "mae": 0.33966231602691194,
+        "p95": 1.3028326458531996,
+        "bias": 0.08694066567333604,
+        "maxabs": 6.319830088707548,
+        "r2": 0.9826097941598101,
+        "samples": 1753,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 182.92289900779724
+      },
+      "cold": {
+        "rmse": 0.9051857198810428,
+        "mae": 0.7143144281589261,
+        "bias": 0.3226404733891217,
+        "maxabs": 1.9968976270237597,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 15.343477010726929
+      },
+      "cutoffs": {
+        "rmse": 2.617332372805716,
+        "mae": 2.039367865168493,
+        "bias": 1.3275345950193913,
+        "maxabs": 4.662157083544429,
+        "samples": 52,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 42.78389382362366
+      },
+      "final": {
+        "rmse": 2.6694659735896558,
+        "mae": 2.0075965195429863,
+        "bias": 0.3052893677431036,
+        "maxabs": 6.319830088707548,
+        "samples": 113,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 40.04858994483948
+      },
+      "branch_counts": {
+        "active_heating": 1574,
+        "circ_unheated_cutoff": 37,
+        "dhw_divert": 0,
+        "idle": 13,
+        "casing_decay": 129,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    }
+  },
+  "five_way_tune3": {
+    "v3 baseline (frozen v5 constants)": {
+      "mode": "v3",
+      "overall": {
+        "rmse": 4.7627621696688065,
+        "mae": 2.543131991289867,
+        "p95": 9.908113613869816,
+        "bias": 2.3596728446774775,
+        "maxabs": 24.489779194389307,
+        "r2": 0.8261974345604295,
+        "samples": 2065,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 268.1877329349518
+      },
+      "cold": {
+        "rmse": 2.73947328071428,
+        "mae": 1.7909269428050818,
+        "bias": 1.740594604576731,
+        "maxabs": 6.260365203863618,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 18.066272974014282
+      },
+      "cutoffs": {
+        "rmse": 1.2505230224867747,
+        "mae": 1.0790352584806457,
+        "bias": -1.0780824630830017,
+        "maxabs": 1.9522136556038419,
+        "samples": 41,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 16.283977031707764
+      },
+      "final": {
+        "rmse": 14.303050697172102,
+        "mae": 10.233950603595025,
+        "bias": 10.16656844931274,
+        "maxabs": 24.489779194389307,
+        "samples": 61,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 14.172351121902466
+      },
+      "branch_counts": {
+        "active_heating": 1711,
+        "circ_unheated_cutoff": 0,
+        "dhw_divert": 0,
+        "idle": 354,
+        "casing_decay": 0,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v4 clamped (frozen v5 constants)": {
+      "mode": "v4",
+      "overall": {
+        "rmse": 8.081079338399043,
+        "mae": 4.211148054326277,
+        "p95": 18.57018718594667,
+        "bias": -3.616753992070114,
+        "maxabs": 21.232936408925774,
+        "r2": 0.4996462799451983,
+        "samples": 2065,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 268.1877329349518
+      },
+      "cold": {
+        "rmse": 2.73947328071428,
+        "mae": 1.7909269428050818,
+        "bias": 1.740594604576731,
+        "maxabs": 6.260365203863618,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 18.066272974014282
+      },
+      "cutoffs": {
+        "rmse": 1.3286471625017222,
+        "mae": 1.1486167194192132,
+        "bias": -1.1486167194192132,
+        "maxabs": 2.081628167427077,
+        "samples": 41,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 16.283977031707764
+      },
+      "final": {
+        "rmse": 2.330412537073301,
+        "mae": 1.6715101947836157,
+        "bias": -0.40087410142687724,
+        "maxabs": 6.096349704046062,
+        "samples": 61,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 14.172351121902466
+      },
+      "branch_counts": {
+        "active_heating": 1497,
+        "circ_unheated_cutoff": 153,
+        "dhw_divert": 0,
+        "idle": 354,
+        "casing_decay": 61,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 0
+      }
+    },
+    "v5 two-stage (frozen v5 constants)": {
+      "mode": "v5",
+      "overall": {
+        "rmse": 7.740262506124946,
+        "mae": 4.02112724911968,
+        "p95": 18.012992100012788,
+        "bias": -3.2913133105023245,
+        "maxabs": 20.730238138598327,
+        "r2": 0.5409608028233648,
+        "samples": 2065,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 268.1877329349518
+      },
+      "cold": {
+        "rmse": 2.73947328071428,
+        "mae": 1.7909269428050818,
+        "bias": 1.740594604576731,
+        "maxabs": 6.260365203863618,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 18.066272974014282
+      },
+      "cutoffs": {
+        "rmse": 1.3448169813585675,
+        "mae": 1.1635276420327776,
+        "bias": -1.1635276420327776,
+        "maxabs": 2.093567237697563,
+        "samples": 41,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 16.283977031707764
+      },
+      "final": {
+        "rmse": 3.0063428266850822,
+        "mae": 2.4961645302023583,
+        "bias": 2.4062235722407643,
+        "maxabs": 4.704486855144943,
+        "samples": 61,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 14.172351121902466
+      },
+      "branch_counts": {
+        "active_heating": 1497,
+        "circ_unheated_cutoff": 135,
+        "dhw_divert": 0,
+        "idle": 354,
+        "casing_decay": 61,
+        "post_dhw_return": 0,
+        "stale_hold": 0,
+        "pump_off_hold": 18
+      }
+    },
+    "v6.3 architecture (frozen v5 constants + fitted cold front)": {
+      "mode": "v6",
+      "overall": {
+        "rmse": 3.0055686363508523,
+        "mae": 1.802099613766525,
+        "p95": 6.898685336343953,
+        "bias": 1.5985500989543617,
+        "maxabs": 10.41513879633223,
+        "r2": 0.9307863596194463,
+        "samples": 2065,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 268.1877329349518
+      },
+      "cold": {
+        "rmse": 1.0631242039731073,
+        "mae": 0.8383985523731439,
+        "bias": 0.11284184676266816,
+        "maxabs": 2.8989490408646112,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 18.066272974014282
+      },
+      "cutoffs": {
+        "rmse": 1.330627724874657,
+        "mae": 1.1511522519771638,
+        "bias": -1.1511522519771638,
+        "maxabs": 2.0631962015282497,
+        "samples": 41,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 16.283977031707764
+      },
+      "final": {
+        "rmse": 3.0063428266850822,
+        "mae": 2.4961645302023583,
+        "bias": 2.4062235722407643,
+        "maxabs": 4.704486855144943,
+        "samples": 61,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 14.172351121902466
+      },
+      "branch_counts": {
+        "active_heating": 1497,
+        "circ_unheated_cutoff": 135,
+        "dhw_divert": 0,
+        "idle": 353,
+        "casing_decay": 61,
+        "post_dhw_return": 0,
+        "stale_hold": 1,
+        "pump_off_hold": 18
+      }
+    },
+    "v6.3 final (fitted v6.3 constants)": {
+      "mode": "v6",
+      "overall": {
+        "rmse": 1.7470353571751893,
+        "mae": 1.2133054252744446,
+        "p95": 3.585618302378708,
+        "bias": 0.6127705110008879,
+        "maxabs": 7.820577399093025,
+        "r2": 0.9766147627222598,
+        "samples": 2065,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 268.1877329349518
+      },
+      "cold": {
+        "rmse": 1.1235880683422468,
+        "mae": 0.9333419954819031,
+        "bias": -0.12573705950767458,
+        "maxabs": 2.7960417439505036,
+        "samples": 30,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 18.066272974014282
+      },
+      "cutoffs": {
+        "rmse": 1.5796031919035733,
+        "mae": 1.3874087848804892,
+        "bias": -1.3874087848804892,
+        "maxabs": 2.3786111430014216,
+        "samples": 41,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 16.283977031707764
+      },
+      "final": {
+        "rmse": 2.4414742105204614,
+        "mae": 1.9689314076576914,
+        "bias": 0.7032046540507001,
+        "maxabs": 4.4021398909764855,
+        "samples": 61,
+        "excluded_samples": 0,
+        "tinc_max_age_s": 14.172351121902466
+      },
+      "branch_counts": {
+        "active_heating": 1497,
+        "circ_unheated_cutoff": 153,
+        "dhw_divert": 0,
+        "idle": 353,
+        "casing_decay": 61,
+        "post_dhw_return": 0,
+        "stale_hold": 1,
+        "pump_off_hold": 0
+      }
+    }
+  },
+  "parity": {
+    "compiled": true,
+    "compiler": "/usr/bin/g++",
+    "flags": [
+      "-O2",
+      "-std=c++17"
+    ],
+    "header": "step2_hx_dynamics_v63.hpp",
+    "harness": "step2_hx_parity_harness_v63.cpp",
+    "csv": "step2_hx_parity_input_v63.csv",
+    "binary": "step2_hx_parity_harness_v63",
+    "cold_ring_n": 10,
+    "rows": 30712,
+    "max_abs_diff_c": 5.684341886080802e-14,
+    "tolerance_c": 1e-09,
+    "default": {
+      "rows": 30712,
+      "max_abs_diff_c": 5.684341886080802e-14,
+      "worst": [
+        "FIT-1",
+        10,
+        68.32249046229515,
+        68.3224904622951
+      ]
+    },
+    "perturbed": {
+      "rows": 30712,
+      "max_abs_diff_c": 5.684341886080802e-14,
+      "worst": [
+        "FIT-1",
+        10,
+        68.32249046229515,
+        68.3224904622951
+      ],
+      "parameters": {
+        "L_cold_start": 200.0,
+        "L_pump_off": 0.0,
+        "tau_cold_front": 20.0
+      }
+    },
+    "worst": [
+      "FIT-1",
+      10,
+      68.32249046229515,
+      68.3224904622951
+    ]
+  },
+  "unit_tests": [
+    {
+      "name": "UT1_LowLift",
+      "passed": true,
+      "value": 25.03000000000005,
+      "expected": "~25.03 C",
+      "detail": "final=25.0300 C"
+    },
+    {
+      "name": "UT2_PumpOffHoldPlunge",
+      "passed": true,
+      "value": 20.000000028969435,
+      "expected": "hold then <30 C",
+      "detail": "L_pump_off=0 -> no hold, final=20.00 C"
+    },
+    {
+      "name": "UT3_BurnerOffPumpOn",
+      "passed": true,
+      "value": 36.77400395285743,
+      "expected": "25-50 C (casing decay)",
+      "detail": "final=36.77 C"
+    },
+    {
+      "name": "UT4_DHWEntryReturn",
+      "passed": true,
+      "value": [
+        25.000000000340247,
+        67.52331935123922
+      ],
+      "expected": "DHW <32 C, recovery >55 C",
+      "detail": "dhw_end=25.00 C, rec_end=67.52 C"
+    },
+    {
+      "name": "UT5_ColdStartWarmup",
+      "passed": true,
+      "value": [
+        20.0,
+        53.07369282262899
+      ],
+      "expected": "flat <21 C then >45 C",
+      "detail": "flat=20.00 C, warm=53.07 C"
+    },
+    {
+      "name": "UT6_SingleStepGlitch",
+      "passed": true,
+      "value": 41.3788922827135,
+      "expected": "1-sample blip stays casing; 2-sample relight is active",
+      "detail": "glitch branch=casing_decay, relight branch=active_heating, active no-glitch=98/glitch=98/relight=99, sim[202]=41.38 C"
+    },
+    {
+      "name": "UT7_LowLiftBranch2B",
+      "passed": true,
+      "value": [
+        25.000000000000128,
+        599,
+        599
+      ],
+      "expected": "v6 cutoff branch; v5 active (must fail)",
+      "detail": "v6 cutoff=599, final=25.00 C; v5 active=599"
+    }
+  ],
+  "staleness": {
+    "tb_max_age_s": 900.0,
+    "event_max_age_s": 14400.0,
+    "policy": "analog tb/tret <= 900 s; event bp/pmod/p1/p2/p3 stale only if > 14400 s and tb_age > 900 s",
+    "stale_hold_counts": {
+      "VAL-1": 0,
+      "VAL-2": 0,
+      "VAL-3": 10,
+      "VAL-4": 0,
+      "VAL-5": 0,
+      "VAL-6": 0,
+      "VAL-7": 0,
+      "VAL-8": 0,
+      "VAL-9": 1,
+      "TUNE-1": 0,
+      "TUNE-2": 0,
+      "TUNE-3": 1
+    }
+  },
+  "sensor_resolution_c": {
+    "mixer_incoming": 0.0625,
+    "mixer_incoming_rows": 200000,
+    "mixer_return": 0.0625,
+    "mixer_return_rows": 132764,
+    "room": 0.09999999999999787,
+    "room_rows": 33512,
+    "boiler_flow": 0.09999999999999432,
+    "boiler_flow_rows": 200000
+  },
+  "hydraulic_decoupling": {
+    "settled": {
+      "samples": 20730,
+      "full_samples": 33152,
+      "r_mstate_tinc": 0.775877620489161,
+      "r_mstate_dthx": -0.35403734829456585,
+      "r_tb_tinc": 0.7612317940283161
+    },
+    "full_fit_window": {
+      "samples": 33152,
+      "r_mstate_tinc": 0.7466225712431398,
+      "r_mstate_dthx": -0.40457623042197005
+    },
+    "interpretation": "no material linear association of mixer_state with dT_hx; mixer_state does correlate with T_incoming"
+  }
+}

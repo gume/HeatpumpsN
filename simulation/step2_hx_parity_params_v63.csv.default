@@ -1,0 +1,16 @@
+tau_hx,79.821089954678484
+eps_A,0.94496265238570754
+eps_B1,0.92313705034499516
+eps_B2,0.90601762522167029
+eps_C,0.90904414559310753
+dhw_delay_s,135
+tau_dhw_fast,87.844005497855363
+post_dhw_delay_s,90
+L_pump_off,0
+L_burn_off,0
+tau_burn_off,3200
+tau_cutoff,180
+tau_idle,8669.8904095220933
+tau_rad_off,1897.3127013816516
+L_cold_start,100
+tau_cold_front,10

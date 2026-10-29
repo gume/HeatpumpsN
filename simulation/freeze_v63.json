@@ -8,5 +8,7 @@
   "selector_file": "simulation/select_holdout_v63.py",
   "selector_sha256": "057cc83cdb03cb414762fb268ab5be671d703e75e51ef3430a147f762baa7ac7",
   "selector_git_blob": "cd4401d6bf7d5d80c7f4094ee9ad828b6edb9a32",
-  "freeze_rule": "main() must refuse to evaluate the holdout if either frozen file hash differs from this manifest"
+  "freeze_rule": "main() must refuse to evaluate the holdout if either frozen file hash differs from this manifest",
+  "phase0_commit": "facafae",
+  "phase0_commit_subject": "v6.3 Phase 0: freeze untouched holdout and acceptance gates"
 }

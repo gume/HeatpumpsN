@@ -1,0 +1,2 @@
+window_start,window_stop,samples,burner_on_samples,pump_on_samples,relight_inside,relight_after,classified_as
+1820,1896,76,0,76,False,False,run_down
