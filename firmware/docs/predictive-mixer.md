@@ -64,9 +64,15 @@ the last prediction by more than `trigger_k`, the controller does the following:
 5. It executes only the first move. The next plan starts from the new
    measurements (receding horizon).
 
-While the boiler pauses (supply below setpoint + `supply_margin_k`), the
-controller plans for the supply that will come back, not the cold one. It
-pre-positions the valve for the restart instead of opening into cold water.
+While the boiler pauses (supply below setpoint + `supply_margin_k`), and while
+the supply is rising faster than 0.05 K/s (burner restart, end of DHW), the
+plan may close but never open. The boiler-role sensor lags the water by about
+75 s, so during a rise any opening is computed from a supply that is too cold,
+and after DHW the boiler water is hotter than any recent value. Offline this
+removed every DHW-related fallback.
+
+During the warm-up flush the controller holds `flush_max_pos` and does not run
+its model; it starts from real return-water measurements after the flush.
 
 **Heat-up boost.** For `boost_s` after a floor-pump start or a setpoint
 increase, moves cost `boost_scale` × their normal price, and every minute of the
@@ -142,6 +148,7 @@ radiator sets use the Step 4 radiator multiplier (0.793) on the law.
 | `supply_margin_k` | 0–20 | 3 | supply needed to act |
 | `boost_s` | 0–3600 | 600 | heat-up window after a floor-pump start or a setpoint increase > 1 K |
 | `boost_scale` | 0–1 | 0 | travel and start cost multiplier inside the window (0 = moves are free) |
+| `boost_error_k` | 0–20 | 0 (off) | also boost when \|setpoint − T_fwd\| exceeds this with a usable supply. Off by default: offline it doubled travel without faster recovery after DHW (the supply is already hot then) |
 
 An update is a JSON object. Fields that are left out keep their value:
 

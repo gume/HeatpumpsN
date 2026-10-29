@@ -30,7 +30,10 @@ BASE = dict(kp=0.5, ki=0.02, delay_s=120.0, deadband_temp=2.0, deadband_pos=0.02
             # setpoint steps [(time_s, new_setpoint)]
             sp_schedule=None,
             # firmware MPC parameter overrides for every scenario {name: value}
-            fw_params=None)
+            fw_params=None,
+            # DHW charges [(start_s, duration_s)]: the boiler diverts, the MPC is
+            # suspended as in L2 (no ticks), then resumes on the cooled loop
+            dhw_schedule=None)
 
 
 def inverse_law(knots, xk, x):
@@ -94,8 +97,9 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
         from floor_simulator.tools.fw_mpc import FwMpc
         fw = FwMpc()
         names = ("delay_s", "tau_fwd_s", "tau_inc_s", "horizon_s", "replan_s", "trigger_k", "lambda_travel",
-                 "start_cost", "margin_k", "bias_alpha", "supply_margin_k", "boost_s", "boost_scale")
-        defaults = (40.0, 34.64, 75.27, 900.0, 30.0, 0.5, 0.1, 1.0, 2.5, 0.1, 3.0, 600.0, 0.0)
+                 "start_cost", "margin_k", "bias_alpha", "supply_margin_k", "boost_s", "boost_scale",
+                 "boost_error_k")
+        defaults = (40.0, 34.64, 75.27, 900.0, 30.0, 0.5, 0.1, 1.0, 2.5, 0.1, 3.0, 600.0, 0.0, 0.0)
         fw_scalars = [float((c["fw_params"] or {}).get(nm, d)) for nm, d in zip(names, defaults)]
 
         def apply_set(sc):
@@ -113,6 +117,10 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
             if s == int(ts):
                 setpoint = new_sp
                 events.append((s, f"setpoint {new_sp:g}"))
+        for d0, dur in (c["dhw_schedule"] or []):
+            if s == int(d0):
+                boiler.dhw_start(dur)
+                events.append((s, "dhw"))
         if c["pos_fault"] and s == int(c["pos_fault"][0]):
             pos_est = clamp(pos_est + c["pos_fault"][1], 0.0, 1.0)
             events.append((s, "fault"))
@@ -166,7 +174,9 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                 if sc != scenario:
                     scenario = sc
                     apply_set(sc)
-                if home_until is None:
+                if home_until is None and boiler.dhw_on:
+                    pass   # L2 handles DHW before the MPC: the controller is not ticked
+                elif home_until is None:
                     kind, t = fw.tick(float(s), pos_est, target, sens["boiler"], sens["return"], meas,
                                       setpoint, c["min_pos"], c["max_pos"], c["travel_s"], c["ovs_delta"],
                                       scenario)

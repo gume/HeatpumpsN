@@ -60,6 +60,10 @@ struct ParamSet {
   // may open past the steady position and back off once the loop is warm.
   float boost_s;
   float boost_scale;
+  // Also boost when |setpoint - T_fwd| exceeds boost_error_k with a usable
+  // supply (e.g. after DHW charging); 0 disables. Not re-armed within boost_s
+  // after a boost window ended.
+  float boost_error_k;
   uint32_t revision;         // bumped on every accepted update
 };
 

@@ -20,11 +20,11 @@ int mpc_set_params(void* c, int scenario, const float* knots, const float* xk, c
   if (xk) for (int i = 0; i < kKnots; ++i) p.xk[i] = xk[i];
   if (scalars) {
     // delay, tau_fwd, tau_inc, horizon, replan, trigger, lambda, start_cost, margin, bias_alpha,
-    // supply, boost_s, boost_scale
+    // supply, boost_s, boost_scale, boost_error_k
     float* f[] = {&p.delay_s, &p.tau_fwd_s, &p.tau_inc_s, &p.horizon_s, &p.replan_s, &p.trigger_k,
                   &p.lambda_travel, &p.start_cost, &p.margin_k, &p.bias_alpha, &p.supply_margin_k,
-                  &p.boost_s, &p.boost_scale};
-    for (int i = 0; i < 13; ++i) *f[i] = scalars[i];
+                  &p.boost_s, &p.boost_scale, &p.boost_error_k};
+    for (int i = 0; i < 14; ++i) *f[i] = scalars[i];
   }
   const char* err = nullptr;
   if (!validate(p, &err)) return -1;

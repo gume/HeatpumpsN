@@ -125,6 +125,7 @@ ParamSet default_params(uint8_t scenario) {
   p.supply_margin_k = 3.0f;
   p.boost_s = 600.0f;
   p.boost_scale = 0.0f;
+  p.boost_error_k = 0.0f;   // off: offline it added travel without faster recovery
   p.revision = 0;
   return p;
 }
@@ -153,6 +154,7 @@ bool validate(const ParamSet& p, const char** err) {
     else if (bad(p.supply_margin_k, 0.0f, 20.0f)) e = "supply_margin_k";
     else if (bad(p.boost_s, 0.0f, 3600.0f)) e = "boost_s";
     else if (bad(p.boost_scale, 0.0f, 1.0f)) e = "boost_scale";
+    else if (bad(p.boost_error_k, 0.0f, 20.0f)) e = "boost_error_k";
   }
   if (err != nullptr) *err = e;
   return e == nullptr;
@@ -397,6 +399,13 @@ Command Controller::plan(const Inputs& in, bool triggered) {
   st_.plan_moves[0] = kSteps[best / (kStepCount * kStepCount)];
   st_.plan_moves[1] = kSteps[(best / kStepCount) % kStepCount];
   st_.plan_moves[2] = kSteps[best % kStepCount];
+  // While the supply is cold, or rising fast, the plan may close but never
+  // open. The boiler-role sensor lags the water by ~75 s, so during a rise
+  // (burner restart, end of DHW, when the boiler water sits at its DHW
+  // temperature) every opening is computed from a supply that is too cold.
+  const bool rising = slope_ > kBiasFreezeSlopeKPerS;
+  const float first = (paused || rising) ? fminf(st_.plan_moves[0], 0.0f) : st_.plan_moves[0];
+  st_.plan_moves[0] = first;
   st_.traj_dt_s = n * kModelDt / kTrajPoints;
   for (int i = 0; i < kTrajPoints; ++i) {
     int k = ((i + 1) * n) / kTrajPoints - 1;
@@ -489,6 +498,14 @@ Command Controller::tick(const Inputs& in) {
     replan_ = true;
   }
   last_sp_ = in.setpoint;
+  // A large tracking error with a usable supply is a heat-up as well (e.g.
+  // the forward water after DHW charging), once per boost_s hold-off.
+  if (st_.mode == MODE_MPC && init_ && p_.boost_error_k > 0.0f && in.fwd_valid && in.inc_valid &&
+      fabsf(in.setpoint - in.t_fwd) > p_.boost_error_k &&
+      in.t_inc >= in.setpoint + p_.supply_margin_k && in.now_s >= boost_until_s_ + p_.boost_s) {
+    boost_until_s_ = in.now_s + p_.boost_s;
+    replan_ = true;
+  }
   st_.boost = in.now_s < boost_until_s_;
   // Supervision reference (see sp_ref_ in the header).
   if (!sp_ref_init_ || in.setpoint >= sp_ref_) {

@@ -17,7 +17,7 @@ namespace {
 constexpr const char* kNamespace = "hpnmpc";
 constexpr const char* kKey = "blob";
 constexpr uint32_t kMagic = 0x48504E4Du;  // "HPNM"
-constexpr uint16_t kVersion = 2;  // no migration: another version loads defaults
+constexpr uint16_t kVersion = 3;  // no migration: another version loads defaults
 constexpr uint32_t kHomingExtraMs = 10000u;   // stroke margin, as the portal's endstop home
 
 struct Blob {
@@ -215,6 +215,7 @@ const Field kFields[] = {
     {"supply_margin_k", offsetof(ParamSet, supply_margin_k)},
     {"boost_s", offsetof(ParamSet, boost_s)},
     {"boost_scale", offsetof(ParamSet, boost_scale)},
+    {"boost_error_k", offsetof(ParamSet, boost_error_k)},
 };
 
 float& field(ParamSet& p, const Field& f) {
@@ -292,6 +293,17 @@ bool control(const Config& config, SystemState& state, bool flush_active) {
   if (g_ctrl.mode() == MODE_LEGACY) {
     publish_status(-1.0f);
     return false;
+  }
+  if (flush_active) {
+    // Warm-up flush (plan 04 §2.3): stagnant water passes the sensors and the
+    // return reading is not valid yet. Hold the flush position and keep the
+    // model out of it; it starts from real measurements after the flush.
+    const float ceiling = isfinite(state.mix_ceiling) && state.mix_ceiling > 0.0f
+                              ? clampf(state.mix_ceiling, 0.01f, 1.0f)
+                              : mixer_ceiling(config);
+    state.mix_target_pos = clampf(config.flush_max_pos, 0.0f, ceiling);
+    publish_status(-1.0f);
+    return true;
   }
   const uint8_t sc = scenario_of(state);
   if (sc != g_scenario) {

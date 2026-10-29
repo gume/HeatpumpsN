@@ -20,7 +20,7 @@ uint32_t g_delta_low_since_ms = 0;
 uint32_t g_long_pause_since_ms = 0;
 bool g_floor_flush_active = false;
 bool g_floor_pause_active = false;
-bool g_floor_was_on = false;
+bool g_floor_req_prev = false;   // last tick's coordinated floor request (flush trigger)
 float g_integrator = 0.0f;
 bool g_overshoot_latched = false;
 
@@ -406,7 +406,7 @@ void begin(const Config& config, SystemState& state) {
   g_long_pause_since_ms = 0;
   g_floor_flush_active = false;
   g_floor_pause_active = false;
-  g_floor_was_on = false;
+  g_floor_req_prev = false;
   g_integrator = 0.0f;
   g_overshoot_latched = false;
   g_dhw_inferred = false;
@@ -441,7 +441,7 @@ void tick(const Config& config, SystemState& state) {
       state.after_run_age_s[i] = 0;
     }
     service_position_tracking(config, state, now);
-    g_floor_was_on = state.pump_floor_intended;
+    g_floor_req_prev = state.pump_floor_intended;
     return;
   }
 
@@ -490,13 +490,30 @@ void tick(const Config& config, SystemState& state) {
   bool req_rad2 = demand_rad2;
   bool req_heater = req_floor || req_rad1 || req_rad2;
 
+  // --- Floor delta-T collapse pause (held) -------------------------------
+  // While the pause runs the floor request stays off; when it expires the
+  // floor restarts through a warm-up flush (below), as plan 04 §2.4.3 asks.
+  if (g_floor_pause_active) {
+    if (!demand_floor || static_cast<int32_t>(now - g_floor_pause_end_ms) >= 0) {
+      g_floor_pause_active = false;
+      state.flush_state = FLUSH_IDLE;
+    } else {
+      req_floor = false;
+      state.flush_state = FLUSH_PAUSED_DELTA_T;
+      div = DIV_FLOOR_DELTA_T_COLLAPSED;
+    }
+  }
+
   // --- Floor warm-up flush -------------------------------------------------
-  if (demand_floor && !g_floor_was_on) {
+  // Triggered when the floor request starts while the floor pump is not
+  // running (stagnant water): a new demand, or the restart after a pause.
+  // A demand that returns during the pump after-run needs no flush.
+  if (req_floor && !g_floor_req_prev && !state.pump_floor_phys) {
     g_floor_flush_active = true;
     g_floor_flush_end_ms = now + config.start_flush_ms;
     state.flush_state = FLUSH_ACTIVE;
     state.t_ret_flush_valid = false;
-  } else if (!demand_floor) {
+  } else if (!req_floor) {
     g_floor_flush_active = false;
     if (!g_floor_pause_active) {
       state.flush_state = FLUSH_IDLE;
@@ -509,7 +526,7 @@ void tick(const Config& config, SystemState& state) {
     state.t_ret_flush_valid = true;
   }
 
-  // --- Floor delta-T collapse ---------------------------------------------
+  // --- Floor delta-T collapse detection --------------------------------------
   if (!g_floor_pause_active && req_floor && !g_floor_flush_active && state.t_ret_flush_valid &&
       !state.dhw_active && reading_valid(state.T_mix_out) &&
       reading_valid(state.T_return_floor)) {
@@ -525,18 +542,13 @@ void tick(const Config& config, SystemState& state) {
         g_floor_pause_active = true;
         g_floor_pause_end_ms = now + config.floor_pause_duration_s * 1000u;
         g_delta_low_since_ms = 0;
+        web::log_event(0, 1210, "Floor delta-T collapsed; planned floor pause");
       }
     } else {
       g_delta_low_since_ms = 0;
     }
   } else if (!req_floor) {
     g_delta_low_since_ms = 0;
-  }
-
-  if (g_floor_pause_active && static_cast<int32_t>(now - g_floor_pause_end_ms) >= 0) {
-    g_floor_pause_active = false;
-    req_floor = demand_floor;
-    state.flush_state = FLUSH_IDLE;
   }
 
   // The heater call is board-owned: it follows the coordinated circuit
@@ -567,8 +579,14 @@ void tick(const Config& config, SystemState& state) {
   // whose demand just ended keeps its pump requested for the configured
   // after-run time so residual heat is dissipated by the board, not by HA.
   bool after_run = false;
-  after_run |= service_after_run(config, state, CIRCUIT_FLOOR, req_floor,
-                                 state.pump_floor_requested, state.pump_floor_phys, dt_s);
+  if (g_floor_pause_active) {
+    // A saturated slab gains nothing from an after-run: stop the pump now.
+    state.after_run_age_s[CIRCUIT_FLOOR] = config.pump_stop_after_heating_s;
+    state.pump_floor_requested = false;
+  } else {
+    after_run |= service_after_run(config, state, CIRCUIT_FLOOR, req_floor,
+                                   state.pump_floor_requested, state.pump_floor_phys, dt_s);
+  }
   after_run |= service_after_run(config, state, CIRCUIT_RAD1, req_rad1,
                                  state.pump_rad1_requested, state.pump_rad1_phys, dt_s);
   after_run |= service_after_run(config, state, CIRCUIT_RAD2, req_rad2,
@@ -597,7 +615,7 @@ void tick(const Config& config, SystemState& state) {
     state.divergence_reason = div;
   }
 
-  g_floor_was_on = demand_floor;
+  g_floor_req_prev = req_floor;
 
   if (!any_stale && state.system_error_code == ERR_HA_KEEPALIVE_TIMEOUT) {
     state.system_error_code = ERR_OK;
