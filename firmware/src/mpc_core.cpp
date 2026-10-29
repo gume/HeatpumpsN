@@ -26,7 +26,13 @@ constexpr float kBiasPersistS = 120.0f;
 constexpr float kMissLimitK = 2.0f;
 constexpr float kMissPersistS = 300.0f;
 constexpr float kOvershootPersistS = 10.0f;
-constexpr float kSevereOverK = 6.0f;          // above setpoint: no persistence wait
+constexpr float kSevereOverK = 6.0f;          // above the reference: no persistence wait
+constexpr float kRefDropKPerS = 1.0f / 60.0f; // reference decay after a setpoint drop
+// Coldest forward temperature the operating window allows: the mixture at the
+// minimum opening. A setpoint below it (e.g. below the return temperature) is
+// unreachable, not an overshoot. The hot fraction used here is capped so a bad
+// parameter set cannot raise this floor far enough to hide a real overshoot.
+constexpr float kFloorFractionCap = 0.15f;
 constexpr float kResumeGapS = 10.0f;
 
 // Cautious fallback. Model-free and parameter-free on purpose: it uses only
@@ -389,7 +395,11 @@ Command Controller::plan(const Inputs& in, bool triggered) {
 
 Command Controller::supervise(const Inputs& in) {
   const float dt = last_tick_s_ < 0.0 ? 0.0f : static_cast<float>(in.now_s - last_tick_s_);
-  overshoot_s_ = in.overshoot ? overshoot_s_ + dt : 0.0f;
+  const float x_min = fminf(law(in.pmin), kFloorFractionCap);
+  const float reachable = in.t_ret + x_min * fmaxf(st_.tinc_water - in.t_ret, 0.0f);
+  const float ref = fmaxf(sp_ref_, reachable);
+  const bool over = in.t_fwd >= ref + in.overshoot_delta;
+  overshoot_s_ = over ? overshoot_s_ + dt : 0.0f;
   bias_bad_s_ = fabsf(st_.bias) > kBiasLimitK ? bias_bad_s_ + dt : 0.0f;
   bool miss = false;
   if (plan_len_ > 0) {
@@ -403,7 +413,7 @@ Command Controller::supervise(const Inputs& in) {
   miss_s_ = miss ? miss_s_ + dt : 0.0f;
 
   uint8_t an = AN_NONE;
-  if (overshoot_s_ >= kOvershootPersistS || in.t_fwd >= in.setpoint + kSevereOverK) an = AN_OVERSHOOT;
+  if (overshoot_s_ >= kOvershootPersistS || in.t_fwd >= ref + kSevereOverK) an = AN_OVERSHOOT;
   else if (bias_bad_s_ >= kBiasPersistS) an = AN_BIAS;
   else if (miss_s_ >= kMissPersistS) an = AN_TRACKING;
   if (an != AN_NONE) {
@@ -460,6 +470,14 @@ Command Controller::tick(const Inputs& in) {
     bias_bad_s_ = miss_s_ = overshoot_s_ = 0.0f;
     next_model_s_ = in.now_s;
     last_tick_s_ = in.now_s;
+  }
+  // Supervision reference (see sp_ref_ in the header).
+  if (!sp_ref_init_ || in.setpoint >= sp_ref_) {
+    sp_ref_ = in.setpoint;
+    sp_ref_init_ = true;
+  } else if (last_tick_s_ >= 0.0) {
+    const float dt = static_cast<float>(in.now_s - last_tick_s_);
+    sp_ref_ = fmaxf(in.setpoint, sp_ref_ - kRefDropKPerS * dt);
   }
   Command cmd{CMD_KEEP, 0.0f};
   const bool sensors_ok = in.inc_valid && in.ret_valid && in.fwd_valid;

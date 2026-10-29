@@ -79,7 +79,7 @@ These limits are compiled in. A parameter update cannot relax them.
 |---|---|
 | `model_bias` | \|bias\| > 5 K for 120 s (for example a large position error) |
 | `prediction_miss` | measurement > 2 K away from the plan for 300 s despite re-plans |
-| `overshoot` | L2 overshoot latch (setpoint + `mix_overshoot_delta_c`) for 10 s, or T_fwd ≥ setpoint + 6 K immediately |
+| `overshoot` | T_fwd ≥ reference + `mix_overshoot_delta_c` for 10 s, or ≥ reference + 6 K immediately. The reference follows a setpoint increase at once but a decrease only at 1 K/min, so lowering the setpoint does not count as an overshoot. It is never below the temperature reachable at the minimum opening (return + capped hot fraction), so an unreachable setpoint is not a fault either |
 | `numeric` | no finite plan |
 | `manual` | `mode = cautious` requested |
 

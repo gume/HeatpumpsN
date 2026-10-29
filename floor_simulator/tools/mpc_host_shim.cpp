@@ -38,14 +38,14 @@ void mpc_reset_model(void* c) { static_cast<Controller*>(c)->reset_model(); }
 
 // Returns the command kind; *target receives the target for CMD_TARGET.
 int mpc_tick(void* c, float now, float pos, float target, float t_inc, float t_ret, float t_fwd,
-             float setpoint, float pmin, float pmax, float travel_s, int overshoot, int scenario,
+             float setpoint, float pmin, float pmax, float travel_s, float overshoot_delta, int scenario,
              float* out_target) {
   Inputs in{};
   in.now_s = now; in.pos = pos; in.target = target;
   in.t_inc = t_inc; in.t_ret = t_ret; in.t_fwd = t_fwd;
   in.inc_valid = in.ret_valid = in.fwd_valid = true;
   in.setpoint = setpoint; in.pmin = pmin; in.pmax = pmax; in.travel_s = travel_s;
-  in.overshoot = overshoot != 0; in.scenario = static_cast<uint8_t>(scenario);
+  in.overshoot_delta = overshoot_delta; in.scenario = static_cast<uint8_t>(scenario);
   const Command cmd = static_cast<Controller*>(c)->tick(in);
   *out_target = cmd.target;
   return cmd.kind;

@@ -26,7 +26,9 @@ BASE = dict(kp=0.5, ki=0.02, delay_s=120.0, deadband_temp=2.0, deadband_pos=0.02
             # radiator pump schedule [(start_s, end_s, "rad1"|"rad2"|"both")], valve fault
             # injection (time_s, dead-reckoning offset 0..1): the controller's position
             # estimate jumps while the real valve does not (lost steps, slipped coupling)
-            rad_schedule=None, pos_fault=None)
+            rad_schedule=None, pos_fault=None,
+            # setpoint steps [(time_s, new_setpoint)]
+            sp_schedule=None)
 
 
 def inverse_law(knots, xk, x):
@@ -95,6 +97,10 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
             if a0 <= s < a1:
                 r1 |= which in ("rad1", "both")
                 r2 |= which in ("rad2", "both")
+        for ts, new_sp in (c["sp_schedule"] or []):
+            if s == int(ts):
+                setpoint = new_sp
+                events.append((s, f"setpoint {new_sp:g}"))
         if c["pos_fault"] and s == int(c["pos_fault"][0]):
             pos_est = clamp(pos_est + c["pos_fault"][1], 0.0, 1.0)
             events.append((s, "fault"))
@@ -146,7 +152,8 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                     fw.set_default(sc)
                 if home_until is None:
                     kind, t = fw.tick(float(s), pos_est, target, sens["boiler"], sens["return"], meas,
-                                      setpoint, c["min_pos"], c["max_pos"], c["travel_s"], ovs, scenario)
+                                      setpoint, c["min_pos"], c["max_pos"], c["travel_s"], c["ovs_delta"],
+                                      scenario)
                     if kind == 1:
                         target = t
                     elif kind == 2:

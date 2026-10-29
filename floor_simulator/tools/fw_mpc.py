@@ -40,7 +40,7 @@ def lib():
         L.mpc_request_mode.argtypes = [p, i, f]
         L.mpc_on_homed.argtypes = [p, f]
         L.mpc_reset_model.argtypes = [p]
-        L.mpc_tick.argtypes = [p, f, f, f, f, f, f, f, f, f, f, i, i, ctypes.POINTER(f)]
+        L.mpc_tick.argtypes = [p, f, f, f, f, f, f, f, f, f, f, f, i, ctypes.POINTER(f)]
         L.mpc_tick.restype = i
         L.mpc_status.argtypes = [p, ctypes.POINTER(f), ctypes.POINTER(i)]
         _lib = L
@@ -72,10 +72,10 @@ class FwMpc:
     def on_homed(self, now):
         self.L.mpc_on_homed(self.h, now)
 
-    def tick(self, now, pos, target, t_inc, t_ret, t_fwd, setpoint, pmin, pmax, travel_s, overshoot,
+    def tick(self, now, pos, target, t_inc, t_ret, t_fwd, setpoint, pmin, pmax, travel_s, overshoot_delta,
              scenario):
         k = self.L.mpc_tick(self.h, now, pos, target, t_inc, t_ret, t_fwd, setpoint, pmin, pmax, travel_s,
-                            int(overshoot), scenario, ctypes.byref(self._t))
+                            overshoot_delta, scenario, ctypes.byref(self._t))
         return k, self._t.value
 
     def status(self):

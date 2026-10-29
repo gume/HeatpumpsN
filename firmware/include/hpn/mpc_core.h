@@ -95,7 +95,7 @@ struct Inputs {
   float setpoint;
   float pmin, pmax;       // operating window 0..1 (minimum opening, ceiling)
   float travel_s;         // full stroke time
-  bool overshoot;         // L2 overshoot latch (setpoint + delta)
+  float overshoot_delta;  // mix_overshoot_delta_c (overshoot above the reference)
   uint8_t scenario;       // radiator state
 };
 
@@ -182,6 +182,11 @@ class Controller {
   float bias_bad_s_ = 0.0f;
   float miss_s_ = 0.0f;
   float overshoot_s_ = 0.0f;
+  // Supervision reference: follows setpoint increases at once but setpoint
+  // decreases only at kRefDropKPerS, so a deliberate setpoint drop is not an
+  // overshoot while the valve closes.
+  float sp_ref_ = 0.0f;
+  bool sp_ref_init_ = false;
   double last_tick_s_ = -1.0;
   double last_anomaly_s_ = -1e9;
   double retry_s_ = -1e9;

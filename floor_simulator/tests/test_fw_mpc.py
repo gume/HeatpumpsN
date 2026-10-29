@@ -28,3 +28,10 @@ def test_fw_mpc_valve_fault_homes_and_recovers():
     assert "fault" in kinds and "homed" in kinds
     assert any(k.startswith("home:") for k in kinds)
     assert r["mode"] == "mpc"          # cautious control was stable, MPC retried
+
+
+def test_fw_mpc_setpoint_drop_is_not_an_anomaly():
+    # 35 -> 25 is below the reachable minimum (return water); 28 needs closing
+    steps = [(3600, 25.0), (7200, 35.0), (9000, 28.0)]
+    r = run(dict(ctrl="fw_mpc", sp_schedule=steps, sensor_res=0.0625), hours=4, seed=0, setpoint=35)
+    assert r["anomalies"] == 0 and r["mode"] == "mpc"

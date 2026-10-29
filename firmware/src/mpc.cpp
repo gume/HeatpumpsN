@@ -318,7 +318,7 @@ bool control(const Config& config, SystemState& state, bool flush_active) {
   in.pmax = ceiling;
   in.pmin = fminf(mixer_minimum(config), ceiling);
   in.travel_s = (config.travel_time_ms > 0 ? config.travel_time_ms : 120000u) / 1000.0f;
-  in.overshoot = state.mix_overshoot;
+  in.overshoot_delta = config.mix_overshoot_delta_c;
   in.scenario = sc;
 
   const uint32_t t0 = micros();
