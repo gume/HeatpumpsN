@@ -806,6 +806,17 @@ function renderDashboard() {
     ? 'emergency close'
     : (!floor.mixerMotion ? 'idle' : (num(floor.mixerDir, 0) > 0 ? 'opening' : 'closing'));
   const recent = state.events.slice(-6).reverse();
+  const mpc = live.mpc || {};
+  const mpcLabels = { mpc: 'Predictive', legacy: 'Legacy PI', homing: 'Fallback: homing', cautious: 'Fallback: cautious' };
+  const mpcTone = mpc.mode === 'mpc' ? 'chip-ok' : (mpc.mode === 'legacy' ? '' : 'chip-err');
+  const mpcRows = mpc.mode ? `
+          <div class="metric-row"><span class="k">Controller</span><span class="v">${esc(mpcLabels[mpc.mode] || mpc.mode)}${mpc.homing ? ' (stroke running)' : ''}</span></div>
+          ${mpc.mode === 'legacy' ? '' : `
+          <div class="metric-row"><span class="k">Parameter set</span><span class="v">${esc(mpc.scenario || '—')}</span></div>
+          <div class="metric-row"><span class="k">Model bias</span><span class="v">${fmtNum(mpc.bias, 2)} K</span></div>
+          ${mpc.boost ? '<div class="metric-row"><span class="k">Heat-up boost</span><span class="v">active</span></div>' : ''}
+          <div class="metric-row"><span class="k">Last anomaly</span><span class="v">${esc(mpc.anomaly || 'none')} (${num(mpc.anomalies, 0)} total, ${num(mpc.retries, 0)} retries)</span></div>
+          ${mpc.mode === 'cautious' ? `<div class="metric-row"><span class="k">Stable for</span><span class="v">${Math.round(num(mpc.stableS, 0) / 60)} / 30 min</span></div>` : ''}`}` : '';
 
   const modeTone = mode.current === 'test' ? 'err' : mode.current === 'summer' ? 'ok' : 'warn';
   const wifiTone = wifi.connected ? (num(wifi.rssi, 0) > -75 ? 'ok' : 'warn') : 'err';
@@ -835,7 +846,10 @@ function renderDashboard() {
       <section class="card readonly accent-top">
         <div class="card-head">
           <div><h2>Mixer</h2><p>Hydraulic temperatures, power and position</p></div>
-          <span class="chip">${esc(floor.encoderValid ? 'encoder valid' : 'encoder invalid')}</span>
+          <div>
+            ${mpc.mode ? `<span class="chip ${mpcTone}">${esc(mpcLabels[mpc.mode] || mpc.mode)}</span>` : ''}
+            <span class="chip">${esc(floor.encoderValid ? 'encoder valid' : 'encoder invalid')}</span>
+          </div>
         </div>
         <div class="temp-grid mixer-temp-grid">
           ${tempTile('Mixer hot in', temps.mixerHotIn ?? temps.boilerSupply, tempHealth.mixerHotIn ?? tempHealth.boilerSupply)}
@@ -850,6 +864,7 @@ function renderDashboard() {
           <div class="metric-row"><span class="k">Maximum opening</span><span class="v">${mixerMax}%${floor.mixerMaxDynamic ? ` (dynamic, absolute ${num(floor.mixerMaxAbsPct, 100)}%)` : ''}</span></div>
           ${floor.mixerOvershoot ? '<div class="metric-row"><span class="k">Overshoot reaction</span><span class="v">active</span></div>' : ''}
           <div class="metric-row"><span class="k">Command</span><span class="v">${mixerCmdLabel}</span></div>
+          ${mpcRows}
           <div class="bar"><span style="width:${mixerPos.toFixed(1)}%"></span></div>
           <div class="metric-row"><span class="k">Encoder position</span><span class="v">${encoderPos.toFixed(1)}% ${floor.encoderValid ? '' : '⚠ invalid'}</span></div>
         </div>

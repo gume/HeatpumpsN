@@ -68,6 +68,13 @@ While the boiler pauses (supply below setpoint + `supply_margin_k`), the
 controller plans for the supply that will come back, not the cold one. It
 pre-positions the valve for the restart instead of opening into cold water.
 
+**Heat-up boost.** For `boost_s` after a floor-pump start or a setpoint
+increase, moves cost `boost_scale` × their normal price, and every minute of the
+window counts the same (no end-of-window weighting). The planner may then open
+past the steady position and back off as the loop warms up. Offline, with
+identical boiler conditions, reaching setpoint − 1 K took 2.9 instead of 9.6 min
+at 35 °C and 5.7 instead of 44.7 min at 40 °C, for one extra motor start.
+
 **Cost on the ESP32:** about 55 ms per plan (measured, classic ESP32), every
 30 s or on a trigger, inside the 2 s L2 tick.
 
@@ -133,6 +140,8 @@ radiator sets use the Step 4 radiator multiplier (0.793) on the law.
 | `margin_k` | 0.5–10 | 2.5 | soft limit above setpoint |
 | `bias_alpha` | 0–1 | 0.1 | bias filter gain per 10 s |
 | `supply_margin_k` | 0–20 | 3 | supply needed to act |
+| `boost_s` | 0–3600 | 600 | heat-up window after a floor-pump start or a setpoint increase > 1 K |
+| `boost_scale` | 0–1 | 0 | travel and start cost multiplier inside the window (0 = moves are free) |
 
 An update is a JSON object. Fields that are left out keep their value:
 
@@ -181,9 +190,11 @@ backtrace). Decode it with the matching `firmware.elf`:
 ## 7. Network upload
 
 ```bash
-pio run -e esp32dev_sim_ota -t upload --upload-port <host:port>
+pio run -e esp32dev_sim_ota -t upload --upload-port <host:port>     # application
+pio run -e esp32dev_sim_ota -t uploadfs --upload-port <host:port>   # portal files
 ```
 
-This posts the image to `POST /api/update` on the device's port 80, through
+`-t uploadfs` sends the LittleFS portal image the same way (`?target=fs`).
+The device reboots after each upload. This posts the image to `POST /api/update` on the device's port 80, through
 any HTTP path: a reverse proxy, or an SSH tunnel to port 80. There is no
 ArduinoOTA/espota listener, so no other port is needed.

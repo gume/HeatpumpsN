@@ -3273,15 +3273,20 @@ void handle_ota_final(AsyncWebServerRequest* request) {
   send_json(request, g_ota_ok ? 200 : 500, doc);
 }
 
+// POST /api/update            application image (OTA slot)
+// POST /api/update?target=fs  LittleFS image (portal assets)
 void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, size_t index,
                        uint8_t* data, size_t len, bool final) {
-  (void)request;
   (void)filename;
 
   if (index == 0) {
     g_ota_ok = false;
     g_ota_error = "";
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+    const bool fs = request->hasParam("target") && request->getParam("target")->value() == "fs";
+    if (fs) {
+      LittleFS.end();   // the partition is rewritten underneath; remounted after the reboot
+    }
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, fs ? U_SPIFFS : U_FLASH)) {
       g_ota_error = Update.errorString();
       return;
     }

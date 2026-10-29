@@ -55,6 +55,11 @@ struct ParamSet {
   float margin_k;            // soft limit above setpoint
   float bias_alpha;          // bias filter gain per 10 s model step
   float supply_margin_k;     // supply must exceed setpoint by this to act
+  // Heat-up boost: for boost_s after a floor-pump start or a setpoint increase
+  // the travel and start costs are multiplied by boost_scale, so the planner
+  // may open past the steady position and back off once the loop is warm.
+  float boost_s;
+  float boost_scale;
   uint32_t revision;         // bumped on every accepted update
 };
 
@@ -111,6 +116,7 @@ struct Status {
   uint8_t scenario;
   uint8_t anomaly;          // last anomaly that forced the fallback
   uint8_t retries;          // automatic returns from cautious to MPC
+  bool boost;               // heat-up boost window active
   float bias;
   float tinc_water;         // lead-compensated supply estimate
   float model_fwd;          // model forward temperature (without bias)
@@ -187,6 +193,8 @@ class Controller {
   // overshoot while the valve closes.
   float sp_ref_ = 0.0f;
   bool sp_ref_init_ = false;
+  float last_sp_ = 0.0f;
+  double boost_until_s_ = -1.0;
   double last_tick_s_ = -1.0;
   double last_anomaly_s_ = -1e9;
   double retry_s_ = -1e9;

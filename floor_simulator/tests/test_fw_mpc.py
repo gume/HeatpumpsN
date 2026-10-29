@@ -35,3 +35,12 @@ def test_fw_mpc_setpoint_drop_is_not_an_anomaly():
     steps = [(3600, 25.0), (7200, 35.0), (9000, 28.0)]
     r = run(dict(ctrl="fw_mpc", sp_schedule=steps, sensor_res=0.0625), hours=4, seed=0, setpoint=35)
     assert r["anomalies"] == 0 and r["mode"] == "mpc"
+
+
+def test_fw_mpc_boost_speeds_up_heat_up():
+    def reach(params):
+        tr = []
+        run(dict(ctrl="fw_mpc", sensor_res=0.0625, fw_params=params), hours=1.0, seed=0, setpoint=40,
+            tout=-5, trace=tr)
+        return next(row[0] for row in tr if row[1] >= 39.0)
+    assert reach(dict(boost_scale=0.0)) < 0.5 * reach(dict(boost_scale=1.0))

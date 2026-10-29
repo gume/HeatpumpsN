@@ -28,7 +28,9 @@ BASE = dict(kp=0.5, ki=0.02, delay_s=120.0, deadband_temp=2.0, deadband_pos=0.02
             # estimate jumps while the real valve does not (lost steps, slipped coupling)
             rad_schedule=None, pos_fault=None,
             # setpoint steps [(time_s, new_setpoint)]
-            sp_schedule=None)
+            sp_schedule=None,
+            # firmware MPC parameter overrides for every scenario {name: value}
+            fw_params=None)
 
 
 def inverse_law(knots, xk, x):
@@ -73,6 +75,8 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
     starts = 0
     sq = n = 0
     sq_ok = n_ok = 0
+    t_reach = None
+    early_max = -1e9
     fwd_max = -1e9
     avg_inc = sens["boiler"]
     avg_ret = sens["return"]
@@ -89,7 +93,15 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
     if c["ctrl"] == "fw_mpc":
         from floor_simulator.tools.fw_mpc import FwMpc
         fw = FwMpc()
-        fw.set_default(0)
+        names = ("delay_s", "tau_fwd_s", "tau_inc_s", "horizon_s", "replan_s", "trigger_k", "lambda_travel",
+                 "start_cost", "margin_k", "bias_alpha", "supply_margin_k", "boost_s", "boost_scale")
+        defaults = (40.0, 34.64, 75.27, 900.0, 30.0, 0.5, 0.1, 1.0, 2.5, 0.1, 3.0, 600.0, 0.0)
+        fw_scalars = [float((c["fw_params"] or {}).get(nm, d)) for nm, d in zip(names, defaults)]
+
+        def apply_set(sc):
+            if fw.set_params(sc, None, None, fw_scalars) != 0:
+                raise ValueError("fw_params rejected by validate()")
+        apply_set(0)
     n_s = int(hours * 3600)
     for s in range(n_s):
         r1 = r2 = False
@@ -125,6 +137,10 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
         a = 1.0 / c["avg_s"]
         avg_inc += a * (sens["boiler"] - avg_inc)
         avg_ret += a * (sens["return"] - avg_ret)
+        if t_reach is None and meas >= setpoint - 0.5:
+            t_reach = s
+        if s <= 2400:
+            early_max = max(early_max, meas)
         if s > 1800:
             sq += (meas - setpoint) ** 2
             n += 1
@@ -149,7 +165,7 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                 sc = (1 if r1 else 0) + (2 if r2 else 0)
                 if sc != scenario:
                     scenario = sc
-                    fw.set_default(sc)
+                    apply_set(sc)
                 if home_until is None:
                     kind, t = fw.tick(float(s), pos_est, target, sens["boiler"], sens["return"], meas,
                                       setpoint, c["min_pos"], c["max_pos"], c["travel_s"], c["ovs_delta"],
@@ -232,7 +248,7 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
         return dict(travel_pct_h=travel * 100 / h, starts_h=starts / h, reversals_h=reversals / h,
                     rmse=math.sqrt(sq / max(n, 1)), rmse_ok=math.sqrt(sq_ok / max(n_ok, 1)), fwd_max=fwd_max,
                     mode=st["mode"], anomalies=st["anomalies"], plans=st["plans"], triggered=st["triggered"],
-                    events=events)
+                    events=events, t_reach_s=t_reach, early_max=early_max)
     if mpc is not None:
         mpc_decisions = mpc.decisions
     return dict(travel_pct_h=travel * 100 / h, starts_h=starts / h, reversals_h=reversals / h,

@@ -290,6 +290,7 @@ function renderMpc(m, sp) {
     ["Mode", m.mode + (m.homing ? " (stroke running)" : ""), fallback ? "bad" : ""],
     ["Since", `${Math.round((m.modeForS || 0) / 60)} min`],
     ["Scenario", m.scenario],
+    ["Heat-up boost", m.boost ? "active" : "off", m.boost ? "warn" : ""],
     ["Last anomaly", m.anomaly, m.anomaly && m.anomaly !== "none" ? "warn" : ""],
     ["Model bias", `${fmt(m.bias, 2)} K`, Math.abs(m.bias || 0) > 3 ? "warn" : ""],
     ["Supply estimate", `${fmt(m.tincWater)} °C`],

@@ -123,6 +123,8 @@ ParamSet default_params(uint8_t scenario) {
   p.margin_k = 2.5f;
   p.bias_alpha = 0.1f;
   p.supply_margin_k = 3.0f;
+  p.boost_s = 600.0f;
+  p.boost_scale = 0.0f;
   p.revision = 0;
   return p;
 }
@@ -149,6 +151,8 @@ bool validate(const ParamSet& p, const char** err) {
     else if (bad(p.margin_k, 0.5f, 10.0f)) e = "margin_k";
     else if (bad(p.bias_alpha, 0.0f, 1.0f)) e = "bias_alpha";
     else if (bad(p.supply_margin_k, 0.0f, 20.0f)) e = "supply_margin_k";
+    else if (bad(p.boost_s, 0.0f, 3600.0f)) e = "boost_s";
+    else if (bad(p.boost_scale, 0.0f, 1.0f)) e = "boost_scale";
   }
   if (err != nullptr) *err = e;
   return e == nullptr;
@@ -252,6 +256,7 @@ void Controller::model_step(const Inputs& in) {
     t_hot_ = in.t_inc;
     st_.bias = 0.0f;
     init_ = true;
+    boost_until_s_ = in.now_s + p_.boost_s;   // floor loop (re)started: heat up fast
   }
   slope_ += 0.3f * ((in.t_inc - prev_inc_) / kModelDt - slope_);
   prev_inc_ = in.t_inc;
@@ -309,7 +314,11 @@ void Controller::predict(int seq, float pos0, float hot_tw, int n_steps, float* 
     s_f += (kModelDt / (p_.tau_fwd_s + kModelDt)) * (delayed - s_f);
     const float y = s_f + st_.bias;
     const float e = y - in.setpoint;
-    cost += e * e * (k >= n_steps - kSettleSteps ? kSettleWeight : 1.0f);
+    // Normally the end of the window is weighted up so the plan settles; in
+    // a heat-up boost every minute counts the same, so getting there early
+    // is worth an extra move.
+    const float w = (!st_.boost && k >= n_steps - kSettleSteps) ? kSettleWeight : 1.0f;
+    cost += e * e * w;
     // The limit is checked pessimistically: a negative bias may lower the
     // tracking estimate but never loosens the over-temperature margin.
     const float y_safe = s_f + fmaxf(st_.bias, 0.0f);
@@ -345,6 +354,9 @@ Command Controller::plan(const Inputs& in, bool triggered) {
   tw_override_ = paused ? t_hot_ : -1.0f;
   const bool refire = !paused && t_hot_ > st_.tinc_water + 5.0f;
 
+  const bool boost = in.now_s < boost_until_s_;
+  const float move_scale = boost ? p_.boost_scale : 1.0f;
+  st_.boost = boost;
   int best = -1;
   float best_cost = 0.0f;
   for (int seq = 0; seq < kSequences; ++seq) {
@@ -355,7 +367,7 @@ Command Controller::plan(const Inputs& in, bool triggered) {
     int starts = (kSteps[s0] != 0.0f) + (kSteps[s1] != 0.0f) + (kSteps[s2] != 0.0f);
     float track = 0.0f, over = 0.0f;
     predict(seq, pos0, -1.0f, n, &track, &over, nullptr, in);
-    float j = track + p_.lambda_travel * travel * 100.0f + p_.start_cost * starts +
+    float j = track + move_scale * (p_.lambda_travel * travel * 100.0f + p_.start_cost * starts) +
               kLimitPenalty * over * over;
     if (refire) {
       float t2 = 0.0f, over2 = 0.0f;
@@ -471,6 +483,13 @@ Command Controller::tick(const Inputs& in) {
     next_model_s_ = in.now_s;
     last_tick_s_ = in.now_s;
   }
+  // A setpoint increase of more than 1 K is a heat-up too.
+  if (sp_ref_init_ && in.setpoint > last_sp_ + 1.0f) {
+    boost_until_s_ = in.now_s + p_.boost_s;
+    replan_ = true;
+  }
+  last_sp_ = in.setpoint;
+  st_.boost = in.now_s < boost_until_s_;
   // Supervision reference (see sp_ref_ in the header).
   if (!sp_ref_init_ || in.setpoint >= sp_ref_) {
     sp_ref_ = in.setpoint;

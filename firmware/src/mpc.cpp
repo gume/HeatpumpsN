@@ -17,7 +17,7 @@ namespace {
 constexpr const char* kNamespace = "hpnmpc";
 constexpr const char* kKey = "blob";
 constexpr uint32_t kMagic = 0x48504E4Du;  // "HPNM"
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersion = 2;  // no migration: another version loads defaults
 constexpr uint32_t kHomingExtraMs = 10000u;   // stroke margin, as the portal's endstop home
 
 struct Blob {
@@ -213,6 +213,8 @@ const Field kFields[] = {
     {"margin_k", offsetof(ParamSet, margin_k)},
     {"bias_alpha", offsetof(ParamSet, bias_alpha)},
     {"supply_margin_k", offsetof(ParamSet, supply_margin_k)},
+    {"boost_s", offsetof(ParamSet, boost_s)},
+    {"boost_scale", offsetof(ParamSet, boost_scale)},
 };
 
 float& field(ParamSet& p, const Field& f) {
@@ -482,6 +484,7 @@ void status_json(JsonObject out, bool with_trajectory) {
   out["tincWater"] = st.tinc_water;
   out["modelFwd"] = st.model_fwd;
   out["planCost"] = st.plan_cost;
+  out["boost"] = st.boost;
   JsonArray moves = out["movesPct"].to<JsonArray>();
   for (float m : st.plan_moves) moves.add(m * 100.0f);
   out["plans"] = st.plans;
