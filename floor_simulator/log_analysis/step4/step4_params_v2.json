@@ -1,0 +1,193 @@
+{
+  "version": "2.0",
+  "generated": "2026-10-29 14:01:58",
+  "model": "Tmix = T_ret + x(pos)*m_rad*(T_inc,w - T_ret) (m_rad = radiator_x_multiplier if a radiator pump runs, else 1); T_w = Tmix delayed by d; T_fwd sensor = first-order lag tau_f",
+  "parameters": {
+    "transport_delay_s": 40.0,
+    "tau_fwd_sensor_s": 34.63964964771373,
+    "radiator_x_multiplier": 0.7927888924754279,
+    "knots_pos_pct": [
+      0.0,
+      25.0,
+      50.0,
+      52.5,
+      55.0,
+      57.5,
+      60.0,
+      65.0,
+      70.0,
+      80.0,
+      90.0
+    ],
+    "x_at_knots": [
+      0.019708777501874487,
+      0.08797438977407805,
+      0.19571996098316935,
+      0.2143951679851754,
+      0.24351101914506734,
+      0.27510011947278257,
+      0.28905441818469313,
+      0.28905441818469313,
+      0.28905441818469313,
+      0.5114664760637646,
+      1.0
+    ],
+    "actuator_full_stroke_s": 145.0,
+    "tinc_input": "water temperature (Step 2 state T)"
+  },
+  "parameter_units": {
+    "transport_delay_s": "s",
+    "tau_fwd_sensor_s": "s",
+    "knots_pos_pct": "%",
+    "x_at_knots": "-",
+    "actuator_full_stroke_s": "s"
+  },
+  "chosen_structure": "C6 C5 + radiator multiplier on x",
+  "cv": {
+    "C1 measured T_inc, step-3 law": {
+      "rmse": 1.443798137946609,
+      "folds": [
+        {
+          "d_s": 0.0,
+          "tau_f": 50.07979504743956
+        },
+        {
+          "d_s": 0.0,
+          "tau_f": 42.71208821288088
+        }
+      ]
+    },
+    "C2 reconstructed T_inc water, step-3 law": {
+      "rmse": 1.3374542477652158,
+      "folds": [
+        {
+          "d_s": 20.0,
+          "tau_f": 59.37948316742659
+        },
+        {
+          "d_s": 20.0,
+          "tau_f": 49.84008471646992
+        }
+      ]
+    },
+    "C3 measured T_inc, law refined below 50 %": {
+      "rmse": 1.435083001862004,
+      "folds": [
+        {
+          "d_s": 0.0,
+          "tau_f": 54.88185305077014
+        },
+        {
+          "d_s": 0.0,
+          "tau_f": 48.66608244804371
+        }
+      ]
+    },
+    "C4 reconstructed T_inc water, law refined below 50 %": {
+      "rmse": 1.3208080566240457,
+      "folds": [
+        {
+          "d_s": 20.0,
+          "tau_f": 61.35027580869294
+        },
+        {
+          "d_s": 10.0,
+          "tau_f": 61.854361723436064
+        }
+      ]
+    },
+    "C5 C2 + law refined above 60 %": {
+      "rmse": 1.3146583304257728,
+      "folds": [
+        {
+          "d_s": 20.0,
+          "tau_f": 61.64841157538083
+        },
+        {
+          "d_s": 20.0,
+          "tau_f": 53.71479905776025
+        }
+      ]
+    },
+    "C6 C5 + radiator multiplier on x": {
+      "rmse": 1.1296656690560658,
+      "folds": [
+        {
+          "d_s": 30.0,
+          "tau_f": 47.522028492446765
+        },
+        {
+          "d_s": 30.0,
+          "tau_f": 40.39090074199443
+        }
+      ]
+    }
+  },
+  "fit": {
+    "n": 295463,
+    "rmse": 1.1267359168861142,
+    "mae": 0.6813378395451342,
+    "bias": -0.1968931745131103,
+    "p95": 2.6485267963401724
+  },
+  "actuator_check": {
+    "dr_rate_median": 0.2660888671875,
+    "dr_rate_p95": 0.6912956237792931,
+    "n_long_moves": 262,
+    "bmi_over_dr_median": 0.9782342135190001,
+    "bmi_over_dr_iqr": [
+      0.9344357984737143,
+      1.0047608255944622
+    ]
+  },
+  "acceptance": {
+    "gates": [
+      {
+        "gate": "tune_pumpon_rmse_c",
+        "op": "<",
+        "threshold": 1.5,
+        "actual": 1.6019681825263297,
+        "result": "FAIL",
+        "margin_frac": -0.06797878835088644,
+        "marginal": false
+      },
+      {
+        "gate": "tune_pumpon_mae_c",
+        "op": "<",
+        "threshold": 1.0,
+        "actual": 1.0984313648335795,
+        "result": "FAIL",
+        "margin_frac": -0.0984313648335795,
+        "marginal": false
+      },
+      {
+        "gate": "tune_move_t50_median_abs_error_s",
+        "op": "<",
+        "threshold": 30.0,
+        "actual": NaN,
+        "result": "NOT EVALUABLE (no qualifying events) - not passed",
+        "margin_frac": NaN,
+        "marginal": false
+      }
+    ],
+    "overall": "FAIL",
+    "gates_sha256": "5e67fdab55b1a9a05fa195f4b7c1f320dce09341d5c65267ffc1862372cdff22",
+    "test_set": "HO-1..HO-3 (untouched for T_forward)",
+    "test": {
+      "n": 2765,
+      "rmse": 1.6019681825263297,
+      "mae": 1.0984313648335795,
+      "bias": -0.4001870650949235,
+      "p95": 3.5802206614277634
+    },
+    "tune_observed": {
+      "n": 282216,
+      "rmse": 1.2849940928274246,
+      "mae": 0.7448183181319004,
+      "bias": -0.1273994127848743,
+      "p95": 2.8694436071022054
+    },
+    "v1_tune_result": "FAIL"
+  },
+  "report": "step4/step4_mixer_dynamics_report_v2.md"
+}

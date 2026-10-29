@@ -1,0 +1,17 @@
+{
+  "step": 4,
+  "status": "frozen before any step-4 data analysis or fitting",
+  "target": "dynamic T_forward (mixer_forward_temperature) given measured T_incoming, T_return, mixer position and pump states",
+  "split": "FIT blocks of step2/holdout_v7.json identify; structure choices by week-parity cross-validation inside FIT; TUNE blocks are the untouched test set",
+  "rationale": "The new controller (Smith predictor + PI with 0.3/0.5 K deadband, 145 s actuator) needs the plant's forward-temperature dynamics within about one degree on average and its response timing within a fraction of the actuator stroke; 30 s is about 20 % of a full stroke and well inside the controller's prediction horizon.",
+  "scoring": {
+    "free_run": "simulate T_forward over each TUNE block (12 h, 30-min warm-up inside the block, state re-anchored to measured T_forward whenever the floor pump starts); score 10 s samples with the floor pump on for >= 5 min, no DHW, fresh T_forward/T_incoming (age <= 900 s), no input outage (T_boiler age <= 900 s), and outside step-3 fault days",
+    "timing": "isolated valve moves: mixer_state changes >= 3 % within <= 60 s, no other movement 5 min before and 10 min after the move start, floor pump on, no DHW, T_incoming range < 3 degC over the 15-min event window, measured T_forward change >= 1 degC; t50 = time from move start until T_forward covers 50 % of its change between the pre-move mean (last 2 min) and the post-move mean (minutes 8-10); error = t50_sim - t50_meas"
+  },
+  "gates": {
+    "tune_pumpon_rmse_c": {"op": "<", "threshold": 1.5},
+    "tune_pumpon_mae_c": {"op": "<", "threshold": 1.0},
+    "tune_move_t50_median_abs_error_s": {"op": "<", "threshold": 30.0}
+  },
+  "marginal_margin_fraction": 0.01
+}

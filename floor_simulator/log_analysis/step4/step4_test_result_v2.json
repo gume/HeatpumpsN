@@ -1,0 +1,52 @@
+{
+  "generated": "2026-10-29 14:01:58",
+  "gates_sha256": "5e67fdab55b1a9a05fa195f4b7c1f320dce09341d5c65267ffc1862372cdff22",
+  "test_set": "HO-1..HO-3 (untouched for T_forward)",
+  "chosen": "C6 C5 + radiator multiplier on x",
+  "test": {
+    "n": 2765,
+    "rmse": 1.6019681825263297,
+    "mae": 1.0984313648335795,
+    "bias": -0.4001870650949235,
+    "p95": 3.5802206614277634
+  },
+  "t50_median_abs_error_s": NaN,
+  "n_timing_events": 0,
+  "gates": [
+    {
+      "gate": "tune_pumpon_rmse_c",
+      "op": "<",
+      "threshold": 1.5,
+      "actual": 1.6019681825263297,
+      "result": "FAIL",
+      "margin_frac": -0.06797878835088644,
+      "marginal": false
+    },
+    {
+      "gate": "tune_pumpon_mae_c",
+      "op": "<",
+      "threshold": 1.0,
+      "actual": 1.0984313648335795,
+      "result": "FAIL",
+      "margin_frac": -0.0984313648335795,
+      "marginal": false
+    },
+    {
+      "gate": "tune_move_t50_median_abs_error_s",
+      "op": "<",
+      "threshold": 30.0,
+      "actual": NaN,
+      "result": "NOT EVALUABLE (no qualifying events) - not passed",
+      "margin_frac": NaN,
+      "marginal": false
+    }
+  ],
+  "overall": "FAIL",
+  "tune_observed": {
+    "n": 282216,
+    "rmse": 1.2849940928274246,
+    "mae": 0.7448183181319004,
+    "bias": -0.1273994127848743,
+    "p95": 2.8694436071022054
+  }
+}

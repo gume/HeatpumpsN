@@ -1,0 +1,578 @@
+{
+  "description": "Final parameter set of the floor-heating HIL plant simulator. Each block is copied verbatim from the step that identified it; see the referenced report for definitions, units and validation.",
+  "generated": "2026-10-29 16:36:58",
+  "steps": {
+    "step2_hx": {
+      "describe": "HX outlet / T_incoming model (inputs: T_boiler, T_return, T_room, mixer position, burner, primary pump, DHW flag, pump relays)",
+      "source": "step2/step2_params_v71.json",
+      "source_sha256": "c289eb47c9844c577ef9e6ead32a78b8424aed2a90ebd45d5c958e35e9a5b3ab",
+      "report": "step2/step2_hx_dynamics_report_v71.md",
+      "model": "step2/hx_model_v71.py",
+      "version": "7.1",
+      "parameters": {
+        "tau_p": 1.0,
+        "tau_hx": 4.999999999999999,
+        "eps_A": 0.9307758630329073,
+        "eps_B": 0.9264583363218086,
+        "eps_C": 0.9267514219630666,
+        "eps_N": 0.8980679542067908,
+        "tau_hc": 30.454653037627278,
+        "k_hc": 0.0,
+        "V": 63.55903581768935,
+        "q1": 0.0,
+        "q2": 0.00473220008115168,
+        "tau_fn": 2123.6327140418593,
+        "tau_h": 339.576444813926,
+        "k_b": 0.14731536889159497,
+        "k_b_park": 0.06826547742423324,
+        "tau_rc": 1421.6152427079521,
+        "tau_rd": 6900.550978320528,
+        "dhw_hold_s": 22.677104426451265,
+        "d_amb": 0.491780025925438,
+        "L_pipe": 0.0,
+        "tau_pipe": 677.6094962897447,
+        "div_travel_s": 0.0,
+        "tau_s": 75.27224849148485
+      },
+      "units": {
+        "tau_p": "s",
+        "tau_hx": "s",
+        "eps_A": "-",
+        "eps_B": "-",
+        "eps_C": "-",
+        "eps_N": "-",
+        "tau_hc": "s",
+        "k_hc": "-",
+        "V": "s",
+        "q1": "-",
+        "q2": "-",
+        "tau_fn": "s",
+        "tau_h": "s",
+        "k_b": "-",
+        "k_b_park": "-",
+        "tau_rc": "s",
+        "tau_rd": "s",
+        "dhw_hold_s": "s",
+        "d_amb": "degC",
+        "L_pipe": "s",
+        "tau_pipe": "s",
+        "div_travel_s": "s",
+        "tau_s": "s"
+      },
+      "constants": {
+        "DT": 10.0,
+        "MAX_PIPE_N": 64,
+        "DIV_CLEAR_S": 30.0,
+        "pump_on_w": 2.0,
+        "pump_debounce_samples": 31
+      },
+      "acceptance": {
+        "holdout_official_v70": {
+          "overall": "FAIL",
+          "evaluated_at": "2026-10-29 10:36:48",
+          "param_sha256": "441cf1d420244a55e753f7ab115c705ba64c2a1bb749625a2d0b86a56aa900a7"
+        },
+        "holdout_observed": {
+          "status": "observed since v7.0; not sign-off",
+          "space_heating": {
+            "episodes": 3,
+            "mean_rmse": 1.981470607354277,
+            "pooled_rmse": 2.0189441240694013,
+            "mean_mae": 0.9799941608283543,
+            "min_r2": 0.9857282014414559,
+            "median_r2": 0.9867359605175225,
+            "pooled_r2": 0.9889546054939983,
+            "n": 11270
+          },
+          "dhw": {
+            "episodes": 3,
+            "mean_rmse": 6.991331444608018,
+            "pooled_rmse": 8.46087343008588,
+            "mean_mae": 4.622711819815294,
+            "min_r2": 0.22627340568585597,
+            "median_r2": 0.680778064873758,
+            "pooled_r2": 0.6072730223991708,
+            "n": 1150
+          },
+          "gates": [
+            {
+              "suite": "space_heating",
+              "metric": "Mean episode RMSE (degC)",
+              "op": "<",
+              "threshold": 1.25,
+              "actual": 1.981470607354277,
+              "result": "FAIL",
+              "margin": -0.7314706073542769,
+              "margin_frac": -0.5851764858834215,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Pooled RMSE (degC)",
+              "op": "<",
+              "threshold": 1.5,
+              "actual": 2.0189441240694013,
+              "result": "FAIL",
+              "margin": -0.5189441240694013,
+              "margin_frac": -0.34596274937960086,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Mean episode MAE (degC)",
+              "op": "<",
+              "threshold": 0.85,
+              "actual": 0.9799941608283543,
+              "result": "FAIL",
+              "margin": -0.12999416082835435,
+              "margin_frac": -0.15293430685688747,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Minimum per-episode R2",
+              "op": ">",
+              "threshold": 0.9,
+              "actual": 0.9857282014414559,
+              "result": "PASS",
+              "margin": 0.08572820144145588,
+              "margin_frac": 0.0952535571571732,
+              "marginal": false
+            },
+            {
+              "suite": "dhw",
+              "metric": "DHW pooled RMSE (degC)",
+              "op": "<",
+              "threshold": 4.5,
+              "actual": 8.46087343008588,
+              "result": "FAIL",
+              "margin": -3.960873430085879,
+              "margin_frac": -0.8801940955746398,
+              "marginal": false
+            },
+            {
+              "suite": "dhw",
+              "metric": "DHW minimum per-episode R2",
+              "op": ">",
+              "threshold": 0.9,
+              "actual": 0.22627340568585597,
+              "result": "FAIL",
+              "margin": -0.6737265943141441,
+              "margin_frac": -0.7485851047934934,
+              "marginal": false
+            }
+          ],
+          "overall": "FAIL"
+        }
+      }
+    },
+    "step3_mixer_static": {
+      "describe": "3-way mixer static mixing law",
+      "source": "step3/step3_params_v1.json",
+      "source_sha256": "a5ecda63e7d7b9341e8463ef734e52b81a0eae02fd8ffa454b40b62438fc589e",
+      "report": "step3/step3_mixer_static_report_v1.md",
+      "model": "step3/step3_mixer_static_v1.py",
+      "version": "1.0",
+      "parameters": {
+        "knots_pos_pct": [
+          0.0,
+          25.0,
+          50.0,
+          52.5,
+          55.0,
+          57.5,
+          60.0,
+          65.0,
+          70.0,
+          80.0,
+          90.0
+        ],
+        "x_at_knots": [
+          0.019708777501874487,
+          0.08797438977407805,
+          0.19571996098316935,
+          0.2143951679851754,
+          0.24351101914506734,
+          0.27510011947278257,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.294961917520541,
+          0.3020774653843355
+        ]
+      },
+      "units": {
+        "knots_pos_pct": "% (mixer_state)",
+        "x_at_knots": "-"
+      },
+      "constants": null,
+      "acceptance": {
+        "gates": [
+          {
+            "gate": "tune_steady_rmse_c",
+            "op": "<",
+            "threshold": 1.0,
+            "actual": 0.8235739794895789,
+            "result": "PASS",
+            "margin_frac": 0.1764260205104211,
+            "marginal": false
+          },
+          {
+            "gate": "tune_steady_abs_bias_c",
+            "op": "<",
+            "threshold": 0.3,
+            "actual": 0.009135996542016663,
+            "result": "PASS",
+            "margin_frac": 0.9695466781932777,
+            "marginal": false
+          },
+          {
+            "gate": "tune_steady_p95_abs_error_c",
+            "op": "<",
+            "threshold": 2.0,
+            "actual": 1.5144265096890654,
+            "result": "PASS",
+            "margin_frac": 0.24278674515546728,
+            "marginal": false
+          }
+        ],
+        "overall": "PASS",
+        "gates_sha256": "630854041c794554e20847123c1362b06181ed0d8532b73589d74c22fa05b429",
+        "test_set": "TUNE blocks (untouched for T_forward)"
+      }
+    },
+    "step4_mixer_dynamics": {
+      "describe": "mixer actuator, transport delay and forward-sensor dynamics",
+      "source": "step4/step4_params_v2.json",
+      "source_sha256": "a4d815107c1b41662845e71acda825fad3a38b8d4f235a287c0766621742cefe",
+      "report": "step4/step4_mixer_dynamics_report_v2.md",
+      "model": "step4/step4_mixer_dynamics_v2.py",
+      "version": "2.0",
+      "parameters": {
+        "transport_delay_s": 40.0,
+        "tau_fwd_sensor_s": 34.63964964771373,
+        "radiator_x_multiplier": 0.7927888924754279,
+        "knots_pos_pct": [
+          0.0,
+          25.0,
+          50.0,
+          52.5,
+          55.0,
+          57.5,
+          60.0,
+          65.0,
+          70.0,
+          80.0,
+          90.0
+        ],
+        "x_at_knots": [
+          0.019708777501874487,
+          0.08797438977407805,
+          0.19571996098316935,
+          0.2143951679851754,
+          0.24351101914506734,
+          0.27510011947278257,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.5114664760637646,
+          1.0
+        ],
+        "actuator_full_stroke_s": 145.0,
+        "tinc_input": "water temperature (Step 2 state T)"
+      },
+      "units": {
+        "transport_delay_s": "s",
+        "tau_fwd_sensor_s": "s",
+        "knots_pos_pct": "%",
+        "x_at_knots": "-",
+        "actuator_full_stroke_s": "s"
+      },
+      "constants": null,
+      "acceptance": {
+        "gates": [
+          {
+            "gate": "tune_pumpon_rmse_c",
+            "op": "<",
+            "threshold": 1.5,
+            "actual": 1.6019681825263297,
+            "result": "FAIL",
+            "margin_frac": -0.06797878835088644,
+            "marginal": false
+          },
+          {
+            "gate": "tune_pumpon_mae_c",
+            "op": "<",
+            "threshold": 1.0,
+            "actual": 1.0984313648335795,
+            "result": "FAIL",
+            "margin_frac": -0.0984313648335795,
+            "marginal": false
+          },
+          {
+            "gate": "tune_move_t50_median_abs_error_s",
+            "op": "<",
+            "threshold": 30.0,
+            "actual": NaN,
+            "result": "NOT EVALUABLE (no qualifying events) - not passed",
+            "margin_frac": NaN,
+            "marginal": false
+          }
+        ],
+        "overall": "FAIL",
+        "gates_sha256": "5e67fdab55b1a9a05fa195f4b7c1f320dce09341d5c65267ffc1862372cdff22",
+        "test_set": "HO-1..HO-3 (untouched for T_forward)",
+        "test": {
+          "n": 2765,
+          "rmse": 1.6019681825263297,
+          "mae": 1.0984313648335795,
+          "bias": -0.4001870650949235,
+          "p95": 3.5802206614277634
+        },
+        "tune_observed": {
+          "n": 282216,
+          "rmse": 1.2849940928274246,
+          "mae": 0.7448183181319004,
+          "bias": -0.1273994127848743,
+          "p95": 2.8694436071022054
+        },
+        "v1_tune_result": "FAIL"
+      }
+    },
+    "step5_floor_slab": {
+      "describe": "floor loop / slab / room dynamics (T_forward -> T_return)",
+      "source": "step5/step5_params_v1.json",
+      "source_sha256": "e68c93f030dfd7e2ad83e56f3fbf13b0ff357f3dd40f25a37616a94b415d18ce",
+      "report": "step5/step5_floor_slab_report_v1.md",
+      "model": "step5/step5_floor_slab_v1.py",
+      "version": "1.0",
+      "parameters": {
+        "tau_r": 305.0389138585976,
+        "beta": 0.18715463019250456,
+        "tau_in": 8308.296645022796,
+        "tau_out": 8412.052351091363,
+        "tau_off": 5040.758730412514,
+        "kappa": 1.0,
+        "d_s": 0.0,
+        "tau_q": 1000000000.0,
+        "r_q": 0.0,
+        "tau_bs": 69778.08794084631,
+        "tau_bo": 250006.16299304555,
+        "c0": -2.483434122511693e-05,
+        "two_node": false
+      },
+      "units": {
+        "tau_r": "s",
+        "beta": "-",
+        "tau_in": "s",
+        "tau_out": "s",
+        "tau_off": "s",
+        "kappa": "-",
+        "d_s": "s",
+        "tau_q": "s",
+        "r_q": "-",
+        "tau_bs": "s",
+        "tau_bo": "s",
+        "c0": "K/s"
+      },
+      "constants": null,
+      "acceptance": {
+        "gates": [
+          {
+            "gate": "tune_tret_rmse_c",
+            "threshold": 1.0,
+            "actual": 0.6897026459279602,
+            "result": "PASS",
+            "margin_frac": 0.31029735407203984,
+            "marginal": false
+          },
+          {
+            "gate": "tune_tret_mae_c",
+            "threshold": 0.6,
+            "actual": 0.5518218585349537,
+            "result": "PASS",
+            "margin_frac": 0.08029690244174381,
+            "marginal": false
+          },
+          {
+            "gate": "tune_tret_abs_bias_c",
+            "threshold": 0.3,
+            "actual": 0.14615219200166185,
+            "result": "PASS",
+            "margin_frac": 0.5128260266611272,
+            "marginal": false
+          },
+          {
+            "gate": "tune_room_night_rmse_c",
+            "threshold": 0.5,
+            "actual": 0.35904617254555016,
+            "result": "PASS",
+            "margin_frac": 0.2819076549088997,
+            "marginal": false
+          }
+        ],
+        "overall": "PASS",
+        "gates_sha256": "584d59fbdc622efe664d2c2485aeb3d24c536a55e9f26690b9af05307b969d77",
+        "test_set": "TUNE blocks",
+        "tune": {
+          "n": 494110,
+          "rmse": 0.6897026459279602,
+          "mae": 0.5518218585349537,
+          "bias": 0.14615219200166185,
+          "p95": 1.2974417450847557,
+          "median_block_rmse": 0.5952443314532408,
+          "room_n": 144961,
+          "room_rmse": 0.35904617254555016,
+          "room_bias": 0.0548220890263257
+        }
+      }
+    },
+    "step6_assembly": {
+      "describe": "boiler emulator and integration constants",
+      "source": "step6/step6_params_v1.json",
+      "source_sha256": "d3361bd9ca64bcce23e0dbc7666c1a26256f3d815ff2bf38b34d06b295fdc446",
+      "report": "step6/step6_plant_validation_report_v1.md",
+      "model": "step6/plant_v1.py + step6/plant_v1.hpp",
+      "version": "1.0",
+      "parameters": {
+        "DT_s": 10.0,
+        "actuator_full_stroke_s": 145.0,
+        "max_pipe_cells": 64,
+        "max_mixer_delay_cells": 64,
+        "max_slab_delay_cells": 128,
+        "diverter_clear_s": 30.0,
+        "boiler_emulator": {
+          "tb_ch_steady_p10": 62.9,
+          "tb_ch_steady_median": 68.7,
+          "tb_ch_steady_p90": 70.3,
+          "bp_ch_steady_median": 23.0,
+          "burner_on_median_s": 970.0,
+          "burner_on_p90_s": 5720.0,
+          "dhw_events": 253,
+          "dhw_days": 80,
+          "dhw_per_day": 3.1625,
+          "dhw_duration_median_s": 1170.0,
+          "dhw_duration_p90_s": 1626.0000000000002,
+          "tb_dhw_max_median": 81.5
+        }
+      },
+      "units": {
+        "DT_s": "s",
+        "actuator_full_stroke_s": "s",
+        "diverter_clear_s": "s"
+      },
+      "constants": {
+        "legacy_replica": {
+          "setpoint": 35.0,
+          "kp": 0.005,
+          "kd": 0.3,
+          "deadband_hi": 0.3,
+          "deadband_lo": 0.5
+        }
+      },
+      "acceptance": {
+        "gates": [
+          {
+            "gate": "component_consistency_max_abs_c",
+            "threshold": 1e-09,
+            "actual": 0.0,
+            "result": "PASS"
+          },
+          {
+            "gate": "cpp_parity_max_abs_c",
+            "threshold": 1e-09,
+            "actual": 1.4210854715202004e-14,
+            "result": "PASS"
+          },
+          {
+            "gate": "coupled_tinc_rmse_c",
+            "threshold": 2.5,
+            "actual": 2.0670843770346994,
+            "result": "PASS"
+          },
+          {
+            "gate": "coupled_tfwd_rmse_c",
+            "threshold": 2.0,
+            "actual": 1.8517207510469837,
+            "result": "PASS"
+          },
+          {
+            "gate": "coupled_tret_rmse_c",
+            "threshold": 1.5,
+            "actual": 1.0936078632375223,
+            "result": "PASS"
+          },
+          {
+            "gate": "coupled_room_night_rmse_c",
+            "threshold": 0.8,
+            "actual": 0.40246668839974487,
+            "result": "PASS"
+          },
+          {
+            "gate": "closed_loop_tfwd_mean_abs_diff_c",
+            "threshold": 1.0,
+            "actual": 0.5165023613392492,
+            "result": "PASS"
+          },
+          {
+            "gate": "closed_loop_pos_mean_abs_diff_pct",
+            "threshold": 10.0,
+            "actual": 2.0446108371994782,
+            "result": "PASS"
+          }
+        ],
+        "overall": "PASS",
+        "gates_sha256": "63281d063e0cafd00c9171376b306bec1c54c06945f51c469b55757d37790c91",
+        "coupled": {
+          "tinc": {
+            "n": 435688,
+            "rmse": 2.0670843770346994,
+            "mae": 1.1076130687570238,
+            "bias": -0.1434031463198831
+          },
+          "tfwd": {
+            "n": 226755,
+            "rmse": 1.8517207510469837,
+            "mae": 1.192815962008866,
+            "bias": 0.0922968299983831
+          },
+          "tret": {
+            "n": 426124,
+            "rmse": 1.0936078632375223,
+            "mae": 0.8458386622407255,
+            "bias": 0.08641449482151577
+          },
+          "room": {
+            "n": 130319,
+            "rmse": 0.40246668839974487,
+            "mae": 0.3026520127134236,
+            "bias": 0.09099474653105644
+          }
+        },
+        "closed": {
+          "n": 118055,
+          "tfwd_sim_mean": 33.92499363659231,
+          "tfwd_meas_mean": 33.40849127525306,
+          "tfwd_sim_std": 2.801180013422169,
+          "tfwd_meas_std": 3.4865690636610656,
+          "pos_sim_mean": 58.25532668206056,
+          "pos_meas_mean": 56.210715844861085,
+          "tfwd_mean_abs_diff": 0.5165023613392492,
+          "pos_mean_abs_diff": 2.0446108371994782
+        },
+        "consistency": {
+          "hx": 0.0,
+          "mixer": 0.0,
+          "tret": 0.0,
+          "slab": 0.0,
+          "room": 0.0
+        },
+        "parity": {
+          "max_abs": 1.4210854715202004e-14,
+          "rows": 25920
+        }
+      }
+    }
+  },
+  "missing": []
+}

@@ -1,0 +1,44 @@
+{
+  "generated": "2026-10-29 11:56:38",
+  "gates_sha256": "5e67fdab55b1a9a05fa195f4b7c1f320dce09341d5c65267ffc1862372cdff22",
+  "chosen": "C2 reconstructed T_inc water, step-3 law",
+  "tune": {
+    "n": 282216,
+    "rmse": 1.54477296252554,
+    "mae": 0.8323714009023109,
+    "bias": 0.042244450442665706,
+    "p95": 3.7534483337625435
+  },
+  "t50_median_abs_error_s": NaN,
+  "n_timing_events": 0,
+  "gates": [
+    {
+      "gate": "tune_pumpon_rmse_c",
+      "op": "<",
+      "threshold": 1.5,
+      "actual": 1.54477296252554,
+      "result": "FAIL",
+      "margin_frac": -0.029848641683693316,
+      "marginal": false
+    },
+    {
+      "gate": "tune_pumpon_mae_c",
+      "op": "<",
+      "threshold": 1.0,
+      "actual": 0.8323714009023109,
+      "result": "PASS",
+      "margin_frac": 0.16762859909768912,
+      "marginal": false
+    },
+    {
+      "gate": "tune_move_t50_median_abs_error_s",
+      "op": "<",
+      "threshold": 30.0,
+      "actual": NaN,
+      "result": "NOT EVALUABLE (no qualifying events) - not passed",
+      "margin_frac": NaN,
+      "marginal": false
+    }
+  ],
+  "overall": "FAIL"
+}

@@ -33,18 +33,18 @@ SOURCES = {
         describe="3-way mixer static mixing law",
     ),
     "step4_mixer_dynamics": dict(
-        file="step4/step4_params.json",
-        report=None, model=None,
+        file="step4/step4_params_v2.json",
+        report="step4/step4_mixer_dynamics_report_v2.md", model="step4/step4_mixer_dynamics_v2.py",
         describe="mixer actuator, transport delay and forward-sensor dynamics",
     ),
     "step5_floor_slab": dict(
-        file="step5/step5_params.json",
-        report=None, model=None,
+        file="step5/step5_params_v1.json",
+        report="step5/step5_floor_slab_report_v1.md", model="step5/step5_floor_slab_v1.py",
         describe="floor loop / slab / room dynamics (T_forward -> T_return)",
     ),
     "step6_assembly": dict(
-        file="step6/step6_params.json",
-        report=None, model=None,
+        file="step6/step6_params_v1.json",
+        report="step6/step6_plant_validation_report_v1.md", model="step6/plant_v1.py + step6/plant_v1.hpp",
         describe="boiler emulator and integration constants",
     ),
 }

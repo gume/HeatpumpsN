@@ -1,0 +1,51 @@
+{
+  "generated": "2026-10-29 14:14:15",
+  "gates_sha256": "584d59fbdc622efe664d2c2485aeb3d24c536a55e9f26690b9af05307b969d77",
+  "chosen": "S1 one node, no delay",
+  "tune": {
+    "n": 494110,
+    "rmse": 0.6897026459279602,
+    "mae": 0.5518218585349537,
+    "bias": 0.14615219200166185,
+    "p95": 1.2974417450847557,
+    "median_block_rmse": 0.5952443314532408,
+    "room_n": 144961,
+    "room_rmse": 0.35904617254555016,
+    "room_bias": 0.0548220890263257
+  },
+  "gates": [
+    {
+      "gate": "tune_tret_rmse_c",
+      "threshold": 1.0,
+      "actual": 0.6897026459279602,
+      "result": "PASS",
+      "margin_frac": 0.31029735407203984,
+      "marginal": false
+    },
+    {
+      "gate": "tune_tret_mae_c",
+      "threshold": 0.6,
+      "actual": 0.5518218585349537,
+      "result": "PASS",
+      "margin_frac": 0.08029690244174381,
+      "marginal": false
+    },
+    {
+      "gate": "tune_tret_abs_bias_c",
+      "threshold": 0.3,
+      "actual": 0.14615219200166185,
+      "result": "PASS",
+      "margin_frac": 0.5128260266611272,
+      "marginal": false
+    },
+    {
+      "gate": "tune_room_night_rmse_c",
+      "threshold": 0.5,
+      "actual": 0.35904617254555016,
+      "result": "PASS",
+      "margin_frac": 0.2819076549088997,
+      "marginal": false
+    }
+  ],
+  "overall": "PASS"
+}

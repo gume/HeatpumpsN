@@ -1,0 +1,18 @@
+{
+  "step": 5,
+  "status": "frozen before any step-5 data analysis or fitting",
+  "targets": ["T_return (mixer_return_temperature)", "room temperature (temperature_humidity_sensor_d281_temperature)"],
+  "split": "FIT blocks of step2/holdout_v7.json identify; structure choices by week-parity cross-validation inside FIT; TUNE blocks are the untouched test set (Steps 2-4 used T_return only as an input and never modelled the room)",
+  "rationale": "The new controller's Delta-T-collapse rule compares T_mix_out - T_return_floor with min_useful_delta_t (a few kelvin) and the flush logic waits for T_return to stabilise; a HIL return-temperature error near 1 K would trigger or suppress these rules wrongly. Room temperature drives the slab losses and HA comfort logic; 0.5 K is the order of a thermostat hysteresis.",
+  "scoring": {
+    "t_return": "free-run simulation over each TUNE block with measured T_forward, floor-pump state, room and outdoor temperature as inputs; all states initialised from measurements at the block start; samples from 2 h after the block start, with fresh T_return, T_forward (age <= 900 s) and no input outage (T_boiler age <= 900 s), outside Step 3 fault days",
+    "room": "same free run; room samples between 22:00 and 06:00 local time only (no solar gain), room sensor age <= 3600 s"
+  },
+  "gates": {
+    "tune_tret_rmse_c": {"op": "<", "threshold": 1.0},
+    "tune_tret_mae_c": {"op": "<", "threshold": 0.6},
+    "tune_tret_abs_bias_c": {"op": "<", "threshold": 0.3},
+    "tune_room_night_rmse_c": {"op": "<", "threshold": 0.5}
+  },
+  "marginal_margin_fraction": 0.01
+}

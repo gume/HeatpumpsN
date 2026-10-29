@@ -1,0 +1,16 @@
+{
+  "step": 6,
+  "status": "frozen before any step-6 code or evaluation",
+  "test_set": "TUNE blocks of step2/holdout_v7.json (12 h, 2 h warm-up inside the block). TUNE was used as test set by Steps 3-5 and for structure checks in Step 2, so it is not untouched; it is the largest set never used for fitting any parameter. The integrated test is new (coupled simulation) and no parameter is changed in Step 6.",
+  "gates": {
+    "component_consistency_max_abs_c": {"op": "<", "threshold": 1e-9, "description": "plant_v1 reproduces each step's component model output when fed that step's measured inputs"},
+    "cpp_parity_max_abs_c": {"op": "<", "threshold": 1e-9, "description": "C++ header vs Python plant on the parity input set"},
+    "coupled_tinc_rmse_c": {"op": "<", "threshold": 2.5, "description": "open-loop coupled T_incoming sensor, fresh samples"},
+    "coupled_tfwd_rmse_c": {"op": "<", "threshold": 2.0, "description": "open-loop coupled T_forward sensor, floor pump on >= 5 min, no DHW"},
+    "coupled_tret_rmse_c": {"op": "<", "threshold": 1.5, "description": "open-loop coupled T_return"},
+    "coupled_room_night_rmse_c": {"op": "<", "threshold": 0.8, "description": "open-loop coupled room temperature 22:00-06:00"},
+    "closed_loop_tfwd_mean_abs_diff_c": {"op": "<", "threshold": 1.0, "description": "legacy-controller replica in closed loop: |mean simulated - mean measured T_forward| over samples with floor pump on >= 30 min, no DHW, boiler firing in the last 10 min"},
+    "closed_loop_pos_mean_abs_diff_pct": {"op": "<", "threshold": 10.0, "description": "same samples: |mean simulated - mean measured mixer position|"}
+  },
+  "rationale": "Coupled thresholds allow the component errors of Steps 2-5 to accumulate (about the root-sum of the component RMSEs plus margin). The closed-loop gates check that the plant reproduces the legacy controller's operating point, which is what a HIL test of the new controller relies on."
+}

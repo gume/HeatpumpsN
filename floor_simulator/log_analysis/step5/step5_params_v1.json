@@ -1,0 +1,115 @@
+{
+  "version": "1.0",
+  "generated": "2026-10-29 14:14:15",
+  "model": "see step5_floor_slab_v1.py docstring",
+  "parameters": {
+    "tau_r": 305.0389138585976,
+    "beta": 0.18715463019250456,
+    "tau_in": 8308.296645022796,
+    "tau_out": 8412.052351091363,
+    "tau_off": 5040.758730412514,
+    "kappa": 1.0,
+    "d_s": 0.0,
+    "tau_q": 1000000000.0,
+    "r_q": 0.0,
+    "tau_bs": 69778.08794084631,
+    "tau_bo": 250006.16299304555,
+    "c0": -2.483434122511693e-05,
+    "two_node": false
+  },
+  "parameter_units": {
+    "tau_r": "s",
+    "beta": "-",
+    "tau_in": "s",
+    "tau_out": "s",
+    "tau_off": "s",
+    "kappa": "-",
+    "d_s": "s",
+    "tau_q": "s",
+    "r_q": "-",
+    "tau_bs": "s",
+    "tau_bo": "s",
+    "c0": "K/s"
+  },
+  "chosen_structure": "S1 one node, no delay",
+  "cv": {
+    "S1 one node, no delay": {
+      "rmse": 0.701999499545124,
+      "mae": 0.561639219737619
+    },
+    "S2 one node, transport delay": {
+      "rmse": 0.7248661126258767,
+      "mae": 0.5614182854517369
+    },
+    "S3 two nodes, no delay": {
+      "rmse": 0.702432672749383,
+      "mae": 0.5625769638976589
+    },
+    "S4 two nodes, transport delay": {
+      "rmse": 0.7535042089962819,
+      "mae": 0.5868880313161415
+    }
+  },
+  "fit": {
+    "n": 506721,
+    "rmse": 0.6909616420019791,
+    "mae": 0.5552097218815332,
+    "bias": 0.07909699346433341,
+    "p95": 1.3275887299930407,
+    "median_block_rmse": 0.5903780257395619,
+    "room_n": 147752,
+    "room_rmse": 0.38638739028749797,
+    "room_bias": 0.06286210338730307
+  },
+  "acceptance": {
+    "gates": [
+      {
+        "gate": "tune_tret_rmse_c",
+        "threshold": 1.0,
+        "actual": 0.6897026459279602,
+        "result": "PASS",
+        "margin_frac": 0.31029735407203984,
+        "marginal": false
+      },
+      {
+        "gate": "tune_tret_mae_c",
+        "threshold": 0.6,
+        "actual": 0.5518218585349537,
+        "result": "PASS",
+        "margin_frac": 0.08029690244174381,
+        "marginal": false
+      },
+      {
+        "gate": "tune_tret_abs_bias_c",
+        "threshold": 0.3,
+        "actual": 0.14615219200166185,
+        "result": "PASS",
+        "margin_frac": 0.5128260266611272,
+        "marginal": false
+      },
+      {
+        "gate": "tune_room_night_rmse_c",
+        "threshold": 0.5,
+        "actual": 0.35904617254555016,
+        "result": "PASS",
+        "margin_frac": 0.2819076549088997,
+        "marginal": false
+      }
+    ],
+    "overall": "PASS",
+    "gates_sha256": "584d59fbdc622efe664d2c2485aeb3d24c536a55e9f26690b9af05307b969d77",
+    "test_set": "TUNE blocks",
+    "tune": {
+      "n": 494110,
+      "rmse": 0.6897026459279602,
+      "mae": 0.5518218585349537,
+      "bias": 0.14615219200166185,
+      "p95": 1.2974417450847557,
+      "median_block_rmse": 0.5952443314532408,
+      "room_n": 144961,
+      "room_rmse": 0.35904617254555016,
+      "room_bias": 0.0548220890263257
+    }
+  },
+  "report": "step5/step5_floor_slab_report_v1.md"
+}
