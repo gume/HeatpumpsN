@@ -52,9 +52,8 @@ the current selection.
 
 Each of the six logical outputs has its own polarity flag
 (`output_active_low_*`). A board may mix active-high and active-low drivers, so
-there is no global polarity. The legacy global `output_active_low` is retained
-only to migrate old NVS data; it is not shown in the portal and is not used by
-the output code.
+there is no global polarity. The former global `output_active_low` field is
+unused; it stays in `Config` only so the stored settings blob keeps its layout.
 
 The two mixer channels always mean:
 

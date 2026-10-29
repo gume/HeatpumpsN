@@ -59,15 +59,6 @@ void setup() {
   Config& config = config_mutable();
   config = config_defaults();
   const hpn::ConfigLoadResult config_result = hpn::config_load(config);
-  if (config_result == hpn::ConfigLoadResult::Migrated) {
-    // Persist the upgraded v2 layout immediately so the migration is a
-    // one-time operation and the next boot finds a current blob.
-    if (hpn::config_save(config)) {
-      Serial.println("[config] upgraded configuration saved");
-    } else {
-      Serial.println("[config] upgraded configuration could not be saved; will retry on next boot");
-    }
-  }
   state_init(g_state);
   if (config_result == hpn::ConfigLoadResult::Corrupt) {
     // The saved blob failed its CRC/layout check. Keep running on compiled

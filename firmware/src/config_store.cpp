@@ -16,20 +16,12 @@ constexpr const char* kKey = "config";
 constexpr uint32_t kMagic = 0x48504E43u;  // "HPNC"
 constexpr uint16_t kVersion = 5;
 
-// v1 blobs contain the unchanged 1288-byte Config prefix (the first version
-// already used the former tail padding for mix_max_open_pct). v2 appended the
-// pump-calibration, operating-window, overshoot, sensor-role and inferred-DHW
-// fields. v3 appended the first output-driver/port-expander block. v4 adds
-// per-channel polarity, the PCF8574 fault input and the current-measurement
-// front end. v5 adds the optional mixer power meter in the tail padding byte
-// v4 left unused, so the size does not change; the version still bumps because
-// a v4 blob left that byte undefined. Each migration starts from current
-// defaults and copies the unchanged old prefix, so the new fields receive a
-// valid value.
-constexpr size_t kV1ConfigSize = 1288;
-constexpr size_t kV2ConfigSize = 1348;
-constexpr size_t kV3ConfigSize = 1364;
-constexpr size_t kV4ConfigSize = 1376;
+// One format only, no migration: a blob is accepted when its version and size
+// match this build exactly. Any other blob is reported as stale and the
+// compiled defaults are used. Bump kVersion whenever the Config layout
+// changes (the size check also catches a forgotten bump).
+//
+// Note: v5 is kept because it is the format the bench device stores today.
 constexpr size_t kCurrentConfigSize = 1376;
 
 struct ConfigBlobHeader {
@@ -52,15 +44,8 @@ struct ConfigBlob {
 
 static_assert(sizeof(ConfigBlobHeader) == 12, "unexpected NVS header layout");
 static_assert(sizeof(ConfigBlobPrefix) == 8, "unexpected NVS prefix layout");
-static_assert(sizeof(Config) > kV3ConfigSize,
-              "v4 fields must be appended after the v3 Config prefix");
-// v5 reuses the padding byte v4 left after tlv9064_present. If this fails, a
-// field was added somewhere else: bump the version and extend the migration
-// path instead of silently reinterpreting stored bytes.
-static_assert(offsetof(Config, has_mixer_power) == kV4ConfigSize - 1,
-              "v5 must reuse the v4 tail padding byte");
 static_assert(sizeof(Config) == kCurrentConfigSize,
-              "Config layout changed; review the NVS format");
+              "Config layout changed: bump kVersion and kCurrentConfigSize");
 
 Preferences g_prefs;
 
@@ -84,8 +69,6 @@ void sanitize_optional_output_bit(uint8_t& bit) {
 }
 
 void sanitize_config(Config& config) {
-  // Blobs written before the opening cap existed have 0 in that byte (it was
-  // tail padding). Any out-of-range value is equally invalid.
   if (config.mix_max_open_pct < 10 || config.mix_max_open_pct > 100) {
     config.mix_max_open_pct = 85;
   }
@@ -140,7 +123,7 @@ void sanitize_config(Config& config) {
     config.dhw_infer_max_s = 1800;
   }
 
-  // Output-driver block (v3). Reject an unknown driver and keep the expander
+  // Output driver. Reject an unknown driver and keep the expander
   // bit map inside the one-byte range. A standard PCF8574 address is
   // 0x20-0x27 (PCF8574) or 0x38-0x3F (PCF8574A); other 7-bit addresses are
   // allowed for compatible custom expanders.
@@ -160,7 +143,7 @@ void sanitize_config(Config& config) {
   sanitize_optional_output_bit(config.expander_bit_mux_s1);
   sanitize_optional_output_bit(config.expander_bit_mix_fault);
 
-  // Current-measurement block (v4).
+  // Current-measurement front end.
   if (config.current_sense > CURRENT_SENSE_ADS1115) {
     config.current_sense = CURRENT_SENSE_NONE;
   }
@@ -191,13 +174,11 @@ ConfigLoadResult config_load(Config& config) {
 
   if (stored != 0) {
     // Preferences::getBytes() requires a buffer large enough for the whole
-    // blob. The current format is the largest recorded format, so anything
-    // that still fits is read in full and the header decides how to
-    // interpret it.
+    // blob. Anything that fits is read in full and the header decides.
     if (stored < sizeof(ConfigBlobPrefix)) {
       result = ConfigLoadResult::Corrupt;
     } else if (stored > sizeof(ConfigBlob)) {
-      // Larger than any recorded format: an old/foreign blob, not damage.
+      // Not this format: a foreign blob, not damage.
       result = ConfigLoadResult::Stale;
     } else {
       uint8_t bytes[sizeof(ConfigBlob)] = {};
@@ -206,7 +187,7 @@ ConfigLoadResult config_load(Config& config) {
       } else {
         const ConfigBlobHeader* header = reinterpret_cast<const ConfigBlobHeader*>(bytes);
         if (header->magic != kMagic) {
-          // Old-format or foreign blob. No migration target: use defaults.
+          // Foreign blob: use defaults.
           result = ConfigLoadResult::Stale;
         } else if (header->version == kVersion) {
           if (stored != sizeof(ConfigBlob) || header->size != sizeof(Config)) {
@@ -218,76 +199,8 @@ ConfigLoadResult config_load(Config& config) {
           } else {
             result = ConfigLoadResult::Corrupt;
           }
-        } else if (header->version == 1) {
-          const size_t v1_blob_size = sizeof(ConfigBlobHeader) + kV1ConfigSize;
-          if (stored != v1_blob_size || header->size != kV1ConfigSize) {
-            result = ConfigLoadResult::Corrupt;
-          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
-            // Start from current defaults so every appended field has a valid
-            // value, then overwrite the unchanged v1 prefix.
-            Config migrated = config_defaults();
-            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV1ConfigSize);
-            sanitize_config(migrated);
-            config = migrated;
-            result = ConfigLoadResult::Migrated;
-          } else {
-            result = ConfigLoadResult::Corrupt;
-          }
-        } else if (header->version == 2) {
-          const size_t v2_blob_size = sizeof(ConfigBlobHeader) + kV2ConfigSize;
-          if (stored != v2_blob_size || header->size != kV2ConfigSize) {
-            result = ConfigLoadResult::Corrupt;
-          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
-            Config migrated = config_defaults();
-            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV2ConfigSize);
-            sanitize_config(migrated);
-            config = migrated;
-            result = ConfigLoadResult::Migrated;
-          } else {
-            result = ConfigLoadResult::Corrupt;
-          }
-        } else if (header->version == 3) {
-          const size_t v3_blob_size = sizeof(ConfigBlobHeader) + kV3ConfigSize;
-          if (stored != v3_blob_size || header->size != kV3ConfigSize) {
-            result = ConfigLoadResult::Corrupt;
-          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
-            Config migrated = config_defaults();
-            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV3ConfigSize);
-            // v3 had one global polarity. Carry it into every output so the
-            // relay board behaviour does not change during the migration.
-            const bool legacy_low = migrated.output_active_low;
-            migrated.output_active_low_heater = legacy_low;
-            migrated.output_active_low_pump_rad1 = legacy_low;
-            migrated.output_active_low_pump_rad2 = legacy_low;
-            migrated.output_active_low_pump_floor = legacy_low;
-            migrated.output_active_low_mix_direction = legacy_low;
-            migrated.output_active_low_mix_motion = legacy_low;
-            sanitize_config(migrated);
-            config = migrated;
-            result = ConfigLoadResult::Migrated;
-          } else {
-            result = ConfigLoadResult::Corrupt;
-          }
-        } else if (header->version == 4) {
-          const size_t v4_blob_size = sizeof(ConfigBlobHeader) + kV4ConfigSize;
-          if (stored != v4_blob_size || header->size != kV4ConfigSize) {
-            result = ConfigLoadResult::Corrupt;
-          } else if (blob_crc_bytes(bytes, stored) == header->crc) {
-            Config migrated = config_defaults();
-            memcpy(&migrated, bytes + sizeof(ConfigBlobHeader), kV4ConfigSize);
-            // v4 stored the three pump meters only. Every v4 carrier wires the
-            // same four rings, so a board with any pump meter also had the
-            // mixer meter; a boardless build had none.
-            migrated.has_mixer_power = migrated.has_pump_power[0] || migrated.has_pump_power[1] ||
-                                       migrated.has_pump_power[2];
-            sanitize_config(migrated);
-            config = migrated;
-            result = ConfigLoadResult::Migrated;
-          } else {
-            result = ConfigLoadResult::Corrupt;
-          }
         } else {
-          // A newer format written by a different firmware build.
+          // Another format version: no migration, use the compiled defaults.
           result = ConfigLoadResult::Stale;
         }
       }
@@ -299,10 +212,6 @@ ConfigLoadResult config_load(Config& config) {
   switch (result) {
     case ConfigLoadResult::Loaded:
       Serial.println("[config] loaded saved configuration from NVS");
-      break;
-    case ConfigLoadResult::Migrated:
-      Serial.printf("[config] migrated older configuration to v%u\n",
-                    static_cast<unsigned>(kVersion));
       break;
     case ConfigLoadResult::Stale:
       Serial.printf("[config] saved configuration format differs (%u bytes); using compiled defaults\n",

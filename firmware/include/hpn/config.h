@@ -155,8 +155,7 @@ struct Config {
   // --- Output limits -------------------------------------------------------
   // Absolute upper bound for the mixer opening, in percent (10-100). L1 never
   // drives the valve above this value; L2 and the portal clamp their targets
-  // to it. In the v1 layout this field reused the former tail padding; it is
-  // part of the unchanged 1288-byte prefix that v2 migration preserves.
+  // to it.
   uint8_t mix_max_open_pct;
 
   // --- Pump current measurement -------------------------------------------
@@ -223,8 +222,11 @@ struct Config {
   uint8_t expander_latch_pin;    // 74HC595 RCLK / STCP
   uint8_t expander_oe_pin;       // 74HC595 /OE, 255 when hard-wired
   bool expander_oe_active_low;   // true: /OE low enables the outputs
-  // Legacy global polarity, kept only so v3 NVS blobs can be migrated. New
-  // code uses the per-channel flags below; the portal no longer edits this.
+  // Unused (former global polarity; the per-channel flags below replaced it).
+  // Kept only so the stored blob keeps its layout: removing it changes the
+  // Config size, and a device would then drop its saved settings (including
+  // MQTT) on the next boot. Remove together with a kVersion bump when the
+  // device can be re-provisioned on site.
   bool output_active_low;
   // Expander output bit (0-7) for each logical channel. Direction and motion
   // are the two mixer channels described by MixerWiring. 0xFF = not connected.

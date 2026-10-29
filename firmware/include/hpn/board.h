@@ -49,7 +49,7 @@ const BoardConfig& board_config();
 // IDs, LED count, mixer travel time, ...).
 // Seed the carrier's compiled default pins and sensors into `config`. Called
 // from config_defaults(), i.e. only when no saved configuration is available
-// (fresh device, unreadable or unmigratable blob). A loaded blob is never
+// (fresh device, or an unreadable or other-format blob). A loaded blob is never
 // re-seeded, so this must stay free of side effects and must not encode the
 // MCU: every MCU running this carrier profile gets the same defaults.
 void board_apply_defaults(Config& config);

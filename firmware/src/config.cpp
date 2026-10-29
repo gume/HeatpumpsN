@@ -119,7 +119,7 @@ Config config_defaults() {
   c.expander_latch_pin = HPN_GPIO_UNASSIGNED;
   c.expander_oe_pin = HPN_GPIO_UNASSIGNED;
   c.expander_oe_active_low = true;
-  c.output_active_low = false;  // legacy migration field
+  c.output_active_low = false;  // unused, see config.h
   c.expander_bit_heater = 0;
   c.expander_bit_pump_rad1 = 1;
   c.expander_bit_pump_rad2 = 2;
