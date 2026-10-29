@@ -63,6 +63,8 @@ Snapshot snapshot();
 // Mocked sensor inputs. Defaults: 45.0 / 30.0 / 35.0 °C, all valid.
 // Pump/mixer power defaults to 10 W / 10 W / 10 W / 2 W.
 void set_temperature(TempRole role, float celsius, bool valid = true);
+// Move linearly from the current value to `celsius` over `ramp_ms` (0 = step).
+void set_temperature_ramp(TempRole role, float celsius, uint32_t ramp_ms, bool valid = true);
 void set_power_w(CurrentChannel channel, float watts);
 void reset();
 

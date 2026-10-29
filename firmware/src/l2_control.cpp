@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <math.h>
 
+#include "hpn/mpc.h"
 #include "hpn/web_portal.h"
 
 namespace hpn {
@@ -245,10 +246,13 @@ void service_dhw_inference(const Config& config, SystemState& state, uint32_t no
   }
 }
 
-// Simple proportional + feedforward mixer loop around the dead-reckoned
-// position. The Smith predictor term uses the measured gradient and the
-// configured transport delay. Full PI coordination and observer-owned tuning
-// validation remain future work.
+// Mixer position loop. The predictive controller (mpc.h) owns the normal
+// floor-demand path unless the legacy mode is selected; the emergency lock,
+// the no-demand close and DHW handling below stay in front of it.
+//
+// Legacy: simple proportional + feedforward loop around the dead-reckoned
+// position. The "Smith predictor" term uses the measured gradient and the
+// configured transport delay.
 void service_mixer_control(const Config& config, SystemState& state, bool floor_demand,
                            bool dhw_active, bool flush_active) {
   // Emergency lock: L1 owns the mixer and forces a full close. Do not let the
@@ -271,6 +275,7 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     // minimum opening is a normal-control limit only and never blocks a close.
     state.mix_target_pos = 0.0f;
     state.integrator_val = g_integrator;
+    mpc::floor_idle();
     return;
   }
 
@@ -282,6 +287,13 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
     if (boiler < setpoint + config.deadband_temp) {
       state.mix_target_pos = 0.0f;
     }
+    state.integrator_val = g_integrator;
+    return;
+  }
+
+  // Predictive control. Its supervisor reacts to the overshoot latch itself
+  // (homing and cautious fallback), so the legacy reaction below is bypassed.
+  if (mpc::control(config, state, flush_active)) {
     state.integrator_val = g_integrator;
     return;
   }
@@ -386,6 +398,7 @@ void service_position_tracking(const Config& config, SystemState& state, uint32_
 void begin(const Config& config, SystemState& state) {
   (void)config;
   (void)state;
+  mpc::begin();
   g_last_tick_ms = 0;
   g_floor_flush_end_ms = 0;
   g_floor_pause_end_ms = 0;
@@ -569,7 +582,10 @@ void tick(const Config& config, SystemState& state) {
   state.heater_requested = req_heater;
 
   // --- Mixer position loop ------------------------------------------------
-  service_mixer_control(config, state, req_floor, state.dhw_active, g_floor_flush_active);
+  // A fallback homing stroke owns the valve until it completes.
+  if (!mpc::service_homing(config, state)) {
+    service_mixer_control(config, state, req_floor, state.dhw_active, g_floor_flush_active);
+  }
   service_position_tracking(config, state, now);
 
   const bool safety_error = state.system_error_code == ERR_L1_HARD_OVERTEMP ||

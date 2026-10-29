@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <esp_core_dump.h>
 #include <esp_system.h>
 #include <math.h>
 #include <stdio.h>
@@ -22,6 +23,7 @@
 #include "hpn/crc32.h"
 #include "hpn/l0_io.h"
 #include "hpn/logger.h"
+#include "hpn/mpc.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/sensor_roles.h"
 #include "hpn/wifi_client.h"
@@ -39,6 +41,8 @@ namespace {
 // ---------------------------------------------------------------------------
 
 constexpr uint32_t kBroadcastIntervalMs = 250;
+// Largest free heap block required before a state frame is broadcast.
+constexpr uint32_t kBroadcastMinBlock = 24u * 1024u;
 constexpr size_t kAccessLogSize = 64;
 
 struct AccessEntry {
@@ -545,6 +549,8 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
     meter_enabled.add(power_meter_present(cfg, i));
   }
   power["senseAvailable"] = l0::power_measurement_available(cfg);
+
+  mpc::status_json(doc["mpc"].to<JsonObject>(), true);
 
 #if defined(HPN_IO_EMULATION)
   const sim::Snapshot sim_state = sim::snapshot();
@@ -2590,6 +2596,7 @@ void handle_sim_get(AsyncWebServerRequest* request) {
   JsonDocument doc;
   doc["enabled"] = true;
   doc["revision"] = snapshot.revision;
+  doc["rampSupported"] = true;
 
   JsonArray temperatures = doc["temperatures"].to<JsonArray>();
   const char* roles[] = {"boiler", "return", "mix"};
@@ -2680,6 +2687,13 @@ void handle_sim_temperature(AsyncWebServerRequest* request, JsonVariant& json) {
   }
   const float value = in["value"].as<float>();
   const bool valid = in["valid"] | true;
+  // Optional ramp: the HIL bench posts one target per plant tick and lets the
+  // model interpolate, instead of a stream of small steps.
+  const float ramp_s = in["ramp_s"] | 0.0f;
+  if (!isfinite(ramp_s) || ramp_s < 0.0f || ramp_s > 120.0f) {
+    send_error(request, 400, "ramp_s out of range (0-120 s)");
+    return;
+  }
 
   TempRole role;
   if (strcmp(role_name, "boiler") == 0) {
@@ -2701,12 +2715,15 @@ void handle_sim_temperature(AsyncWebServerRequest* request, JsonVariant& json) {
     return;
   }
 
-  sim::set_temperature(role, value, valid);
+  sim::set_temperature_ramp(role, value, static_cast<uint32_t>(ramp_s * 1000.0f), valid);
 
-  char detail[96];
-  snprintf(detail, sizeof(detail), "Sim temperature %s = %.1f C%s", role_name, value,
-           valid ? "" : " (invalid)");
-  log_event(0, 1500, detail);
+  // Manual changes are logged; a ramping bench stream would flood the ring.
+  if (ramp_s <= 0.0f) {
+    char detail[96];
+    snprintf(detail, sizeof(detail), "Sim temperature %s = %.1f C%s", role_name, value,
+             valid ? "" : " (invalid)");
+    log_event(0, 1500, detail);
+  }
 
   JsonDocument doc;
   doc["ok"] = true;
@@ -3006,6 +3023,87 @@ void handle_system_factory_reset(AsyncWebServerRequest* request) {
   doc["ok"] = true;
   doc["reboot_in_ms"] = 500;
   send_json(request, 200, doc);
+}
+
+void handle_mpc_get(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  mpc::status_json(doc["status"].to<JsonObject>(), true);
+  JsonObject sets = doc["params"].to<JsonObject>();
+  for (uint8_t sc = 0; sc < mpc::SC_COUNT; ++sc) {
+    mpc::params_json(sc, sets[mpc::scenario_name(sc)].to<JsonObject>());
+  }
+  send_json(request, 200, doc);
+}
+
+void handle_mpc_params(AsyncWebServerRequest* request, JsonVariant& json) {
+  char err[128];
+  if (!mpc::apply_params(json, "rest", err, sizeof(err))) {
+    send_error(request, 400, err);
+    return;
+  }
+  handle_mpc_get(request);
+}
+
+void handle_mpc_mode(AsyncWebServerRequest* request, JsonVariant& json) {
+  const char* mode = json["mode"] | "";
+  char err[128];
+  if (!mpc::apply_mode(mode, "rest", err, sizeof(err))) {
+    send_error(request, 400, err);
+    return;
+  }
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["requested"] = mode;
+  send_json(request, 200, doc);
+}
+
+// Summary of the last panic stored in the coredump partition. Decode the
+// addresses with the matching firmware.elf:
+//   xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <pc> <bt...>
+void handle_coredump_get(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  const esp_err_t check = esp_core_dump_image_check();
+  doc["present"] = check == ESP_OK;
+  if (check != ESP_OK) {
+    doc["detail"] = esp_err_to_name(check);
+    send_json(request, 200, doc);
+    return;
+  }
+  esp_core_dump_summary_t* summary =
+      static_cast<esp_core_dump_summary_t*>(malloc(sizeof(esp_core_dump_summary_t)));
+  if (summary == nullptr) {
+    send_error(request, 500, "out of memory");
+    return;
+  }
+  if (esp_core_dump_get_summary(summary) == ESP_OK) {
+    char hex[16];
+    doc["task"] = summary->exc_task;
+    snprintf(hex, sizeof(hex), "0x%08x", static_cast<unsigned>(summary->exc_pc));
+    doc["pc"] = hex;
+    snprintf(hex, sizeof(hex), "0x%08x", static_cast<unsigned>(summary->ex_info.exc_cause));
+    doc["cause"] = hex;
+    snprintf(hex, sizeof(hex), "0x%08x", static_cast<unsigned>(summary->ex_info.exc_vaddr));
+    doc["vaddr"] = hex;
+    JsonArray bt = doc["backtrace"].to<JsonArray>();
+    for (uint32_t i = 0; i < summary->exc_bt_info.depth && i < 16; ++i) {
+      snprintf(hex, sizeof(hex), "0x%08x", static_cast<unsigned>(summary->exc_bt_info.bt[i]));
+      bt.add(hex);
+    }
+    doc["backtraceCorrupted"] = summary->exc_bt_info.corrupted;
+    doc["elfSha256"] = reinterpret_cast<const char*>(summary->app_elf_sha256);
+  } else {
+    doc["detail"] = "summary unavailable";
+  }
+  free(summary);
+  send_json(request, 200, doc);
+}
+
+void handle_coredump_clear(AsyncWebServerRequest* request) {
+  const esp_err_t err = esp_core_dump_image_erase();
+  JsonDocument doc;
+  doc["ok"] = err == ESP_OK;
+  doc["detail"] = esp_err_to_name(err);
+  send_json(request, err == ESP_OK ? 200 : 500, doc);
 }
 
 void handle_status(AsyncWebServerRequest* request) {
@@ -3393,6 +3491,17 @@ void register_routes() {
 
   // OTA
   g_server.on(AsyncURIMatcher::exact("/api/update"), HTTP_POST, handle_ota_final, handle_ota_upload);
+  g_server.on(AsyncURIMatcher::exact("/api/mpc"), HTTP_GET, handle_mpc_get);
+  g_server.on(AsyncURIMatcher::exact("/api/mpc/params"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_mpc_params(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/mpc/mode"), HTTP_POST,
+              [](AsyncWebServerRequest* request, JsonVariant& json) {
+                handle_mpc_mode(request, json);
+              });
+  g_server.on(AsyncURIMatcher::exact("/api/system/coredump"), HTTP_GET, handle_coredump_get);
+  g_server.on(AsyncURIMatcher::exact("/api/system/coredump/clear"), HTTP_POST, handle_coredump_clear);
 
 #if defined(HPN_IO_EMULATION)
   // Board emulation API. These routes do not exist in hardware builds.
@@ -3559,7 +3668,12 @@ void tick(const Config& config, SystemState& state) {
               wifi_connected ? "Wi-Fi connected" : "Wi-Fi link lost");
   }
 
-  if (g_ws.count() > 0 && now - g_last_broadcast_ms >= kBroadcastIntervalMs) {
+  // A slow client (a browser tab behind a proxy) queues every frame. At 4 Hz
+  // and ~5 KB per frame that exhausted the heap and aborted in operator new
+  // (bad_alloc in makeSharedBuffer, T_comms). Drop the frame while any client
+  // is backed up or the heap is short; the next one carries the full state.
+  if (g_ws.count() > 0 && now - g_last_broadcast_ms >= kBroadcastIntervalMs &&
+      g_ws.availableForWriteAll() && ESP.getMaxAllocHeap() >= kBroadcastMinBlock) {
     g_last_broadcast_ms = now;
     Snapshot snapshot;
     get_snapshot(snapshot);

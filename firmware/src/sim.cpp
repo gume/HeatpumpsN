@@ -28,6 +28,12 @@ struct Model {
 
   float temperature_set_c[kTempRoleCount];
   bool temperature_valid[kTempRoleCount];
+  // Optional linear ramp towards temperature_set_c (HIL bench): the value
+  // moves from ramp_from_c over ramp_ms, so the controller's 1 s poll sees a
+  // smooth signal instead of aliased steps from the injector's own cadence.
+  float ramp_from_c[kTempRoleCount];
+  uint32_t ramp_start_ms[kTempRoleCount];
+  uint32_t ramp_ms[kTempRoleCount];
   float power_set_w[kCurrentChannelCount];
 
   bool follow_controller;
@@ -200,6 +206,14 @@ float effective_temperature(const Model& model, TempRole role, uint32_t now_ms) 
         static_cast<float>(kBoilerSinePeriodMs);
     return kBoilerSineCenterC + kBoilerSineAmplitudeC * sinf(phase);
   }
+  const uint32_t ramp = model.ramp_ms[index];
+  if (ramp > 0) {
+    const uint32_t elapsed = now_ms - model.ramp_start_ms[index];
+    if (elapsed < ramp) {
+      const float w = static_cast<float>(elapsed) / static_cast<float>(ramp);
+      return model.ramp_from_c[index] + w * (model.temperature_set_c[index] - model.ramp_from_c[index]);
+    }
+  }
   return model.temperature_set_c[index];
 }
 
@@ -320,6 +334,7 @@ void reset_locked(Model& model) {
 
   for (uint8_t i = 0; i < kTempRoleCount; ++i) {
     model.temperature_valid[i] = true;
+    model.ramp_ms[i] = 0;
   }
   model.temperature_set_c[static_cast<size_t>(TempRole::Boiler)] = 45.0f;
   model.temperature_set_c[static_cast<size_t>(TempRole::ReturnFloor)] = 30.0f;
@@ -427,12 +442,22 @@ Snapshot snapshot() {
 }
 
 void set_temperature(TempRole role, float celsius, bool valid) {
+  set_temperature_ramp(role, celsius, 0, valid);
+}
+
+void set_temperature_ramp(TempRole role, float celsius, uint32_t ramp_ms, bool valid) {
   if (!valid_temp_role(role)) {
     return;
   }
   const size_t index = static_cast<size_t>(role);
+  const uint32_t now_ms = millis();
 
   taskENTER_CRITICAL(&g_mux);
+  // Start from the value the controller sees right now, so consecutive ramps
+  // join without a step.
+  g_model.ramp_from_c[index] = effective_temperature(g_model, role, now_ms);
+  g_model.ramp_start_ms[index] = now_ms;
+  g_model.ramp_ms[index] = ramp_ms;
   g_model.temperature_set_c[index] = celsius;
   g_model.temperature_valid[index] = valid;
   if (role == TempRole::Boiler) {

@@ -11,6 +11,7 @@
 #include "hpn/board.h"
 #include "hpn/build_target.h"
 #include "hpn/logger.h"
+#include "hpn/mpc.h"
 #include "hpn/state.h"
 #include "hpn/web_portal.h"
 #include "hpn/wifi_client.h"
@@ -226,6 +227,50 @@ void publish_error_status(const SystemState& st) {
     g_cache.have_error_status = true;
     g_cache.error_code = st.system_error_code;
     g_cache.error_alarms = st.active_alarms;
+  }
+}
+
+constexpr uint32_t kMpcStatusIntervalMs = 5000;
+uint32_t g_mpc_last_ms = 0;
+uint32_t g_mpc_params_rev = 0;
+
+// Predictive controller telemetry: status every 5 s, retained parameter sets
+// whenever their revision changes, and command acknowledgements.
+void publish_mpc() {
+  if (!g_client.connected()) {
+    return;
+  }
+  static char payload[1536];
+  char topic[128];
+  const uint32_t now = millis();
+  if (g_mpc_last_ms == 0 || now - g_mpc_last_ms >= kMpcStatusIntervalMs) {
+    JsonDocument doc;
+    mpc::status_json(doc.to<JsonObject>(), true);
+    if (serializeJson(doc, payload, sizeof(payload)) > 0) {
+      make_topic(topic, sizeof(topic), "state/mpc");
+      if (g_client.publish(topic, payload, false)) {
+        g_mpc_last_ms = now;
+      }
+    }
+  }
+  const uint32_t rev = mpc::params_revision();
+  if (rev != g_mpc_params_rev) {
+    bool ok = true;
+    for (uint8_t sc = 0; sc < mpc::SC_COUNT && ok; ++sc) {
+      JsonDocument doc;
+      mpc::params_json(sc, doc.to<JsonObject>());
+      char suffix[48];
+      snprintf(suffix, sizeof(suffix), "state/mpc/params/%s", mpc::scenario_name(sc));
+      make_topic(topic, sizeof(topic), suffix);
+      ok = serializeJson(doc, payload, sizeof(payload)) > 0 && g_client.publish(topic, payload, true);
+    }
+    if (ok) {
+      g_mpc_params_rev = rev;
+    }
+  }
+  if (mpc::take_ack(payload, sizeof(payload))) {
+    make_topic(topic, sizeof(topic), "state/mpc/ack");
+    g_client.publish(topic, payload, false);
   }
 }
 
@@ -696,6 +741,19 @@ void handle_command(const char* topic, const char* value) {
     return;
   }
 
+  // Predictive mixer controller: observer parameter sets and mode requests.
+  // Results go to state/mpc/ack (published from tick, not from this callback).
+  if (strcmp(suffix, "cmd/mpc/params") == 0) {
+    char err[128];
+    mpc::apply_params_json(value, "mqtt", err, sizeof(err));
+    return;
+  }
+  if (strcmp(suffix, "cmd/mpc/mode") == 0) {
+    char err[128];
+    mpc::apply_mode(value, "mqtt", err, sizeof(err));
+    return;
+  }
+
   if (strcmp(suffix, "cmd/floor_setpoint") == 0) {
     char* end = nullptr;
     const float value_c = strtof(value, &end);
@@ -1047,6 +1105,8 @@ void attempt_connect() {
   reset_state_cache();
   publish_states();
   g_last_publish_ms = millis();
+  g_mpc_params_rev = 0;   // republish the retained parameter sets
+  g_mpc_last_ms = 0;
 }
 
 void mark_disconnected(const char* state) {
@@ -1188,6 +1248,7 @@ void tick(const Config& config, SystemState& state) {
     publish_test();
   }
 
+  publish_mpc();
   publish_logs(config);
 }
 

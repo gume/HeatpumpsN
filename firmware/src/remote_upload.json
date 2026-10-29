@@ -93,6 +93,9 @@ if not env.get("HPN_REMOTE_UPLOAD_POST"):
     env["HPN_REMOTE_UPLOAD_POST"] = True
 
 # --- post: fix UPLOADCMD after the platform builder has run -----------------
+# The HTTP OTA environment (upload_protocol = custom) brings its own command.
+elif env.subst("$UPLOAD_PROTOCOL") == "custom":
+    pass
 else:
     if set(["uploadfs", "uploadfsota"]) & set(COMMAND_LINE_TARGETS):
         env.Replace(
