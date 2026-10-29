@@ -1,0 +1,150 @@
+{
+  "version": "v6.3",
+  "created_utc": "2026-10-29T00:29:51.769904+00:00",
+  "selector_script": "simulation/select_holdout_v63.py",
+  "selector_git_blob": "cd4401d6bf7d5d80c7f4094ee9ad828b6edb9a32",
+  "selector_sha256": "057cc83cdb03cb414762fb268ab5be671d703e75e51ef3430a147f762baa7ac7",
+  "scan_window": {
+    "start": "2026-03-01",
+    "end": "2026-04-14",
+    "step_hours": 12,
+    "grid_minutes": 1,
+    "note": "late heating season; whole range loaded once"
+  },
+  "criteria": {
+    "outside_all_fit_tune_val": true,
+    "warmup_minutes": 30,
+    "buffer_hours": 6,
+    "min_cold_starts": 1,
+    "cold_idle_minutes": 30,
+    "cold_manifold_max_c": 28.0,
+    "min_mid_run_cutoffs": 2,
+    "requires_final_shutdown": true,
+    "max_stale_fraction": 0.02,
+    "stale_rule": "analog tb/tinc/tret <= 900 s; event bp/pmod/p1/p2/p3 stale only if > 14400 s and tb_age > 900 s",
+    "prefer_circulating_dhw": true
+  },
+  "protected_intervals": [
+    {
+      "name": "FIT_WINDOW",
+      "start": "2025-12-01T21:30:00+01:00",
+      "end": "2025-12-25T00:29:00+01:00"
+    },
+    {
+      "name": "FIT-1",
+      "start": "2026-01-13T23:30:00+01:00",
+      "end": "2026-01-14T05:30:00+01:00"
+    },
+    {
+      "name": "FIT-DHW",
+      "start": "2025-12-03T07:48:00+01:00",
+      "end": "2025-12-03T09:15:00+01:00"
+    },
+    {
+      "name": "TUNE-1",
+      "start": "2025-12-27T15:36:00+01:00",
+      "end": "2025-12-27T21:28:00+01:00"
+    },
+    {
+      "name": "TUNE-2",
+      "start": "2026-01-01T14:20:00+01:00",
+      "end": "2026-01-01T15:55:00+01:00"
+    },
+    {
+      "name": "TUNE-3",
+      "start": "2026-02-08T03:57:00+01:00",
+      "end": "2026-02-08T10:41:00+01:00"
+    },
+    {
+      "name": "VAL-1",
+      "start": "2026-01-14T23:30:00+01:00",
+      "end": "2026-01-15T05:30:00+01:00"
+    },
+    {
+      "name": "VAL-2",
+      "start": "2026-02-19T14:10:00+01:00",
+      "end": "2026-02-19T17:55:00+01:00"
+    },
+    {
+      "name": "VAL-3",
+      "start": "2026-01-13T04:30:00+01:00",
+      "end": "2026-01-13T08:05:00+01:00"
+    },
+    {
+      "name": "VAL-4",
+      "start": "2026-01-14T04:30:00+01:00",
+      "end": "2026-01-14T08:00:00+01:00"
+    },
+    {
+      "name": "VAL-5",
+      "start": "2026-02-25T23:30:00+01:00",
+      "end": "2026-02-26T12:30:00+01:00"
+    },
+    {
+      "name": "VAL-6",
+      "start": "2026-02-18T05:20:00+01:00",
+      "end": "2026-02-18T07:25:00+01:00"
+    },
+    {
+      "name": "VAL-7",
+      "start": "2026-01-03T02:50:00+01:00",
+      "end": "2026-01-03T04:20:00+01:00"
+    }
+  ],
+  "candidates_considered": 2,
+  "episodes": {
+    "VAL-8": {
+      "name": "VAL-8 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "t_start": "2026-03-16T00:00:00+01:00",
+      "t_end": "2026-03-16T12:00:00+01:00",
+      "kind": "HOLDOUT",
+      "role": "untouched v6.3 holdout, selected from telemetry only",
+      "selection_evidence": {
+        "cold_starts": 1,
+        "cold_indices": [
+          331
+        ],
+        "cutoffs": 5,
+        "cutoff_indices": [
+          5,
+          347,
+          434,
+          499,
+          513
+        ],
+        "final_shutdown_index": 582,
+        "stale_fraction": 0.0,
+        "burner_minutes": 225,
+        "pump_minutes": 246,
+        "dhw_minutes": 24,
+        "tinc_min_c": 20.8125,
+        "tinc_max_c": 67.9375
+      }
+    },
+    "VAL-9": {
+      "name": "VAL-9 Untouched Holdout: Cold Start, Cutoffs & Final Shutdown + Circulating DHW",
+      "t_start": "2026-03-22T12:00:00+01:00",
+      "t_end": "2026-03-23T00:00:00+01:00",
+      "kind": "HOLDOUT",
+      "role": "untouched v6.3 holdout, selected from telemetry only",
+      "selection_evidence": {
+        "cold_starts": 1,
+        "cold_indices": [
+          427
+        ],
+        "cutoffs": 2,
+        "cutoff_indices": [
+          444,
+          484
+        ],
+        "final_shutdown_index": 663,
+        "stale_fraction": 0.0,
+        "burner_minutes": 213,
+        "pump_minutes": 221,
+        "dhw_minutes": 53,
+        "tinc_min_c": 17.4375,
+        "tinc_max_c": 67.6875
+      }
+    }
+  }
+}
