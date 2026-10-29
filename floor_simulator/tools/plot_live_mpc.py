@@ -16,7 +16,9 @@ from floor_simulator.tools.plot_controllers import GRID, INK, INK2, SERIES, styl
 
 
 def main(src: str, out: str, setpoint: float = 35.0):
-    rows = [r for r in (json.loads(line) for line in open(src)) if "error" not in r]
+    allrows = [json.loads(line) for line in open(src)]
+    rows = [r for r in allrows if "fwd" in r]
+    events = [r for r in allrows if "event" in r]
     m = [r["t"] / 60 for r in rows]
     fig, (a1, a2, a3) = plt.subplots(3, 1, figsize=(12, 8.5), sharex=True,
                                      gridspec_kw=dict(height_ratios=[1.6, 1.0, 0.7]))
@@ -49,12 +51,26 @@ def main(src: str, out: str, setpoint: float = 35.0):
     a3.set_xlabel("minutes", color=INK2, fontsize=9)
     for a in (a1, a2, a3):
         style(a)
+        for e in events:
+            a.axvline(e["t"] / 60, color=INK2, lw=0.8, ls="-.")
+        # fallback periods (homing / cautious) shaded
+        start = None
+        for r in rows + [dict(t=rows[-1]["t"], mode="mpc")]:
+            fb = r["mode"] in ("homing", "cautious")
+            if fb and start is None:
+                start = r["t"]
+            elif not fb and start is not None:
+                a.axvspan(start / 60, r["t"] / 60, color=SERIES[1], alpha=0.08, lw=0)
+                start = None
+    for i, e in enumerate(events):
+        a1.annotate(e["event"], (e["t"] / 60, a1.get_ylim()[1]), fontsize=8, color=INK2,
+                    xytext=(3, -12 - 11 * i), textcoords="offset points")
     last = rows[-1]
     travel = sum(abs(b["phys"] - a["phys"]) for a, b in zip(rows, rows[1:]))
     hours = max((rows[-1]["t"] - rows[0]["t"]) / 3600, 1e-6)
     fig.suptitle(f"Live HIL, firmware MPC — {travel:.0f} % travel ({travel / hours:.0f} %/h), "
                  f"{last['plans']} plans ({last['triggered'] if 'triggered' in last else last['trig']} triggered), "
-                 f"plan compute {last['cpu']:.0f} ms, mode {last['mode']}",
+                 f"plan compute ≤{max(r['cpu'] for r in rows):.0f} ms, end mode {last['mode']}",
                  x=0.01, ha="left", fontsize=11, color=INK, fontweight="bold")
     fig.tight_layout()
     fig.savefig(out, dpi=110)
