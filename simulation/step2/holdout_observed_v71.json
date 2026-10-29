@@ -1,0 +1,97 @@
+{
+  "version": "7.1",
+  "param_sha256": "014687537492c0a8445d53691af44109119a494a1b6a9acdd49b1f1e7d04b98c",
+  "holdout_sha256": "4b4519793961a97f02aad3d82734bdcd150ab788405a49292d0066db1e7e9e70",
+  "gates_sha256": "151d16ab13c42d5ddbaece4889545573557ad27aa63d695f8f1cf409b383db98",
+  "space_heating": {
+    "episodes": 3,
+    "mean_rmse": 1.981470607354277,
+    "pooled_rmse": 2.0189441240694013,
+    "mean_mae": 0.9799941608283543,
+    "min_r2": 0.9857282014414559,
+    "median_r2": 0.9867359605175225,
+    "pooled_r2": 0.9889546054939983,
+    "n": 11270
+  },
+  "dhw": {
+    "episodes": 3,
+    "mean_rmse": 6.991331444608018,
+    "pooled_rmse": 8.46087343008588,
+    "mean_mae": 4.622711819815294,
+    "min_r2": 0.22627340568585597,
+    "median_r2": 0.680778064873758,
+    "pooled_r2": 0.6072730223991708,
+    "n": 1150
+  },
+  "gates": [
+    {
+      "suite": "space_heating",
+      "metric": "Mean episode RMSE (degC)",
+      "op": "<",
+      "threshold": 1.25,
+      "actual": 1.981470607354277,
+      "result": "FAIL",
+      "margin": -0.7314706073542769,
+      "margin_frac": -0.5851764858834215,
+      "marginal": false
+    },
+    {
+      "suite": "space_heating",
+      "metric": "Pooled RMSE (degC)",
+      "op": "<",
+      "threshold": 1.5,
+      "actual": 2.0189441240694013,
+      "result": "FAIL",
+      "margin": -0.5189441240694013,
+      "margin_frac": -0.34596274937960086,
+      "marginal": false
+    },
+    {
+      "suite": "space_heating",
+      "metric": "Mean episode MAE (degC)",
+      "op": "<",
+      "threshold": 0.85,
+      "actual": 0.9799941608283543,
+      "result": "FAIL",
+      "margin": -0.12999416082835435,
+      "margin_frac": -0.15293430685688747,
+      "marginal": false
+    },
+    {
+      "suite": "space_heating",
+      "metric": "Minimum per-episode R2",
+      "op": ">",
+      "threshold": 0.9,
+      "actual": 0.9857282014414559,
+      "result": "PASS",
+      "margin": 0.08572820144145588,
+      "margin_frac": 0.0952535571571732,
+      "marginal": false
+    },
+    {
+      "suite": "dhw",
+      "metric": "DHW pooled RMSE (degC)",
+      "op": "<",
+      "threshold": 4.5,
+      "actual": 8.46087343008588,
+      "result": "FAIL",
+      "margin": -3.960873430085879,
+      "margin_frac": -0.8801940955746398,
+      "marginal": false
+    },
+    {
+      "suite": "dhw",
+      "metric": "DHW minimum per-episode R2",
+      "op": ">",
+      "threshold": 0.9,
+      "actual": 0.22627340568585597,
+      "result": "FAIL",
+      "margin": -0.6737265943141441,
+      "margin_frac": -0.7485851047934934,
+      "marginal": false
+    }
+  ],
+  "overall": "FAIL",
+  "status": "observed (HO-1..HO-3 seen in v7.0); not sign-off evidence",
+  "evaluated_at": "2026-10-29 11:21:50"
+}

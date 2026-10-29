@@ -1,0 +1,43 @@
+{
+  "generated": "2026-10-29 11:52:02",
+  "gates_sha256": "630854041c794554e20847123c1362b06181ed0d8532b73589d74c22fa05b429",
+  "chosen": "M1 monotone table",
+  "tune": {
+    "n": 4144,
+    "rmse": 0.8235739794895789,
+    "bias": -0.009135996542016663,
+    "mae": 0.4808133802306336,
+    "p95": 1.5144265096890654,
+    "max": 10.386755190935062
+  },
+  "gates": [
+    {
+      "gate": "tune_steady_rmse_c",
+      "op": "<",
+      "threshold": 1.0,
+      "actual": 0.8235739794895789,
+      "result": "PASS",
+      "margin_frac": 0.1764260205104211,
+      "marginal": false
+    },
+    {
+      "gate": "tune_steady_abs_bias_c",
+      "op": "<",
+      "threshold": 0.3,
+      "actual": 0.009135996542016663,
+      "result": "PASS",
+      "margin_frac": 0.9695466781932777,
+      "marginal": false
+    },
+    {
+      "gate": "tune_steady_p95_abs_error_c",
+      "op": "<",
+      "threshold": 2.0,
+      "actual": 1.5144265096890654,
+      "result": "PASS",
+      "margin_frac": 0.24278674515546728,
+      "marginal": false
+    }
+  ],
+  "overall": "PASS"
+}

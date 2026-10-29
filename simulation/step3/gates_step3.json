@@ -1,0 +1,14 @@
+{
+  "step": 3,
+  "status": "frozen before any step-3 data analysis or fitting",
+  "target": "steady-state mixed forward temperature T_forward (mixer_forward_temperature)",
+  "split": "FIT blocks of step2/holdout_v7.json identify the law; structure choices use week-parity cross-validation inside FIT; TUNE blocks are the untouched test set (never fitted, never used for structure)",
+  "steady_state_definition": "defined in step3_mixer_static.py and frozen with this file's commit; applied identically to FIT and TUNE",
+  "rationale": "The new controller regulates T_mix_out with a 0.3/0.5 K deadband and a 3 K overshoot reaction; a HIL static gain error above about 1 K would shift the closed-loop operating point beyond the deadband and change controller behaviour.",
+  "gates": {
+    "tune_steady_rmse_c": {"op": "<", "threshold": 1.0},
+    "tune_steady_abs_bias_c": {"op": "<", "threshold": 0.3},
+    "tune_steady_p95_abs_error_c": {"op": "<", "threshold": 2.0}
+  },
+  "marginal_margin_fraction": 0.01
+}

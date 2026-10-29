@@ -1,0 +1,32 @@
+{
+  "version": "v7",
+  "status": "frozen before any v7 model code was written and before any holdout evaluation",
+  "source": "engineering HIL accuracy requirements; thresholds carried over unchanged from gates_v63.json so the bar is not lowered",
+  "holdout_file": "step2/holdout_v7.json",
+  "space_heating_suite": {
+    "episodes": "all HO-* blocks in holdout_v7.json",
+    "scored_samples": "10 s samples from the end of the 30-min warm-up to block end, with fresh measured T_incoming (age <= 900 s), excluding every DHW window [ww rise, ww fall + 600 s]",
+    "metrics": {
+      "mean_episode_rmse_c": {"op": "<", "threshold": 1.25},
+      "pooled_rmse_c": {"op": "<", "threshold": 1.50},
+      "mean_episode_mae_c": {"op": "<", "threshold": 0.85},
+      "min_episode_r2": {"op": ">", "threshold": 0.90}
+    }
+  },
+  "dhw_suite": {
+    "episodes": "all HO-* blocks with at least one circulating DHW event",
+    "circulating_dhw_event": "ww rising edge with bp > 0 and ww = 0 during at least one of the preceding 10 one-minute samples and a secondary pump on (same definition as select_holdout_v7.py)",
+    "window": "[ww rise, ww fall + 600 s] for every circulating DHW event; union per episode",
+    "metrics": {
+      "pooled_rmse_c": {"op": "<", "threshold": 4.50},
+      "min_episode_r2": {"op": ">", "threshold": 0.90}
+    },
+    "change_vs_v63": "v6.3 scored only [ww fall, ww fall + 600 s] of any ww edge, including DHW cycles during idle where T_incoming is flat and R2 is undefined in practice. v7 scores the whole divert + recovery of circulating DHW events, which is what the HIL controller must see (integrator freeze, plunge, recovery)."
+  },
+  "marginal_margin_fraction": 0.01,
+  "rules": [
+    "Gates and holdout are hashed in freeze_v7.json and committed before model work.",
+    "The holdout is evaluated exactly once, after the parameter freeze.",
+    "Any FAIL is reported as FAIL; no post-hoc retuning on holdout data."
+  ]
+}

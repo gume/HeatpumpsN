@@ -1,0 +1,250 @@
+{
+  "description": "Final parameter set of the floor-heating HIL plant simulator. Each block is copied verbatim from the step that identified it; see the referenced report for definitions, units and validation.",
+  "generated": "2026-10-29 11:52:14",
+  "steps": {
+    "step2_hx": {
+      "describe": "HX outlet / T_incoming model (inputs: T_boiler, T_return, T_room, mixer position, burner, primary pump, DHW flag, pump relays)",
+      "source": "step2/step2_params_v71.json",
+      "source_sha256": "c289eb47c9844c577ef9e6ead32a78b8424aed2a90ebd45d5c958e35e9a5b3ab",
+      "report": "step2/step2_hx_dynamics_report_v71.md",
+      "model": "step2/hx_model_v71.py",
+      "version": "7.1",
+      "parameters": {
+        "tau_p": 1.0,
+        "tau_hx": 4.999999999999999,
+        "eps_A": 0.9307758630329073,
+        "eps_B": 0.9264583363218086,
+        "eps_C": 0.9267514219630666,
+        "eps_N": 0.8980679542067908,
+        "tau_hc": 30.454653037627278,
+        "k_hc": 0.0,
+        "V": 63.55903581768935,
+        "q1": 0.0,
+        "q2": 0.00473220008115168,
+        "tau_fn": 2123.6327140418593,
+        "tau_h": 339.576444813926,
+        "k_b": 0.14731536889159497,
+        "k_b_park": 0.06826547742423324,
+        "tau_rc": 1421.6152427079521,
+        "tau_rd": 6900.550978320528,
+        "dhw_hold_s": 22.677104426451265,
+        "d_amb": 0.491780025925438,
+        "L_pipe": 0.0,
+        "tau_pipe": 677.6094962897447,
+        "div_travel_s": 0.0,
+        "tau_s": 75.27224849148485
+      },
+      "units": {
+        "tau_p": "s",
+        "tau_hx": "s",
+        "eps_A": "-",
+        "eps_B": "-",
+        "eps_C": "-",
+        "eps_N": "-",
+        "tau_hc": "s",
+        "k_hc": "-",
+        "V": "s",
+        "q1": "-",
+        "q2": "-",
+        "tau_fn": "s",
+        "tau_h": "s",
+        "k_b": "-",
+        "k_b_park": "-",
+        "tau_rc": "s",
+        "tau_rd": "s",
+        "dhw_hold_s": "s",
+        "d_amb": "degC",
+        "L_pipe": "s",
+        "tau_pipe": "s",
+        "div_travel_s": "s",
+        "tau_s": "s"
+      },
+      "constants": {
+        "DT": 10.0,
+        "MAX_PIPE_N": 64,
+        "DIV_CLEAR_S": 30.0,
+        "pump_on_w": 2.0,
+        "pump_debounce_samples": 31
+      },
+      "acceptance": {
+        "holdout_official_v70": {
+          "overall": "FAIL",
+          "evaluated_at": "2026-10-29 10:36:48",
+          "param_sha256": "441cf1d420244a55e753f7ab115c705ba64c2a1bb749625a2d0b86a56aa900a7"
+        },
+        "holdout_observed": {
+          "status": "observed since v7.0; not sign-off",
+          "space_heating": {
+            "episodes": 3,
+            "mean_rmse": 1.981470607354277,
+            "pooled_rmse": 2.0189441240694013,
+            "mean_mae": 0.9799941608283543,
+            "min_r2": 0.9857282014414559,
+            "median_r2": 0.9867359605175225,
+            "pooled_r2": 0.9889546054939983,
+            "n": 11270
+          },
+          "dhw": {
+            "episodes": 3,
+            "mean_rmse": 6.991331444608018,
+            "pooled_rmse": 8.46087343008588,
+            "mean_mae": 4.622711819815294,
+            "min_r2": 0.22627340568585597,
+            "median_r2": 0.680778064873758,
+            "pooled_r2": 0.6072730223991708,
+            "n": 1150
+          },
+          "gates": [
+            {
+              "suite": "space_heating",
+              "metric": "Mean episode RMSE (degC)",
+              "op": "<",
+              "threshold": 1.25,
+              "actual": 1.981470607354277,
+              "result": "FAIL",
+              "margin": -0.7314706073542769,
+              "margin_frac": -0.5851764858834215,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Pooled RMSE (degC)",
+              "op": "<",
+              "threshold": 1.5,
+              "actual": 2.0189441240694013,
+              "result": "FAIL",
+              "margin": -0.5189441240694013,
+              "margin_frac": -0.34596274937960086,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Mean episode MAE (degC)",
+              "op": "<",
+              "threshold": 0.85,
+              "actual": 0.9799941608283543,
+              "result": "FAIL",
+              "margin": -0.12999416082835435,
+              "margin_frac": -0.15293430685688747,
+              "marginal": false
+            },
+            {
+              "suite": "space_heating",
+              "metric": "Minimum per-episode R2",
+              "op": ">",
+              "threshold": 0.9,
+              "actual": 0.9857282014414559,
+              "result": "PASS",
+              "margin": 0.08572820144145588,
+              "margin_frac": 0.0952535571571732,
+              "marginal": false
+            },
+            {
+              "suite": "dhw",
+              "metric": "DHW pooled RMSE (degC)",
+              "op": "<",
+              "threshold": 4.5,
+              "actual": 8.46087343008588,
+              "result": "FAIL",
+              "margin": -3.960873430085879,
+              "margin_frac": -0.8801940955746398,
+              "marginal": false
+            },
+            {
+              "suite": "dhw",
+              "metric": "DHW minimum per-episode R2",
+              "op": ">",
+              "threshold": 0.9,
+              "actual": 0.22627340568585597,
+              "result": "FAIL",
+              "margin": -0.6737265943141441,
+              "margin_frac": -0.7485851047934934,
+              "marginal": false
+            }
+          ],
+          "overall": "FAIL"
+        }
+      }
+    },
+    "step3_mixer_static": {
+      "describe": "3-way mixer static mixing law",
+      "source": "step3/step3_params_v1.json",
+      "source_sha256": "a5ecda63e7d7b9341e8463ef734e52b81a0eae02fd8ffa454b40b62438fc589e",
+      "report": "step3/step3_mixer_static_report_v1.md",
+      "model": "step3/step3_mixer_static_v1.py",
+      "version": "1.0",
+      "parameters": {
+        "knots_pos_pct": [
+          0.0,
+          25.0,
+          50.0,
+          52.5,
+          55.0,
+          57.5,
+          60.0,
+          65.0,
+          70.0,
+          80.0,
+          90.0
+        ],
+        "x_at_knots": [
+          0.019708777501874487,
+          0.08797438977407805,
+          0.19571996098316935,
+          0.2143951679851754,
+          0.24351101914506734,
+          0.27510011947278257,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.28905441818469313,
+          0.294961917520541,
+          0.3020774653843355
+        ]
+      },
+      "units": {
+        "knots_pos_pct": "% (mixer_state)",
+        "x_at_knots": "-"
+      },
+      "constants": null,
+      "acceptance": {
+        "gates": [
+          {
+            "gate": "tune_steady_rmse_c",
+            "op": "<",
+            "threshold": 1.0,
+            "actual": 0.8235739794895789,
+            "result": "PASS",
+            "margin_frac": 0.1764260205104211,
+            "marginal": false
+          },
+          {
+            "gate": "tune_steady_abs_bias_c",
+            "op": "<",
+            "threshold": 0.3,
+            "actual": 0.009135996542016663,
+            "result": "PASS",
+            "margin_frac": 0.9695466781932777,
+            "marginal": false
+          },
+          {
+            "gate": "tune_steady_p95_abs_error_c",
+            "op": "<",
+            "threshold": 2.0,
+            "actual": 1.5144265096890654,
+            "result": "PASS",
+            "margin_frac": 0.24278674515546728,
+            "marginal": false
+          }
+        ],
+        "overall": "PASS",
+        "gates_sha256": "630854041c794554e20847123c1362b06181ed0d8532b73589d74c22fa05b429",
+        "test_set": "TUNE blocks (untouched for T_forward)"
+      }
+    }
+  },
+  "missing": [
+    "step4_mixer_dynamics",
+    "step5_floor_slab",
+    "step6_assembly"
+  ]
+}

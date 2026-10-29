@@ -1,0 +1,11 @@
+{
+  "version": "v7",
+  "status": "frozen before any v7 model code and before holdout evaluation",
+  "holdout_file": "step2/holdout_v7.json",
+  "holdout_sha256": "4b4519793961a97f02aad3d82734bdcd150ab788405a49292d0066db1e7e9e70",
+  "gates_file": "step2/gates_v7.json",
+  "gates_sha256": "151d16ab13c42d5ddbaece4889545573557ad27aa63d695f8f1cf409b383db98",
+  "selector_file": "step2/select_holdout_v7.py",
+  "selector_sha256": "263b81d3e174001672e3f4a2bbae13f0defd0097cd1339bc8c71446a5fb9eb3c",
+  "freeze_rule": "step2_hx_dynamics_v7.py refuses to evaluate the holdout if either hash differs"
+}

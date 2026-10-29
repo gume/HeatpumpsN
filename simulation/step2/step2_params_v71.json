@@ -1,0 +1,615 @@
+{
+  "version": "7.1",
+  "generated": "2026-10-29 11:21:50",
+  "model": "step2/hx_model_v71.py (numba); DT = 10 s",
+  "full_structure_parameters": {
+    "tau_p": 1.1620058377291307,
+    "tau_hx": 5.036103259319553,
+    "eps_A": 0.9332454659934675,
+    "eps_B": 0.9276753678388063,
+    "eps_C": 0.9176118963527278,
+    "eps_N": 0.8883222861633981,
+    "tau_hc": 31.203126395531516,
+    "k_hc": 0.002832498116739135,
+    "V": 67.85081064582023,
+    "q1": 0.0022869255701669644,
+    "q2": 0.007491321598868339,
+    "tau_fn": 2296.8251560011813,
+    "tau_h": 337.39907697014485,
+    "k_b": 0.1376241174635794,
+    "k_b_park": 0.06130562261787842,
+    "tau_rc": 1502.9225875474908,
+    "tau_rd": 3804.294508464324,
+    "dhw_hold_s": 22.677104426451265,
+    "d_amb": 0.7852478811030021,
+    "L_pipe": 8.97568944878168,
+    "tau_pipe": 925.0938988309368,
+    "div_travel_s": 101.18212992756216,
+    "tau_s": 68.214779725385
+  },
+  "removed_by_parsimony": [
+    "no diverter travel time",
+    "no primary pipe delay"
+  ],
+  "fixed_by_parsimony": {
+    "div_travel_s": 0.0,
+    "L_pipe": 0.0
+  },
+  "parameters": {
+    "tau_p": 1.0,
+    "tau_hx": 4.999999999999999,
+    "eps_A": 0.9307758630329073,
+    "eps_B": 0.9264583363218086,
+    "eps_C": 0.9267514219630666,
+    "eps_N": 0.8980679542067908,
+    "tau_hc": 30.454653037627278,
+    "k_hc": 0.0,
+    "V": 63.55903581768935,
+    "q1": 0.0,
+    "q2": 0.00473220008115168,
+    "tau_fn": 2123.6327140418593,
+    "tau_h": 339.576444813926,
+    "k_b": 0.14731536889159497,
+    "k_b_park": 0.06826547742423324,
+    "tau_rc": 1421.6152427079521,
+    "tau_rd": 6900.550978320528,
+    "dhw_hold_s": 22.677104426451265,
+    "d_amb": 0.491780025925438,
+    "L_pipe": 0.0,
+    "tau_pipe": 677.6094962897447,
+    "div_travel_s": 0.0,
+    "tau_s": 75.27224849148485
+  },
+  "parameter_units": {
+    "tau_p": "s",
+    "tau_hx": "s",
+    "eps_A": "-",
+    "eps_B": "-",
+    "eps_C": "-",
+    "eps_N": "-",
+    "tau_hc": "s",
+    "k_hc": "-",
+    "V": "s",
+    "q1": "-",
+    "q2": "-",
+    "tau_fn": "s",
+    "tau_h": "s",
+    "k_b": "-",
+    "k_b_park": "-",
+    "tau_rc": "s",
+    "tau_rd": "s",
+    "dhw_hold_s": "s",
+    "d_amb": "degC",
+    "L_pipe": "s",
+    "tau_pipe": "s",
+    "div_travel_s": "s",
+    "tau_s": "s"
+  },
+  "parameter_meaning": {
+    "tau_p": "lag of the primary water entering the HX",
+    "tau_hx": "HX secondary outlet time constant (ACT)",
+    "eps_A": "HX effectiveness, floor pump only",
+    "eps_B": "HX effectiveness, floor + radiator pump(s)",
+    "eps_C": "HX effectiveness, radiator pump(s) only",
+    "eps_N": "HX effectiveness, no secondary pump",
+    "tau_hc": "heat-store charging time constant (ACT)",
+    "k_hc": "heat-store charge level above T_return (ACT)",
+    "V": "flushing volume / unit flow (floor full open = 1)",
+    "q1": "radiator circuit 1 flow through the fork",
+    "q2": "radiator circuit 2 flow through the fork",
+    "tau_fn": "stagnant exchange sensor water <-> heat store",
+    "tau_h": "heat-store relaxation time constant (OFF)",
+    "k_b": "heat-store coupling to the boiler body (OFF)",
+    "k_b_park": "same, diverter parked on DHW",
+    "tau_rc": "radiator-loop charging time constant",
+    "tau_rd": "radiator-loop cooling time constant",
+    "dhw_hold_s": "state hold at the start of a DHW divert",
+    "d_amb": "ambient offset relative to the room sensor",
+    "L_pipe": "primary pipe plug-flow transport delay",
+    "tau_pipe": "stagnant primary pipe equilibration",
+    "div_travel_s": "DHW->CH diverter travel time",
+    "tau_s": "T_incoming sensor (thermowell) lag"
+  },
+  "bounds": {
+    "tau_p": [
+      1,
+      600
+    ],
+    "tau_hx": [
+      5,
+      600
+    ],
+    "eps_A": [
+      0.7,
+      1.05
+    ],
+    "eps_B": [
+      0.7,
+      1.05
+    ],
+    "eps_C": [
+      0.7,
+      1.05
+    ],
+    "eps_N": [
+      0.3,
+      1.05
+    ],
+    "tau_hc": [
+      30,
+      30000.0
+    ],
+    "k_hc": [
+      0.0,
+      1.1
+    ],
+    "V": [
+      5,
+      3000
+    ],
+    "q1": [
+      0.0,
+      5.0
+    ],
+    "q2": [
+      0.0,
+      5.0
+    ],
+    "tau_fn": [
+      100,
+      100000.0
+    ],
+    "tau_h": [
+      300,
+      100000.0
+    ],
+    "k_b": [
+      0.0,
+      1.0
+    ],
+    "k_b_park": [
+      0.0,
+      1.0
+    ],
+    "tau_rc": [
+      60,
+      30000.0
+    ],
+    "tau_rd": [
+      300,
+      100000.0
+    ],
+    "dhw_hold_s": [
+      0,
+      300
+    ],
+    "d_amb": [
+      -4,
+      4
+    ],
+    "L_pipe": [
+      0,
+      630
+    ],
+    "tau_pipe": [
+      10,
+      100000.0
+    ],
+    "div_travel_s": [
+      0,
+      600
+    ],
+    "tau_s": [
+      1,
+      300
+    ]
+  },
+  "boundary_limited": {
+    "tau_p": "lower",
+    "tau_hx": "lower",
+    "tau_hc": "lower",
+    "k_hc": "lower",
+    "q1": "lower",
+    "q2": "lower",
+    "L_pipe": "lower",
+    "div_travel_s": "lower"
+  },
+  "constants": {
+    "DT": 10.0,
+    "MAX_PIPE_N": 64,
+    "DIV_CLEAR_S": 30.0,
+    "pump_on_w": 2.0,
+    "pump_debounce_samples": 31
+  },
+  "param_sha256": "014687537492c0a8445d53691af44109119a494a1b6a9acdd49b1f1e7d04b98c",
+  "identification": {
+    "mse": 4.809063558214144,
+    "rmse": 2.1929577192034837,
+    "nfev": 70500,
+    "nit": 200,
+    "success": false,
+    "message": "Maximum number of iterations has been exceeded.",
+    "seconds": 834.4
+  },
+  "fit_suite": {
+    "episodes": 156,
+    "mean_rmse": 1.9681818877240875,
+    "pooled_rmse": 2.202264482460268,
+    "mean_mae": 1.1867648440056138,
+    "min_r2": -343.44415027995933,
+    "median_r2": 0.97835533484752,
+    "pooled_r2": 0.9868469404753338,
+    "n": 628489
+  },
+  "tune_suite": {
+    "episodes": 156,
+    "mean_rmse": 1.905228217980656,
+    "pooled_rmse": 2.0890479260469843,
+    "mean_mae": 1.1536039606569848,
+    "min_r2": -429.81527395585744,
+    "median_r2": 0.9802251226158023,
+    "pooled_r2": 0.9882161661689072,
+    "n": 624250
+  },
+  "tune_suite_v63": {
+    "episodes": 156,
+    "mean_rmse": 4.087896869214789,
+    "pooled_rmse": 4.84265012454143,
+    "mean_mae": 2.5012586638439362,
+    "min_r2": -4713.152227417282,
+    "median_r2": 0.9045189909778966,
+    "pooled_r2": 0.9366778009506923,
+    "n": 624250
+  },
+  "ablations": [
+    {
+      "label": "no secondary flushing (V -> 1e9, q -> 0)",
+      "fixed": {
+        "V": 1000000000.0,
+        "q1": 0.0,
+        "q2": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.971020417094395,
+        "pooled_rmse": 3.1587703660749615,
+        "mean_mae": 1.9447657032914252,
+        "min_r2": -936.1904632795079,
+        "median_r2": 0.9492269465808703,
+        "pooled_r2": 0.9730582431194285,
+        "n": 624250
+      }
+    },
+    {
+      "label": "no diverter travel time",
+      "fixed": {
+        "div_travel_s": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 1.905228217980656,
+        "pooled_rmse": 2.0890479260469843,
+        "mean_mae": 1.1536039606569848,
+        "min_r2": -429.81527395585744,
+        "median_r2": 0.9802251226158023,
+        "pooled_r2": 0.9882161661689072,
+        "n": 624250
+      }
+    },
+    {
+      "label": "no sensor lag",
+      "fixed": {
+        "tau_s": 1e-06
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.142752189137244,
+        "pooled_rmse": 2.2881180031749855,
+        "mean_mae": 1.2750956163581186,
+        "min_r2": -552.840207805003,
+        "median_r2": 0.9733884191998139,
+        "pooled_r2": 0.9858633456577796,
+        "n": 624250
+      }
+    },
+    {
+      "label": "no primary pipe delay",
+      "fixed": {
+        "L_pipe": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 1.934599344444768,
+        "pooled_rmse": 2.099729040090267,
+        "mean_mae": 1.1480638781361916,
+        "min_r2": -451.38558564670035,
+        "median_r2": 0.9796959410510089,
+        "pooled_r2": 0.988095358753907,
+        "n": 624250
+      }
+    },
+    {
+      "label": "no boiler-body coupling (k_b = k_b_park = 0)",
+      "fixed": {
+        "k_b": 0.0,
+        "k_b_park": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.016887999446517,
+        "pooled_rmse": 2.1813575703497756,
+        "mean_mae": 1.2350547093601676,
+        "min_r2": -588.2035537874262,
+        "median_r2": 0.9770677016234743,
+        "pooled_r2": 0.9871517634000083,
+        "n": 624250
+      }
+    }
+  ],
+  "observed_val": {
+    "VAL-1": {
+      "v7": {
+        "n": 1800,
+        "rmse": 0.8976958679402394,
+        "mae": 0.43809249755957447,
+        "bias": -0.019787894732113377,
+        "r2": 0.7289534627227877,
+        "p95": 1.3310707686117442
+      },
+      "v63": {
+        "n": 1800,
+        "rmse": 0.8604924367504097,
+        "mae": 0.5544426992431799,
+        "bias": 0.4757035543051094,
+        "r2": 0.7509540256718599,
+        "p95": 1.491902939758092
+      }
+    },
+    "VAL-2": {
+      "v7": {
+        "n": 990,
+        "rmse": 0.5064599542726789,
+        "mae": 0.35863790540669643,
+        "bias": -0.17024724480213208,
+        "r2": 0.9858072367297533,
+        "p95": 0.9665733326021271
+      },
+      "v63": {
+        "n": 990,
+        "rmse": 0.992636417015856,
+        "mae": 0.8352629487950983,
+        "bias": -0.23384232320744905,
+        "r2": 0.9454798371414666,
+        "p95": 1.501917358029857
+      }
+    },
+    "VAL-3": {
+      "v7": {
+        "n": 930,
+        "rmse": 0.7075203747937368,
+        "mae": 0.5725712647393685,
+        "bias": -0.3124296868028053,
+        "r2": 0.98592499762023,
+        "p95": 1.1756452155870534
+      },
+      "v63": {
+        "n": 930,
+        "rmse": 0.7853602074057212,
+        "mae": 0.7195575815612597,
+        "bias": -0.6316044106404755,
+        "r2": 0.9826576334850704,
+        "p95": 1.186325823444825
+      }
+    },
+    "VAL-4": {
+      "v7": {
+        "n": 900,
+        "rmse": 0.8122287034896591,
+        "mae": 0.7204380241864422,
+        "bias": -0.5952521323780694,
+        "r2": 0.9785952504713729,
+        "p95": 1.2412796319779658
+      },
+      "v63": {
+        "n": 900,
+        "rmse": 1.0695024492362721,
+        "mae": 1.0276752753913467,
+        "bias": -0.9788325097873339,
+        "r2": 0.9628877699925417,
+        "p95": 1.33528606229492
+      }
+    },
+    "VAL-5": {
+      "v7": {
+        "n": 4320,
+        "rmse": 3.170891200051689,
+        "mae": 1.7737935430692529,
+        "bias": -0.13563407416462844,
+        "r2": 0.9699005317797271,
+        "p95": 6.666908124998502
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.4359036454851273,
+        "mae": 2.511042995512721,
+        "bias": -1.8335570777511534,
+        "r2": 0.9646590602368231,
+        "p95": 6.763140475109377
+      }
+    },
+    "VAL-6": {
+      "v7": {
+        "n": 390,
+        "rmse": 4.1330908668862225,
+        "mae": 2.873559501289436,
+        "bias": -2.660695078153032,
+        "r2": 0.9307519422411479,
+        "p95": 10.492244978358407
+      },
+      "v63": {
+        "n": 390,
+        "rmse": 4.438253659940063,
+        "mae": 3.0354885102810782,
+        "bias": -2.23009863007479,
+        "r2": 0.920148711232957,
+        "p95": 10.768128318147884
+      }
+    },
+    "VAL-7": {
+      "v7": {
+        "n": 180,
+        "rmse": 0.4041321950533189,
+        "mae": 0.36891584780638786,
+        "bias": 0.3688730272781707,
+        "r2": -0.2166046000812354,
+        "p95": 0.6328676711494704
+      },
+      "v63": {
+        "n": 180,
+        "rmse": 0.3953137043386272,
+        "mae": 0.37380222541026675,
+        "bias": 0.37346357966641425,
+        "r2": -0.16408929462200184,
+        "p95": 0.5051098822607389
+      }
+    },
+    "VAL-8": {
+      "v7": {
+        "n": 4320,
+        "rmse": 1.8013910695472013,
+        "mae": 1.3348540812578944,
+        "bias": -1.057140938218576,
+        "r2": 0.9889123669868504,
+        "p95": 3.866531823345797
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.420680495060378,
+        "mae": 2.67456076802852,
+        "bias": -2.348269349031097,
+        "r2": 0.9600195337360493,
+        "p95": 6.261004248502836
+      }
+    },
+    "VAL-9": {
+      "v7": {
+        "n": 4320,
+        "rmse": 1.8136198736116926,
+        "mae": 1.5100960087468918,
+        "bias": 0.9779738878990448,
+        "r2": 0.9909249835032539,
+        "p95": 2.4328505427084597
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.6877755726276784,
+        "mae": 2.0997853494747116,
+        "bias": -0.9741303008988373,
+        "r2": 0.9624781833052317,
+        "p95": 3.1100514321009256
+      }
+    }
+  },
+  "holdout_observed": {
+    "status": "observed since v7.0; not sign-off",
+    "space_heating": {
+      "episodes": 3,
+      "mean_rmse": 1.981470607354277,
+      "pooled_rmse": 2.0189441240694013,
+      "mean_mae": 0.9799941608283543,
+      "min_r2": 0.9857282014414559,
+      "median_r2": 0.9867359605175225,
+      "pooled_r2": 0.9889546054939983,
+      "n": 11270
+    },
+    "dhw": {
+      "episodes": 3,
+      "mean_rmse": 6.991331444608018,
+      "pooled_rmse": 8.46087343008588,
+      "mean_mae": 4.622711819815294,
+      "min_r2": 0.22627340568585597,
+      "median_r2": 0.680778064873758,
+      "pooled_r2": 0.6072730223991708,
+      "n": 1150
+    },
+    "gates": [
+      {
+        "suite": "space_heating",
+        "metric": "Mean episode RMSE (degC)",
+        "op": "<",
+        "threshold": 1.25,
+        "actual": 1.981470607354277,
+        "result": "FAIL",
+        "margin": -0.7314706073542769,
+        "margin_frac": -0.5851764858834215,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Pooled RMSE (degC)",
+        "op": "<",
+        "threshold": 1.5,
+        "actual": 2.0189441240694013,
+        "result": "FAIL",
+        "margin": -0.5189441240694013,
+        "margin_frac": -0.34596274937960086,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Mean episode MAE (degC)",
+        "op": "<",
+        "threshold": 0.85,
+        "actual": 0.9799941608283543,
+        "result": "FAIL",
+        "margin": -0.12999416082835435,
+        "margin_frac": -0.15293430685688747,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Minimum per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": 0.9857282014414559,
+        "result": "PASS",
+        "margin": 0.08572820144145588,
+        "margin_frac": 0.0952535571571732,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "metric": "DHW pooled RMSE (degC)",
+        "op": "<",
+        "threshold": 4.5,
+        "actual": 8.46087343008588,
+        "result": "FAIL",
+        "margin": -3.960873430085879,
+        "margin_frac": -0.8801940955746398,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "metric": "DHW minimum per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": 0.22627340568585597,
+        "result": "FAIL",
+        "margin": -0.6737265943141441,
+        "margin_frac": -0.7485851047934934,
+        "marginal": false
+      }
+    ],
+    "overall": "FAIL"
+  },
+  "holdout_official_v70": {
+    "overall": "FAIL",
+    "evaluated_at": "2026-10-29 10:36:48",
+    "param_sha256": "441cf1d420244a55e753f7ab115c705ba64c2a1bb749625a2d0b86a56aa900a7"
+  },
+  "provenance": {
+    "holdout_sha256": "4b4519793961a97f02aad3d82734bdcd150ab788405a49292d0066db1e7e9e70",
+    "gates_sha256": "151d16ab13c42d5ddbaece4889545573557ad27aa63d695f8f1cf409b383db98",
+    "git_head": "fc8cd0b7040e80ff7fa3c420872636dc80e9b0ca"
+  }
+}

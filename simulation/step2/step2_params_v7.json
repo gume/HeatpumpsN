@@ -1,0 +1,575 @@
+{
+  "version": "7.0",
+  "generated": "2026-10-29 10:36:48",
+  "model": "step2/hx_model_v7.py (numba); DT = 10 s",
+  "parameters": {
+    "tau_p": 1.0,
+    "tau_hx": 4.999999999999999,
+    "eps_A": 0.9311146946465719,
+    "eps_B": 0.9264432323064823,
+    "eps_C": 0.909701551089967,
+    "eps_N": 0.8020613521610005,
+    "tau_hc": 48.37843281050344,
+    "k_hc": 0.0,
+    "V": 62.2875057966923,
+    "q1": 0.0,
+    "q2": 0.0038486426529645568,
+    "tau_fn": 2537.377055515741,
+    "tau_h": 387.46173021755317,
+    "k_b": 0.14117790434262864,
+    "k_b_park": 0.06775312946911606,
+    "tau_rc": 30000.000000000007,
+    "tau_rd": 7440.330526380039,
+    "dhw_hold_s": 30.550453297268106,
+    "d_amb": 0.5571956505716934,
+    "L_pipe": 11.7885713458964,
+    "tau_pipe": 2050.0723212701996,
+    "div_travel_s": 93.21947614185146,
+    "tau_s": 70.43016390886469
+  },
+  "parameter_units": {
+    "tau_p": "s",
+    "tau_hx": "s",
+    "eps_A": "-",
+    "eps_B": "-",
+    "eps_C": "-",
+    "eps_N": "-",
+    "tau_hc": "s",
+    "k_hc": "-",
+    "V": "s",
+    "q1": "-",
+    "q2": "-",
+    "tau_fn": "s",
+    "tau_h": "s",
+    "k_b": "-",
+    "k_b_park": "-",
+    "tau_rc": "s",
+    "tau_rd": "s",
+    "dhw_hold_s": "s",
+    "d_amb": "degC",
+    "L_pipe": "s",
+    "tau_pipe": "s",
+    "div_travel_s": "s",
+    "tau_s": "s"
+  },
+  "parameter_meaning": {
+    "tau_p": "lag of the primary water entering the HX",
+    "tau_hx": "HX secondary outlet time constant (ACT)",
+    "eps_A": "HX effectiveness, floor pump only",
+    "eps_B": "HX effectiveness, floor + radiator pump(s)",
+    "eps_C": "HX effectiveness, radiator pump(s) only",
+    "eps_N": "HX effectiveness, no secondary pump",
+    "tau_hc": "heat-store charging time constant (ACT)",
+    "k_hc": "heat-store charge level above T_return (ACT)",
+    "V": "flushing volume / unit flow (floor full open = 1)",
+    "q1": "radiator circuit 1 flow through the fork",
+    "q2": "radiator circuit 2 flow through the fork",
+    "tau_fn": "stagnant exchange sensor water <-> heat store",
+    "tau_h": "heat-store relaxation time constant (OFF)",
+    "k_b": "heat-store coupling to the boiler body (OFF)",
+    "k_b_park": "same, diverter parked on DHW",
+    "tau_rc": "radiator-loop charging time constant",
+    "tau_rd": "radiator-loop cooling time constant",
+    "dhw_hold_s": "state hold at the start of a DHW divert",
+    "d_amb": "ambient offset relative to the room sensor",
+    "L_pipe": "primary pipe plug-flow transport delay",
+    "tau_pipe": "stagnant primary pipe equilibration",
+    "div_travel_s": "DHW->CH diverter travel time",
+    "tau_s": "T_incoming sensor (thermowell) lag"
+  },
+  "bounds": {
+    "tau_p": [
+      1,
+      600
+    ],
+    "tau_hx": [
+      5,
+      600
+    ],
+    "eps_A": [
+      0.7,
+      1.05
+    ],
+    "eps_B": [
+      0.7,
+      1.05
+    ],
+    "eps_C": [
+      0.7,
+      1.05
+    ],
+    "eps_N": [
+      0.3,
+      1.05
+    ],
+    "tau_hc": [
+      30,
+      30000.0
+    ],
+    "k_hc": [
+      0.0,
+      1.1
+    ],
+    "V": [
+      5,
+      3000
+    ],
+    "q1": [
+      0.0,
+      5.0
+    ],
+    "q2": [
+      0.0,
+      5.0
+    ],
+    "tau_fn": [
+      100,
+      100000.0
+    ],
+    "tau_h": [
+      300,
+      100000.0
+    ],
+    "k_b": [
+      0.0,
+      1.0
+    ],
+    "k_b_park": [
+      0.0,
+      1.0
+    ],
+    "tau_rc": [
+      60,
+      30000.0
+    ],
+    "tau_rd": [
+      300,
+      100000.0
+    ],
+    "dhw_hold_s": [
+      0,
+      300
+    ],
+    "d_amb": [
+      -4,
+      4
+    ],
+    "L_pipe": [
+      0,
+      630
+    ],
+    "tau_pipe": [
+      10,
+      100000.0
+    ],
+    "div_travel_s": [
+      0,
+      600
+    ],
+    "tau_s": [
+      1,
+      300
+    ]
+  },
+  "boundary_limited": {
+    "tau_p": "lower",
+    "tau_hx": "lower",
+    "k_hc": "lower",
+    "q1": "lower",
+    "q2": "lower",
+    "tau_rc": "upper"
+  },
+  "constants": {
+    "DT": 10.0,
+    "MAX_PIPE_N": 64,
+    "DIV_CLEAR_S": 30.0,
+    "pump_on_w": 2.0,
+    "pump_debounce_samples": 31
+  },
+  "param_sha256": "441cf1d420244a55e753f7ab115c705ba64c2a1bb749625a2d0b86a56aa900a7",
+  "identification": {
+    "mse": 8.053528414307081,
+    "rmse": 2.837873925019764,
+    "nfev": 65100,
+    "nit": 200,
+    "success": false,
+    "message": "Maximum number of iterations has been exceeded.",
+    "seconds": 712.8
+  },
+  "fit_suite": {
+    "episodes": 156,
+    "mean_rmse": 2.1829985475848495,
+    "pooled_rmse": 2.837873925019763,
+    "mean_mae": 1.2686277213276942,
+    "min_r2": -335.6358304509148,
+    "median_r2": 0.977310420158491,
+    "pooled_r2": 0.9780704699549898,
+    "n": 638056
+  },
+  "tune_suite": {
+    "episodes": 156,
+    "mean_rmse": 2.3173837391460714,
+    "pooled_rmse": 3.7273620838715122,
+    "mean_mae": 1.4128358759184194,
+    "min_r2": -432.8493286093826,
+    "median_r2": 0.9792948794378709,
+    "pooled_r2": 0.9623044577519181,
+    "n": 639275
+  },
+  "tune_suite_v63": {
+    "episodes": 156,
+    "mean_rmse": 4.297544030422167,
+    "pooled_rmse": 5.455598371392359,
+    "mean_mae": 2.6534952090706994,
+    "min_r2": -4657.084000779334,
+    "median_r2": 0.9023303669289919,
+    "pooled_r2": 0.9192445928778264,
+    "n": 639275
+  },
+  "ablations": [
+    {
+      "label": "no secondary flushing (V -> 1e9, q -> 0)",
+      "fixed": {
+        "V": 1000000000.0,
+        "q1": 0.0,
+        "q2": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 3.353255720456058,
+        "pooled_rmse": 4.47967936948536,
+        "mean_mae": 2.211508684771917,
+        "min_r2": -974.3645117215278,
+        "median_r2": 0.9493628766993176,
+        "pooled_r2": 0.9455521556461307,
+        "n": 639275
+      }
+    },
+    {
+      "label": "no diverter travel time",
+      "fixed": {
+        "div_travel_s": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.2964529920000643,
+        "pooled_rmse": 3.7219906243882614,
+        "mean_mae": 1.4151279135322115,
+        "min_r2": -437.84331361001114,
+        "median_r2": 0.980150467502033,
+        "pooled_r2": 0.9624130247102403,
+        "n": 639275
+      }
+    },
+    {
+      "label": "no sensor lag",
+      "fixed": {
+        "tau_s": 1e-06
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.520241992242675,
+        "pooled_rmse": 3.8287451058879785,
+        "mean_mae": 1.5425806977360834,
+        "min_r2": -500.87315750085145,
+        "median_r2": 0.9738657990473899,
+        "pooled_r2": 0.960225957069504,
+        "n": 639275
+      }
+    },
+    {
+      "label": "no primary pipe delay",
+      "fixed": {
+        "L_pipe": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.3173823618151297,
+        "pooled_rmse": 3.7273607053896027,
+        "mean_mae": 1.4128320701631472,
+        "min_r2": -432.8467757974959,
+        "median_r2": 0.9792947982052396,
+        "pooled_r2": 0.9623044856336276,
+        "n": 639275
+      }
+    },
+    {
+      "label": "no boiler-body coupling (k_b = k_b_park = 0)",
+      "fixed": {
+        "k_b": 0.0,
+        "k_b_park": 0.0
+      },
+      "tune": {
+        "episodes": 156,
+        "mean_rmse": 2.3396534328940906,
+        "pooled_rmse": 3.7535970396214178,
+        "mean_mae": 1.4445300866858644,
+        "min_r2": -506.03725319901406,
+        "median_r2": 0.977996455610126,
+        "pooled_r2": 0.9617719518242388,
+        "n": 639275
+      }
+    }
+  ],
+  "observed_val": {
+    "VAL-1": {
+      "v7": {
+        "n": 1800,
+        "rmse": 0.9111323841640093,
+        "mae": 0.4175113967954172,
+        "bias": -0.00016636052170918546,
+        "r2": 0.7207788078799536,
+        "p95": 1.2299570312320063
+      },
+      "v63": {
+        "n": 1800,
+        "rmse": 0.8604924367504097,
+        "mae": 0.5544426992431799,
+        "bias": 0.4757035543051094,
+        "r2": 0.7509540256718599,
+        "p95": 1.491902939758092
+      }
+    },
+    "VAL-2": {
+      "v7": {
+        "n": 990,
+        "rmse": 0.47187867752435514,
+        "mae": 0.3404587017260754,
+        "bias": -0.16568468872557376,
+        "r2": 0.9876792415491515,
+        "p95": 0.8744559044201061
+      },
+      "v63": {
+        "n": 990,
+        "rmse": 0.992636417015856,
+        "mae": 0.8352629487950983,
+        "bias": -0.23384232320744905,
+        "r2": 0.9454798371414666,
+        "p95": 1.501917358029857
+      }
+    },
+    "VAL-3": {
+      "v7": {
+        "n": 930,
+        "rmse": 0.6751542844011339,
+        "mae": 0.5680730204011633,
+        "bias": -0.31307875681629443,
+        "r2": 0.9871832878404968,
+        "p95": 1.135900451838624
+      },
+      "v63": {
+        "n": 930,
+        "rmse": 0.7853602074057212,
+        "mae": 0.7195575815612597,
+        "bias": -0.6316044106404755,
+        "r2": 0.9826576334850704,
+        "p95": 1.186325823444825
+      }
+    },
+    "VAL-4": {
+      "v7": {
+        "n": 900,
+        "rmse": 0.7871148652319111,
+        "mae": 0.702093806409809,
+        "bias": -0.5975385895100611,
+        "r2": 0.9798984422916152,
+        "p95": 1.196654122873535
+      },
+      "v63": {
+        "n": 900,
+        "rmse": 1.0695024492362721,
+        "mae": 1.0276752753913467,
+        "bias": -0.9788325097873339,
+        "r2": 0.9628877699925417,
+        "p95": 1.33528606229492
+      }
+    },
+    "VAL-5": {
+      "v7": {
+        "n": 4320,
+        "rmse": 3.1803051355076857,
+        "mae": 1.7454569884759212,
+        "bias": -0.13492416646482688,
+        "r2": 0.9697215441997805,
+        "p95": 6.9942882382256775
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.4359036454851273,
+        "mae": 2.511042995512721,
+        "bias": -1.8335570777511534,
+        "r2": 0.9646590602368231,
+        "p95": 6.763140475109377
+      }
+    },
+    "VAL-6": {
+      "v7": {
+        "n": 390,
+        "rmse": 4.530818513650144,
+        "mae": 3.196947273396032,
+        "bias": -2.9486892775208515,
+        "r2": 0.9167831978025786,
+        "p95": 10.784966840993196
+      },
+      "v63": {
+        "n": 390,
+        "rmse": 4.438253659940063,
+        "mae": 3.0354885102810782,
+        "bias": -2.23009863007479,
+        "r2": 0.920148711232957,
+        "p95": 10.768128318147884
+      }
+    },
+    "VAL-7": {
+      "v7": {
+        "n": 180,
+        "rmse": 0.4490737380220851,
+        "mae": 0.4113967242388322,
+        "bias": 0.41135600082935897,
+        "r2": -0.5022349819117999,
+        "p95": 0.6784061797458285
+      },
+      "v63": {
+        "n": 180,
+        "rmse": 0.3953137043386272,
+        "mae": 0.37380222541026675,
+        "bias": 0.37346357966641425,
+        "r2": -0.16408929462200184,
+        "p95": 0.5051098822607389
+      }
+    },
+    "VAL-8": {
+      "v7": {
+        "n": 4320,
+        "rmse": 1.9130424677106581,
+        "mae": 1.4587250279206052,
+        "bias": -1.2813825964298295,
+        "r2": 0.987495335208196,
+        "p95": 3.694577151420205
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.420680495060378,
+        "mae": 2.67456076802852,
+        "bias": -2.348269349031097,
+        "r2": 0.9600195337360493,
+        "p95": 6.261004248502836
+      }
+    },
+    "VAL-9": {
+      "v7": {
+        "n": 4320,
+        "rmse": 1.6230142505542777,
+        "mae": 1.393913036296085,
+        "bias": 0.74385020340412,
+        "r2": 0.9927322570742115,
+        "p95": 2.4959012290453377
+      },
+      "v63": {
+        "n": 4320,
+        "rmse": 3.6877755726276784,
+        "mae": 2.0997853494747116,
+        "bias": -0.9741303008988373,
+        "r2": 0.9624781833052317,
+        "p95": 3.1100514321009256
+      }
+    }
+  },
+  "holdout": {
+    "space_heating": {
+      "episodes": 3,
+      "mean_rmse": 2.051909154543703,
+      "pooled_rmse": 2.093195977828884,
+      "mean_mae": 1.0175950698604197,
+      "min_r2": 0.9849506657396578,
+      "median_r2": 0.9852778291838856,
+      "pooled_r2": 0.9881272201261456,
+      "n": 11270
+    },
+    "dhw": {
+      "episodes": 3,
+      "mean_rmse": 7.6210067902596,
+      "pooled_rmse": 9.011520408878503,
+      "mean_mae": 5.109034210009327,
+      "min_r2": 0.07958070853003374,
+      "median_r2": 0.7317819758907653,
+      "pooled_r2": 0.5544910020421392,
+      "n": 1150
+    },
+    "gates": [
+      {
+        "suite": "space_heating",
+        "metric": "Mean episode RMSE (degC)",
+        "op": "<",
+        "threshold": 1.25,
+        "actual": 2.051909154543703,
+        "result": "FAIL",
+        "margin": -0.8019091545437029,
+        "margin_frac": -0.6415273236349623,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Pooled RMSE (degC)",
+        "op": "<",
+        "threshold": 1.5,
+        "actual": 2.093195977828884,
+        "result": "FAIL",
+        "margin": -0.5931959778288838,
+        "margin_frac": -0.39546398521925585,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Mean episode MAE (degC)",
+        "op": "<",
+        "threshold": 0.85,
+        "actual": 1.0175950698604197,
+        "result": "FAIL",
+        "margin": -0.16759506986041972,
+        "margin_frac": -0.1971706704240232,
+        "marginal": false
+      },
+      {
+        "suite": "space_heating",
+        "metric": "Minimum per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": 0.9849506657396578,
+        "result": "PASS",
+        "margin": 0.08495066573965782,
+        "margin_frac": 0.09438962859961979,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "metric": "DHW pooled RMSE (degC)",
+        "op": "<",
+        "threshold": 4.5,
+        "actual": 9.011520408878503,
+        "result": "FAIL",
+        "margin": -4.5115204088785035,
+        "margin_frac": -1.0025600908618897,
+        "marginal": false
+      },
+      {
+        "suite": "dhw",
+        "metric": "DHW minimum per-episode R2",
+        "op": ">",
+        "threshold": 0.9,
+        "actual": 0.07958070853003374,
+        "result": "FAIL",
+        "margin": -0.8204192914699663,
+        "margin_frac": -0.9115769905221848,
+        "marginal": false
+      }
+    ],
+    "overall": "FAIL",
+    "first_evaluated": "2026-10-29 10:36:48"
+  },
+  "provenance": {
+    "holdout_sha256": "4b4519793961a97f02aad3d82734bdcd150ab788405a49292d0066db1e7e9e70",
+    "gates_sha256": "151d16ab13c42d5ddbaece4889545573557ad27aa63d695f8f1cf409b383db98",
+    "git_head": "4546af22c7a00a8ad0847dc088ada2e01b04e80f"
+  }
+}
