@@ -14,7 +14,8 @@ from pathlib import Path
 TIMESERIES_FIELDS = (
     "timestamp", "t_boiler_primary", "t_inc_water", "t_inc_sensor", "t_fwd_mix", "t_fwd_sensor",
     "t_fwd_setpoint", "t_ret", "t_slab", "t_room", "t_out", "p1", "p2", "p3", "dhw_active",
-    "burner_pct", "mixer_state_pct", "mixer_integrator", "system_error_code")
+    "burner_pct", "mixer_state_pct", "mixer_integrator", "system_error_code",
+    "mpc_mode", "mpc_bias", "mpc_scenario", "controller_ok")
 EVENT_FIELDS = (
     "timestamp_start", "timestamp_end", "duration_s", "direction", "pos_before_pct", "pos_after_pct",
     "delta_pos_pct", "t_fwd", "setpoint", "p1_active", "p2_active")

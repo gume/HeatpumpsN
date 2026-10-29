@@ -59,9 +59,16 @@ class Telemetry:
     power: dict = field(default_factory=dict)
     mqtt_connected: bool = False
     uptime: int = 0
+    mpc: dict = field(default_factory=dict)     # predictive controller status (fw >= 0.4)
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
+
+
+def describe(e: Exception) -> str:
+    """httpx timeouts stringify to ''; always name the exception type."""
+    text = str(e)
+    return f"{type(e).__name__}: {text}" if text else type(e).__name__
 
 
 def _b(v) -> bool:
@@ -96,6 +103,7 @@ def parse_state(st: dict, sim: dict | None) -> Telemetry:
     t.power = {k: float(pw.get(k) or 0.0) for k in ("floor", "rad1", "rad2", "mixer")}
     t.mqtt_connected = _b(st.get("mqtt", {}).get("connected"))
     t.uptime = int(st.get("uptime") or 0)
+    t.mpc = dict(st.get("mpc") or {})
     if sim:
         relays = sim.get("relays", {})
         # the emulated carrier's effective outputs are the physical truth in HIL
@@ -133,12 +141,12 @@ class ControllerClient:
         try:
             st = await self.get("/api/state")
         except Exception as e:  # noqa: BLE001
-            return Telemetry(ok=False, ts=time.time(), error=f"/api/state: {e}")
+            return Telemetry(ok=False, ts=time.time(), error=f"/api/state: {describe(e)}")
         sim = None
         try:
             sim = await self.get("/api/sim")
         except Exception as e:  # noqa: BLE001
-            log.debug("/api/sim failed: %s", e)
+            log.debug("/api/sim failed: %s", describe(e))
         return parse_state(st, sim)
 
     async def preflight(self) -> dict:
@@ -165,7 +173,8 @@ class ControllerClient:
         except Exception:  # noqa: BLE001
             pass
         info = dict(version=status.get("version"), build=status.get("build"),
-                    hostname=status.get("hostname"))
+                    hostname=status.get("hostname"), ramp=bool(sim.get("rampSupported")),
+                    uptime=status.get("uptime"), reset_reason=status.get("resetReason"))
         try:
             export = await self.http.get("/api/config/export")
             export.raise_for_status()
@@ -197,8 +206,11 @@ class Injector:
     """
 
     def __init__(self, client: ControllerClient, max_rate: float = 0.15, period: float = 10.0,
-                 refresh_s: float = 10.0):
+                 refresh_s: float = 10.0, ramp: bool = False):
         self.client = client
+        # ramp: the firmware interpolates (fw >= 0.4): one POST per role and plant
+        # tick, no aliasing against the controller's own 1 s temperature poll
+        self.ramp = ramp
         self.max_rate = max_rate
         self.period = period
         self.refresh_s = refresh_s
@@ -222,7 +234,27 @@ class Injector:
             if v is not None:
                 self.value[role] = min(max(float(v), EMU_T_MIN), EMU_T_MAX)
 
+    async def push_ramps(self):
+        """Ramp mode: post each role's next point; the firmware ramps over one period."""
+        for role in ROLES:
+            if role not in self.target:
+                continue
+            cur, tgt = self.value[role], self.target[role]
+            span = self.max_rate * self.period
+            nxt = min(max(tgt, cur - span), cur + span)
+            try:
+                await self.client.post("/api/sim/temperature", {"role": role, "value": round(nxt, 3),
+                                                                "valid": True, "ramp_s": self.period})
+                self.value[role] = nxt
+                self.last_post[role] = (nxt, time.time())
+            except Exception as e:  # noqa: BLE001
+                self.errors += 1
+                self.last_error = describe(e)
+                log.warning("injection %s failed: %s", role, describe(e))
+
     async def tick(self, dt: float = 1.0):
+        if self.ramp:
+            return
         now = time.time()
         for role in ROLES:
             if role not in self.target:
@@ -242,9 +274,9 @@ class Injector:
                     self.last_post[role] = (cur, now)
                 except Exception as e:  # noqa: BLE001
                     self.errors += 1
-                    self.last_error = str(e)
-                    log.warning("injection %s failed: %s", role, e)
+                    self.last_error = describe(e)
+                    log.warning("injection %s failed: %s", role, describe(e))
 
     def status(self) -> dict:
         return dict(value=dict(self.value), target=dict(self.target), errors=self.errors,
-                    last_error=self.last_error, max_rate=self.max_rate)
+                    last_error=self.last_error, max_rate=self.max_rate, ramp=self.ramp)

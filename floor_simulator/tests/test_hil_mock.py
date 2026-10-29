@@ -146,3 +146,26 @@ def test_parse_state_prefers_carrier():
     t = parse_state({"circuits": {"floor": {"phys": 0, "mixerPos": 10}}},
                     {"relays": {"floor": True}, "mixer": {"position": 0.5}})
     assert t.pump_floor and t.pos_phys == 50.0 and t.pos_est_dr == 10.0
+
+
+def test_injector_ramp_mode_limits_each_point():
+    posted = []
+
+    class Fake:
+        async def post(self, path, body):
+            posted.append(body)
+
+    inj = Injector(Fake(), max_rate=0.15, ramp=True)
+    inj.seed({"mix": 30.0})
+    inj.set_targets({"mix": 40.0})
+    asyncio.run(inj.tick(1.0))                     # ramp mode: no per-second posts
+    assert posted == []
+    asyncio.run(inj.push_ramps())
+    assert posted == [{"role": "mix", "value": 31.5, "valid": True, "ramp_s": 10.0}]
+    assert inj.value["mix"] == pytest.approx(31.5)
+
+
+def test_describe_names_silent_exceptions():
+    from floor_simulator.app.controller import describe
+    assert describe(httpx.ReadTimeout("")) == "ReadTimeout"
+    assert describe(ValueError("x")) == "ValueError: x"

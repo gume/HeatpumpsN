@@ -131,3 +131,13 @@ th { color: var(--text-2); font-weight: 500; }
 .meta dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .toast { position: fixed; bottom: 16px; right: 16px; background: var(--crit); color: #fff; padding: 8px 14px; border-radius: 8px;
   max-width: calc(100vw - 32px); }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 10px 0 0; font-size: 12px; }
+.kv dt { color: var(--text-2); }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.kv dd.bad { color: var(--crit); font-weight: 600; }
+.kv dd.warn { color: var(--warn); font-weight: 600; }
+.pred { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin-top: 10px; position: relative; }
+.pred i { flex: 1; background: var(--s1); border-radius: 2px 2px 0 0; min-height: 2px; }
+.pred .sp { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--text-2); }
+.pred-cap { font-size: 11px; color: var(--muted); margin-top: 2px; }

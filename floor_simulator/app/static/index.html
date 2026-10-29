@@ -32,6 +32,23 @@
       </label>
     </section>
 
+    <section class="card" id="mpc-card">
+      <h2>Mixer controller</h2>
+      <div class="seg" id="mpc-mode" role="radiogroup">
+        <button data-mode="mpc">Predictive</button>
+        <button data-mode="legacy">Legacy</button>
+        <button data-mode="cautious" title="Forces the fallback: homing, then cautious control">Fallback</button>
+      </div>
+      <dl class="kv" id="mpc-info"></dl>
+      <div class="pred" id="mpc-pred"></div>
+      <h3>Fault injection</h3>
+      <div class="row wrap">
+        <button data-slip="-25">Valve slip −25 %</button>
+        <button data-slip="25">Valve slip +25 %</button>
+      </div>
+      <p class="hint">Moves the emulated valve without the controller knowing (lost steps).</p>
+    </section>
+
     <section class="card">
       <h2>Forward setpoint</h2>
       <div class="row">

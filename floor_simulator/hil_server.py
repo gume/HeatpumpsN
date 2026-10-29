@@ -90,6 +90,9 @@ def build(args):
         engine = HilEngine(client, demands, logs, params=params, max_rate=args.max_rate,
                            seed=args.seed, preset=args.preset)
         engine.preflight_info = info
+        engine.injector.ramp = bool(info.get("ramp"))
+        log.info("temperature injection: %s", "firmware ramps (1 POST/role/10 s)" if engine.injector.ramp
+                 else "1 s steps (firmware without ramp support)")
         await engine.start()
         log.info("session %s, logs in %s", logs.session_id, logs.dir)
         return engine

@@ -39,8 +39,8 @@ function toast(msg) {
 // ------------------------------------------------------------------ charts
 function chartDefs() {
   const dash = [6, 4];
-  const relayNames = ["Heater call", "Floor pump", "Rad 1 pump", "Rad 2 pump", "DHW", "Burner", "Mixer motor"];
-  const relayKeys = ["heater", "floor", "rad1", "rad2", "dhw", "burner", "mix_motion"];
+  const relayNames = ["Heater call", "Floor pump", "Rad 1 pump", "Rad 2 pump", "DHW", "Burner", "Mixer motor", "MPC fallback"];
+  const relayKeys = ["heater", "floor", "rad1", "rad2", "dhw", "burner", "mix_motion", "fallback"];
   return [
     {
       el: "#c-temp", height: 280,
@@ -67,8 +67,10 @@ function chartDefs() {
       unit: "%",
     },
     {
-      el: "#c-relay", height: 220, range: [0, relayKeys.length],
-      series: relayKeys.map((k, i) => [relayNames[i], (r) => (r[k] ? 1 : 0) * 0.7 + (relayKeys.length - 1 - i) + 0.15,
+      el: "#c-relay", height: 240, range: [0, relayKeys.length],
+      series: relayKeys.map((k, i) => [relayNames[i], (r) => (k === "fallback"
+          ? (r.mpc_mode === "homing" || r.mpc_mode === "cautious" ? 1 : 0)
+          : (r[k] ? 1 : 0)) * 0.7 + (relayKeys.length - 1 - i) + 0.15,
         css(`--s${(i % 8) + 1}`), { stepped: true, raw: k }]),
       relay: relayNames,
     },
@@ -227,6 +229,8 @@ function renderSnapshot(s) {
   }
   $("#out-now").textContent = `${fmt(o.now)} °C`;
 
+  renderMpc(t.mpc || {}, d.setpoint);
+
   // presets
   if (s.presets && !$("#presets").children.length) {
     for (const [k, label] of Object.entries(s.presets)) {
@@ -271,6 +275,47 @@ function renderSnapshot(s) {
   if (s.session) renderSession(s.session, s.preflight || {});
 }
 
+function renderMpc(m, sp) {
+  const card = $("#mpc-card");
+  if (!m.mode) {
+    $("#mpc-info").innerHTML = `<dt>Firmware</dt><dd>no predictive controller</dd>`;
+    return;
+  }
+  for (const b of $("#mpc-mode").children) {
+    const on = b.dataset.mode === m.mode || (b.dataset.mode === "cautious" && m.mode === "homing");
+    b.classList.toggle("on", on);
+  }
+  const fallback = m.mode === "homing" || m.mode === "cautious";
+  const rows = [
+    ["Mode", m.mode + (m.homing ? " (stroke running)" : ""), fallback ? "bad" : ""],
+    ["Since", `${Math.round((m.modeForS || 0) / 60)} min`],
+    ["Scenario", m.scenario],
+    ["Last anomaly", m.anomaly, m.anomaly && m.anomaly !== "none" ? "warn" : ""],
+    ["Model bias", `${fmt(m.bias, 2)} K`, Math.abs(m.bias || 0) > 3 ? "warn" : ""],
+    ["Supply estimate", `${fmt(m.tincWater)} °C`],
+    ["Plan", (m.movesPct || []).map((v) => (v > 0 ? "+" : "") + fmt(v, 0) + "%").join(" → ")],
+    ["Plans / triggered", `${m.plans} / ${m.triggered}`],
+    ["Compute", `${fmt(m.computeMs, 1)} ms`],
+    ["Anomalies / retries", `${m.anomalies} / ${m.retries}`],
+  ];
+  if (m.mode === "cautious") rows.push(["Stable", `${Math.round((m.stableS || 0) / 60)} / 30 min`]);
+  $("#mpc-info").innerHTML = rows.map(([k, v, c]) => `<dt>${k}</dt><dd class="${c || ""}">${v ?? "—"}</dd>`).join("");
+  const traj = m.traj || [];
+  if (traj.length && m.mode === "mpc") {
+    const lo = Math.min(sp - 3, ...traj), hi = Math.max(sp + 3, ...traj);
+    const h = (v) => ((v - lo) / (hi - lo)) * 100;
+    $("#mpc-pred").innerHTML = traj.map((v) => `<i style="height:${h(v)}%" title="${fmt(v)} °C"></i>`).join("")
+      + `<span class="sp" style="bottom:${h(sp)}%"></span>`;
+    $("#mpc-pred").title = "Predicted forward temperature";
+    $("#mpc-pred").nextElementSibling?.classList?.contains("pred-cap") ||
+      $("#mpc-pred").insertAdjacentHTML("afterend", '<div class="pred-cap"></div>');
+    $("#mpc-pred").nextElementSibling.textContent =
+      `Predicted T forward, next ${Math.round(traj.length * (m.trajDtS || 0) / 60)} min (dashed: setpoint)`;
+  } else {
+    $("#mpc-pred").innerHTML = "";
+  }
+}
+
 function renderEvents(evs) {
   const tb = $("#events tbody");
   tb.innerHTML = evs.slice(-30).reverse().map((e) => `<tr>
@@ -313,6 +358,12 @@ function wire() {
   $("#out-apply").addEventListener("click", () => post("/api/control/outdoor", {
     mean: Number($("#out-mean").value), amplitude: Number($("#out-amp").value), peak_hour: Number($("#out-peak").value),
   }).then(() => { for (const id of ["#out-mean", "#out-amp", "#out-peak"]) delete $(id).dataset.dirty; }));
+  for (const btn of $("#mpc-mode").children) {
+    btn.addEventListener("click", () => post("/api/control/mpc_mode", { mode: btn.dataset.mode }));
+  }
+  for (const btn of document.querySelectorAll("[data-slip]")) {
+    btn.addEventListener("click", () => post("/api/control/valve_slip", { delta_pct: Number(btn.dataset.slip) }));
+  }
   $("#wear-reset").addEventListener("click", () => post("/api/control/wear/reset").then((w) => renderSnapshot({ wear: w })));
   for (const btn of $("#range").children) {
     btn.addEventListener("click", () => {

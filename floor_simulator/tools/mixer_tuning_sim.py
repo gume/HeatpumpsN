@@ -22,7 +22,11 @@ BASE = dict(kp=0.5, ki=0.02, delay_s=120.0, deadband_temp=2.0, deadband_pos=0.02
             sensor_res=0.0, grad_filter_s=0.0,
             # ctrl="model": steady-state inverse of the identified mixing law
             ctrl="firmware", avg_s=300.0, trim_tau_s=1800.0, move_db=0.05, supply_margin=3.0,
-            fast_up=False, mpc=None)
+            fast_up=False, mpc=None,
+            # radiator pump schedule [(start_s, end_s, "rad1"|"rad2"|"both")], valve fault
+            # injection (time_s, dead-reckoning offset 0..1): the controller's position
+            # estimate jumps while the real valve does not (lost steps, slipped coupling)
+            rad_schedule=None, pos_fault=None)
 
 
 def inverse_law(knots, xk, x):
@@ -76,12 +80,28 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
         from floor_simulator.tools.mpc_proto import MixerMPC
         mpc = MixerMPC(P.knots, P.xk, setpoint=setpoint, pmin=c["min_pos"], pmax=c["max_pos"],
                        **(c["mpc"] or {}))
+    fw = None
+    scenario = 0
+    home_until = None
+    events = []
+    if c["ctrl"] == "fw_mpc":
+        from floor_simulator.tools.fw_mpc import FwMpc
+        fw = FwMpc()
+        fw.set_default(0)
     n_s = int(hours * 3600)
     for s in range(n_s):
+        r1 = r2 = False
+        for a0, a1, which in (c["rad_schedule"] or []):
+            if a0 <= s < a1:
+                r1 |= which in ("rad1", "both")
+                r2 |= which in ("rad2", "both")
+        if c["pos_fault"] and s == int(c["pos_fault"][0]):
+            pos_est = clamp(pos_est + c["pos_fault"][1], 0.0, 1.0)
+            events.append((s, "fault"))
         # ---- plant tick every 10 s
         if s % int(DT) == 0:
             b = boiler.step(True, plant.tro + 0.49)
-            o = plant.step(PlantInputs(b.tb, b.pump_pct, b.burner_pct, b.dhw, False, False, True, pos * 100, tout))
+            o = plant.step(PlantInputs(b.tb, b.pump_pct, b.burner_pct, b.dhw, r1, r2, True, pos * 100, tout))
             goal = {"boiler": o["t_inc_sensor"], "return": o["t_ret"], "mix": o["t_fwd_sensor"]}
             for k in goal:
                 rate[k] = min(abs(goal[k] - sens[k]) / DT, 0.15)
@@ -114,7 +134,31 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                 if t is not None:
                     target = t
         # ---- L2 every tick_s
-        if mpc is not None:
+        if fw is not None:
+            if s % int(c["tick_s"]) == 0:
+                if not ovs and meas >= setpoint + c["ovs_delta"]:
+                    ovs = True
+                elif ovs and meas <= setpoint - c["ovs_recovery"]:
+                    ovs = False
+                sc = (1 if r1 else 0) + (2 if r2 else 0)
+                if sc != scenario:
+                    scenario = sc
+                    fw.set_default(sc)
+                if home_until is None:
+                    kind, t = fw.tick(float(s), pos_est, target, sens["boiler"], sens["return"], meas,
+                                      setpoint, c["min_pos"], c["max_pos"], c["travel_s"], ovs, scenario)
+                    if kind == 1:
+                        target = t
+                    elif kind == 2:
+                        home_until = s + c["travel_s"] + 10
+                        target = 0.0
+                        events.append((s, "home:" + fw.status()["anomaly"]))
+            if home_until is not None and s >= home_until:
+                home_until = None
+                pos_est = 0.0
+                fw.on_homed(float(s))
+                events.append((s, "homed"))
+        elif mpc is not None:
             if not ovs and meas >= setpoint + c["ovs_delta"]:
                 ovs, target = True, c["ovs_target"]
             elif ovs and meas <= setpoint - c["ovs_recovery"]:
@@ -155,10 +199,14 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
                 else:
                     target = clamp(max(min(pos_est, c["max_pos"]), c["min_pos"]), 0.0, 1.0)
         if trace is not None and s % 10 == 0:
-            trace.append((s, meas, pos * 100, sens["boiler"], sens["return"], target * 100))
-        # ---- L1 motor
+            mode = fw.status()["mode"] if fw is not None else ""
+            trace.append((s, meas, pos * 100, sens["boiler"], sens["return"], target * 100, mode,
+                          pos_est * 100, int(r1) + 2 * int(r2)))
+        # ---- L1 motor (homing: free-run close, ignores the target)
         e = target - pos_est
         want = 0 if abs(e) <= c["deadband_pos"] else (1 if e > 0 else -1)
+        if home_until is not None:
+            want = -1
         if want and want != motor:
             starts += 1
             if last_dir and want != last_dir:
@@ -172,6 +220,12 @@ def run(cfg: dict, hours=8.0, setpoint=35.0, seed=1, preset="steady_winter", tou
             pos = newp
             pos_est = clamp(pos_est + step, 0.0, 1.0)
     h = hours
+    if fw is not None:
+        st = fw.status()
+        return dict(travel_pct_h=travel * 100 / h, starts_h=starts / h, reversals_h=reversals / h,
+                    rmse=math.sqrt(sq / max(n, 1)), rmse_ok=math.sqrt(sq_ok / max(n_ok, 1)), fwd_max=fwd_max,
+                    mode=st["mode"], anomalies=st["anomalies"], plans=st["plans"], triggered=st["triggered"],
+                    events=events)
     if mpc is not None:
         mpc_decisions = mpc.decisions
     return dict(travel_pct_h=travel * 100 / h, starts_h=starts / h, reversals_h=reversals / h,

@@ -50,6 +50,14 @@ class KeepaliveBody(BaseModel):
     paused: bool
 
 
+class MpcModeBody(BaseModel):
+    mode: str
+
+
+class SlipBody(BaseModel):
+    delta_pct: float = Field(ge=-60, le=60)
+
+
 def create_app(engine_factory, lifespan_hooks=None) -> FastAPI:
     """`engine_factory` is an async callable returning a started HilEngine."""
 
@@ -132,6 +140,22 @@ def create_app(engine_factory, lifespan_hooks=None) -> FastAPI:
     def keepalive(body: KeepaliveBody):
         eng().set_keepalive_paused(body.paused)
         return eng().demands.status()
+
+    @app.post("/api/control/mpc_mode")
+    async def mpc_mode(body: MpcModeBody):
+        if body.mode not in ("mpc", "legacy", "cautious"):
+            raise HTTPException(400, "mode must be mpc, legacy or cautious")
+        try:
+            return await eng().set_mpc_mode(body.mode)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"controller rejected: {e}") from e
+
+    @app.post("/api/control/valve_slip")
+    async def valve_slip(body: SlipBody):
+        if body.delta_pct == 0:
+            raise HTTPException(400, "delta_pct must be non-zero")
+        asyncio.create_task(eng().inject_valve_slip(body.delta_pct))
+        return {"ok": True, "delta_pct": body.delta_pct}
 
     @app.post("/api/control/wear/reset")
     def wear_reset():

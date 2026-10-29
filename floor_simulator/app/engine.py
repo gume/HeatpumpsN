@@ -166,6 +166,28 @@ class HilEngine:
     def set_outdoor(self, mean: float, amplitude: float, peak_hour: float):
         self.outdoor = Outdoor(float(mean), float(amplitude), float(peak_hour) % 24.0)
 
+    async def set_mpc_mode(self, mode: str):
+        return await self.client.post("/api/mpc/mode", {"mode": mode})
+
+    async def inject_valve_slip(self, delta_pct: float):
+        """Move the emulated valve behind the controller's back (lost steps).
+
+        The carrier's manual override drives the motor for |delta| of a stroke;
+        the controller's dead reckoning does not see it, exactly like a slipped
+        coupling. Exercises the MPC anomaly -> homing -> cautious path.
+        """
+        travel_ms = (self.preflight_info.get("tuning") or {}).get("travel_time_ms") or 120000
+        duration = abs(delta_pct) / 100.0 * travel_ms / 1000.0
+        self.relay_events.append(dict(ts=time.time(), relay="fault", on=True,
+                                      text=f"valve slip {delta_pct:+.0f} %"))
+        await self.client.post("/api/sim/mixer", {"motion": True, "open": delta_pct > 0})
+        try:
+            await asyncio.sleep(duration)
+        finally:
+            await self.client.post("/api/sim/mixer", {"motion": False})
+            await self.client.post("/api/sim/override/clear", {"mixer": True})
+        log.info("valve slip %+.0f %% injected (%.0f s)", delta_pct, duration)
+
     def set_keepalive_paused(self, paused: bool):
         self.demands.keepalive_paused = bool(paused)
         if not paused:
@@ -250,6 +272,8 @@ class HilEngine:
                                                      pos=pos, tout=tout))
         self.last_physics = now
         self._push_targets()
+        if self.injector.ramp:
+            await self.injector.push_ramps()
         await self._sync_dhw()
         await self.demands.publish_sensors(pos, b.dhw)
         if self.logs:
@@ -260,7 +284,9 @@ class HilEngine:
                 t_fwd_setpoint=self.demands.setpoint, t_ret=o["t_ret"], t_slab=o["t_slab"],
                 t_room=o["t_room"], t_out=tout, p1=t.pump_rad1, p2=t.pump_rad2, p3=t.pump_floor,
                 dhw_active=b.dhw, burner_pct=b.burner_pct, mixer_state_pct=pos,
-                mixer_integrator=t.mixer_integrator, system_error_code=t.error_code))
+                mixer_integrator=t.mixer_integrator, system_error_code=t.error_code,
+                mpc_mode=t.mpc.get("mode"), mpc_bias=t.mpc.get("bias"),
+                mpc_scenario=t.mpc.get("scenario"), controller_ok=t.ok))
 
     async def _slow_tick(self):
         try:
@@ -295,6 +321,10 @@ class HilEngine:
                 a, b = getattr(prev, name), getattr(t, name)
                 if a != b:
                     self.relay_events.append(dict(ts=t.ts, relay=name, on=b))
+            if t.mpc.get("mode") != prev.mpc.get("mode") and t.mpc.get("mode"):
+                self.relay_events.append(dict(ts=t.ts, relay="mpc", on=True,
+                                              text=f"{prev.mpc.get('mode')} -> {t.mpc.get('mode')}"
+                                                   f" ({t.mpc.get('anomaly')})"))
             if t.error_code != prev.error_code:
                 self.relay_events.append(dict(ts=t.ts, relay="error", on=bool(t.error_code),
                                               code=t.error_code, text=t.error_text))
@@ -340,7 +370,8 @@ class HilEngine:
             heater=int(t.heater), floor=int(t.pump_floor), rad1=int(t.pump_rad1), rad2=int(t.pump_rad2),
             dhw=int(bool(b and b.dhw)), burner=b.burner_pct if b else 0.0, mix_motion=int(t.mix_motion),
             pw_floor=t.power.get("floor"), pw_rad1=t.power.get("rad1"), pw_rad2=t.power.get("rad2"),
-            pw_mixer=t.power.get("mixer"), err=t.error_code, ok=int(t.ok))
+            pw_mixer=t.power.get("mixer"), err=t.error_code, ok=int(t.ok),
+            mpc_mode=t.mpc.get("mode"), mpc_bias=t.mpc.get("bias"))
 
     def history_since(self, seconds: float) -> list[dict]:
         cutoff = time.time() - seconds

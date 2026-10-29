@@ -46,6 +46,32 @@ On Ctrl-C / SIGTERM all demands and DHW are switched off and logs are flushed.
 | `app/static/` | Dashboard (uPlot vendored, no CDN at runtime) |
 | `tests/` | Plant parity vs reference, API / injector / mock closed-loop tests |
 
+## Controller experiments (`tools/`)
+
+| Tool | Use |
+|---|---|
+| `mixer_tuning_sim.py` | Offline closed loop: plant + boiler + HIL sensor path + L1 motor, with the firmware legacy loop replica, prototypes, or the **real firmware MPC core** (`ctrl="fw_mpc"`) |
+| `fw_mpc.py`, `mpc_host_shim.cpp` | ctypes binding of `firmware/src/mpc_core.cpp` (compiled with the host `g++` into `.cache/`) |
+| `mpc_proto.py` | Python MPC prototype the firmware core was derived from |
+| `plot_controllers.py` | Side-by-side controller plots |
+
+`mixer_tuning_sim.run()` also accepts `rad_schedule` (radiator pumps on/off) and
+`pos_fault` (a sudden error in the controller's valve estimate) to exercise the
+MPC supervisor, homing and cautious fallback. See
+`firmware/docs/predictive-mixer.md` for the controller itself.
+
+## Firmware 0.4 features used by the bench
+
+* **Ramped injection:** when `/api/sim` reports `rampSupported`, each role gets
+  one `POST /api/sim/temperature {"ramp_s": 10}` per plant tick, and the
+  firmware interpolates. This is about 10× fewer requests than 1 s steps, with
+  no aliasing against the controller's own 1 s poll.
+* **Mixer controller card:** mode (predictive / legacy / fallback), scenario,
+  model bias, plan, compute time and the predicted T_forward for the next
+  15 min. The relay chart has a "MPC fallback" lane.
+* **Valve slip:** drives the emulated valve ±25 % behind the controller's back
+  (lost steps), to test the anomaly → homing → cautious path live.
+
 ## Logs
 
 `logs/<date-time>-<id>/`: `session.json` (UUID, git commit, SHA-256 of
