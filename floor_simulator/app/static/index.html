@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floor HIL Bench</title>
+<link rel="stylesheet" href="/static/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Floor HIL Bench</h1>
+    <span class="sub" id="ctl-url">—</span>
+  </div>
+  <div class="chips" id="chips">
+    <span class="chip" id="chip-ws"><i></i>UI link</span>
+    <span class="chip" id="chip-ctl"><i></i>Controller</span>
+    <span class="chip" id="chip-mqtt"><i></i>MQTT</span>
+    <span class="chip" id="chip-err"><i></i><b id="err-text">No error</b></span>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="controls">
+    <section class="card">
+      <h2>Heating demands</h2>
+      <div class="toggle-list" id="circuits"></div>
+      <label class="row switch-row">
+        <span>Pause keep-alive <small id="ka-info"></small></span>
+        <input type="checkbox" id="ka-pause" role="switch">
+      </label>
+    </section>
+
+    <section class="card">
+      <h2>Forward setpoint</h2>
+      <div class="row">
+        <input type="range" id="sp" min="20" max="50" step="0.5" value="35">
+        <output id="sp-out" class="num">35.0 °C</output>
+      </div>
+      <p class="hint">Controller shadow: <span id="sp-ctl" class="num">—</span></p>
+    </section>
+
+    <section class="card">
+      <h2>Boiler</h2>
+      <div class="seg" id="boiler-mode" role="radiogroup">
+        <button data-mode="observed">Observed cycling</button>
+        <button data-mode="static">Static</button>
+        <button data-mode="off">Off</button>
+      </div>
+      <div class="row" id="static-row">
+        <label for="static-temp">Static T</label>
+        <input type="number" id="static-temp" min="20" max="85" step="0.5" value="68.7">
+        <span>°C</span>
+      </div>
+      <p class="hint" id="boiler-info">—</p>
+    </section>
+
+    <section class="card">
+      <h2>Domestic hot water</h2>
+      <div class="row wrap">
+        <select id="dhw-dur">
+          <option value="1170">Median 1170 s</option>
+          <option value="1626">P90 1626 s</option>
+          <option value="300">5 min</option>
+          <option value="manual">Until stopped</option>
+        </select>
+        <button id="dhw-start" class="primary">Start</button>
+        <button id="dhw-stop">Stop</button>
+      </div>
+      <p class="hint" id="dhw-info">Idle</p>
+    </section>
+
+    <section class="card">
+      <h2>Outdoor curve</h2>
+      <div class="grid3">
+        <label>Mean °C<input type="number" id="out-mean" step="0.5"></label>
+        <label>Swing ±K<input type="number" id="out-amp" step="0.5" min="0"></label>
+        <label>Peak h<input type="number" id="out-peak" step="1" min="0" max="23"></label>
+      </div>
+      <div class="row"><button id="out-apply">Apply</button><span class="hint">Now <span id="out-now" class="num">—</span></span></div>
+    </section>
+
+    <section class="card">
+      <h2>State presets</h2>
+      <div class="preset-list" id="presets"></div>
+      <p class="hint">Resets plant states; injection still slews at ≤ <span id="slew">0.15</span> K/s.</p>
+    </section>
+  </aside>
+
+  <section class="main">
+    <div class="tiles" id="tiles"></div>
+
+    <section class="card charts-card">
+      <div class="chart-head">
+        <h2>Live telemetry</h2>
+        <div class="seg small" id="range" role="radiogroup">
+          <button data-s="900">15 min</button>
+          <button data-s="3600">1 h</button>
+          <button data-s="21600">6 h</button>
+          <button data-s="43200">12 h</button>
+        </div>
+      </div>
+      <div class="pane"><h3>Temperatures <small>°C</small></h3><div id="c-temp"></div></div>
+      <div class="pane"><h3>Mixer position <small>%</small></h3><div id="c-mix"></div></div>
+      <div class="pane"><h3>Relays &amp; boiler state</h3><div id="c-relay"></div></div>
+      <div class="pane"><h3>Pump &amp; mixer power <small>W</small></h3><div id="c-power"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head">
+        <h2>Mixer actuation &amp; wear</h2>
+        <button id="wear-reset" class="small">Reset window</button>
+      </div>
+      <div class="tiles wear" id="wear"></div>
+      <h3>Relay cycles <small>controller counters (/api/counters)</small></h3>
+      <div class="counter-row" id="counters"></div>
+      <h3>Recent mixer moves</h3>
+      <div class="table-wrap">
+        <table id="events">
+          <thead><tr><th>End</th><th>Dir</th><th>Dur s</th><th>Pos before</th><th>Pos after</th><th>Δ pos</th><th>T fwd</th><th>SP</th><th>Rad</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Session</h2>
+      <dl class="meta" id="session"></dl>
+    </section>
+  </section>
+</main>
+
+<script src="/static/vendor/uPlot.iife.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
