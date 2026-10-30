@@ -2161,11 +2161,13 @@ function renderSettingsSecurity() {
 
     <section class="card writable accent-top">
       <div class="card-head"><div><h2>Users and passwords</h2><p>admin changes settings; monitor can only look</p></div><span class="chip">logged in: ${esc(hpnAuth.user || '?')}</span></div>
-      <div class="form-grid">
+      <div class="grid cols-2">
         <div class="field"><label for="pw-user">User</label>
           <select id="pw-user">${Object.keys(users).map((n) => `<option value="${esc(n)}">${esc(n)} (${esc(users[n].role)})</option>`).join('')}</select></div>
-        <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><small>At least 8 characters.</small></div>
-        <div class="field"><label for="pw-confirm">Repeat new password</label><input id="pw-confirm" type="password" autocomplete="new-password"></div>
+        <div class="stack">
+          <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><small>At least 8 characters.</small></div>
+          <div class="field"><label for="pw-confirm">Repeat new password</label><input id="pw-confirm" type="password" autocomplete="new-password"></div>
+        </div>
       </div>
       <div class="form-actions"><button class="btn btn-primary" type="button" data-action="sec-password">Set password</button>
         <span class="small faint">Changing your own password logs you out.</span></div>
