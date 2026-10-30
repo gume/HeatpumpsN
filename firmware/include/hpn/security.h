@@ -15,7 +15,6 @@
 //     nonce and the SHA-256 of the body. No clocks, no shared counters.
 //   * Secrets in requests and responses are sealed (encrypt-then-MAC built
 //     from HMAC-SHA256) with the user's encryption key, bound to the nonce.
-//   * Firmware uploads additionally need the upload window (admin opens it).
 //   * MQTT MPC commands are HMAC-signed with a shared secret and an increasing
 //     sequence number (MQTT has no request/response to carry a nonce).
 namespace hpn {
@@ -25,6 +24,9 @@ enum Role : uint8_t { ROLE_NONE = 0, ROLE_MONITOR = 1, ROLE_ADMIN = 2 };
 
 void begin();
 void clear();   // factory reset: default passwords, no command secret
+// Password recovery build (HPN_PASSWORD_RESET, flashed over USB): clear()
+// on the first boot of this image only; true when it reset.
+bool reset_passwords_once();
 
 // --- HPN1 request authentication -------------------------------------------
 struct Auth {
@@ -51,11 +53,6 @@ String seal(uint8_t user, const char* nonce, const char* plaintext, size_t len);
 // Admin: new keys for a user, computed by the client from the new password.
 bool set_user_keys(const char* user, const char* salt_hex, const char* k_auth_hex, const char* k_enc_hex,
                    char* err, size_t err_size);
-
-// --- Upload window ---------------------------------------------------------
-bool uploads_open();
-void open_uploads(uint32_t minutes);   // 0 closes
-uint32_t uploads_remaining_s();
 
 // --- Signed MQTT commands (shared secret) ------------------------------------
 bool set_command_secret(const char* secret, char* err, size_t err_size);   // "" removes it

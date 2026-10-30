@@ -204,8 +204,7 @@ pio run -e esp32dev_sim_ota -t uploadfs --upload-port <host:port>   # portal fil
 ```
 
 The upload logs in with `HPN_PORTAL_USER` / `HPN_PORTAL_PASSWORD` (default
-admin / admin). Uploads are refused until the upload window is opened on the
-portal; see `security.md`.
+admin / admin) and signs the upload; see `security.md`.
 
 `-t uploadfs` sends the LittleFS portal image the same way (`?target=fs`).
 The device reboots after each upload. This posts the image to `POST /api/update` on the device's port 80, through

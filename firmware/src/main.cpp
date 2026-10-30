@@ -7,6 +7,7 @@
 #include "hpn/build_target.h"
 #include "hpn/config.h"
 #include "hpn/config_store.h"
+#include "hpn/partition_layout.h"
 #include "hpn/l0_io.h"
 #include "hpn/state.h"
 #include "hpn/tasks.h"
@@ -58,6 +59,8 @@ void setup() {
   const hpn::BoardConfig& board = hpn::board_config();
   Config& config = config_mutable();
   config = config_defaults();
+  // Settings carried across a partition migration go back into NVS first.
+  hpn::layout::restore_stash();
   const hpn::ConfigLoadResult config_result = hpn::config_load(config);
   state_init(g_state);
   if (config_result == hpn::ConfigLoadResult::Corrupt) {

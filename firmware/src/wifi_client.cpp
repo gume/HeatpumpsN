@@ -2,7 +2,10 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <string.h>
 #include <time.h>
+
+#include "hpn/logger.h"
 
 namespace hpn {
 namespace wifi {
@@ -10,6 +13,11 @@ namespace {
 
 constexpr uint32_t kRetryIntervalMs = 10000;
 constexpr uint32_t kRssiLogIntervalMs = 60000;
+constexpr uint32_t kApAfterBootMs = 120000;      // never connected since boot
+constexpr uint32_t kApAfterLossMs = 300000;      // link down this long
+constexpr uint32_t kApIdleCloseMs = 60000;       // station up and AP unused this long
+constexpr uint32_t kRetryWithApClientMs = 120000;  // a station retry hops channels
+constexpr const char* kApFallbackPassword = "heatpumps-setup";
 
 Status g_status{};
 uint32_t g_last_attempt_ms = 0;
@@ -18,6 +26,8 @@ wl_status_t g_last_wl_status = WL_IDLE_STATUS;
 bool g_started = false;
 bool g_scanned = false;
 bool g_ntp_started = false;
+uint32_t g_down_since_ms = 0;   // 0 while connected
+uint32_t g_ap_idle_since_ms = 0;
 
 const char* wl_name(wl_status_t status) {
   switch (status) {
@@ -61,7 +71,7 @@ void log_scan_once(const Config& config) {
   // scan runs from an idle radio.
   WiFi.disconnect(true, false);
   delay(250);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(g_status.ap_active ? WIFI_AP_STA : WIFI_STA);
   WiFi.setHostname(config.hostname[0] != '\0' ? config.hostname : "heatpumpsn");
   delay(250);
 
@@ -94,6 +104,56 @@ void start_ntp(const Config& config) {
   Serial.printf("[ntp] SNTP started server=\"%s\" tz=\"%s\"\n", config.ntp_server, timezone);
 }
 
+void start_ap(const Config& config) {
+  if (g_status.ap_active) {
+    return;
+  }
+  const char* ssid = config.ap_ssid[0] != '\0' ? config.ap_ssid : "HeatpumpsN-Setup";
+  // WPA2 needs at least 8 characters; never fall back to an open network.
+  const char* pass = strlen(config.ap_password) >= 8 ? config.ap_password : kApFallbackPassword;
+  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.softAP(ssid, pass)) {
+    Serial.println("[wifi] fallback AP failed to start");
+    return;
+  }
+  g_status.ap_active = true;
+  g_ap_idle_since_ms = 0;
+  char detail[96];
+  snprintf(detail, sizeof(detail), "Wi-Fi fallback AP \"%s\" started (portal 192.168.4.1)", ssid);
+  logger::log_event(1, 1012, detail);
+  Serial.printf("[wifi] %s\n", detail);
+}
+
+void stop_ap() {
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  g_status.ap_active = false;
+  g_status.ap_clients = 0;
+  logger::log_event(0, 1013, "Wi-Fi fallback AP closed");
+  Serial.println("[wifi] fallback AP closed");
+}
+
+void service_ap(const Config& config, uint32_t now) {
+  if (g_status.ap_active) {
+    g_status.ap_clients = static_cast<uint8_t>(WiFi.softAPgetStationNum());
+  }
+  if (g_status.connected) {
+    if (!g_status.ap_active) return;
+    if (g_status.ap_clients > 0) {
+      g_ap_idle_since_ms = 0;
+    } else if (g_ap_idle_since_ms == 0) {
+      g_ap_idle_since_ms = now;
+    } else if (now - g_ap_idle_since_ms >= kApIdleCloseMs) {
+      stop_ap();
+    }
+    return;
+  }
+  if (g_status.ap_active) return;
+  const bool never = g_status.connect_count == 0 && now >= kApAfterBootMs;
+  const bool lost = g_down_since_ms != 0 && now - g_down_since_ms >= kApAfterLossMs;
+  if (never || lost) start_ap(config);
+}
+
 }  // namespace
 
 void begin(const Config& config) {
@@ -106,7 +166,9 @@ void begin(const Config& config) {
   g_ntp_started = false;
 
   if (config.wifi_ssid[0] == '\0') {
-    Serial.println("[wifi] no SSID configured; station disabled");
+    Serial.println("[wifi] no SSID configured; station disabled, opening the setup AP");
+    g_started = true;
+    start_ap(config);
     return;
   }
 
@@ -132,9 +194,14 @@ void tick(const Config& config) {
   }
 
   const uint32_t now = millis();
+  service_ap(config, now);
+  if (!g_status.configured) {
+    return;   // AP only
+  }
   const wl_status_t wl = WiFi.status();
 
   if (wl == WL_CONNECTED) {
+    g_down_since_ms = 0;
     if (!g_status.connected) {
       g_status.connected = true;
       g_status.connect_count++;
@@ -152,6 +219,9 @@ void tick(const Config& config) {
       g_last_rssi_log_ms = now;
     }
   } else {
+    if (g_down_since_ms == 0) {
+      g_down_since_ms = now == 0 ? 1 : now;
+    }
     if (g_status.connected) {
       g_status.connected = false;
       Serial.printf("[wifi] link lost (%s); will retry\n", wl_name(wl));
@@ -161,7 +231,7 @@ void tick(const Config& config) {
       Serial.printf("[wifi] state: %s\n", wl_name(wl));
     }
 
-    if (wl == WL_NO_SSID_AVAIL && !g_scanned) {
+    if (wl == WL_NO_SSID_AVAIL && !g_scanned && !g_status.ap_active) {
       log_scan_once(config);
       // The scan cancelled the in-flight attempt; start a fresh one and skip
       // the retry check for this tick (now was sampled before the scan).
@@ -170,7 +240,10 @@ void tick(const Config& config) {
       return;
     }
 
-    if (now - g_last_attempt_ms >= kRetryIntervalMs) {
+    // A retry scans other channels and briefly drops AP clients: slow down
+    // while someone is using the fallback AP.
+    const uint32_t retry = g_status.ap_clients > 0 ? kRetryWithApClientMs : kRetryIntervalMs;
+    if (now - g_last_attempt_ms >= retry) {
       begin_connection(config);
     }
   }

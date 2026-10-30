@@ -27,7 +27,9 @@
 #include "hpn/crc32.h"
 #include "hpn/l0_io.h"
 #include "hpn/logger.h"
+#include "hpn/maintenance_assets.h"
 #include "hpn/mpc.h"
+#include "hpn/partition_layout.h"
 #include "hpn/security.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/sensor_roles.h"
@@ -591,6 +593,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   wifi_obj["ip"] = s.wifi_ip;
   wifi_obj["state"] = s.wifi_state;
   wifi_obj["ssid"] = cfg.wifi_ssid;
+  wifi_obj["apActive"] = wifi::status().ap_active;
+  wifi_obj["apClients"] = wifi::status().ap_clients;
+  wifi_obj["apSsid"] = cfg.ap_ssid;
 
   JsonObject power = doc["power"].to<JsonObject>();
   power["floor"] = st.pump_power_w[0];
@@ -3268,6 +3273,17 @@ const char* content_type_for(const String& path) {
   return "application/octet-stream";
 }
 
+// Built-in maintenance page (src/maintenance.html, embedded by
+// tools/gen_maintenance.py): login, layout status, migration and uploads,
+// usable without any portal files.
+void send_maintenance(AsyncWebServerRequest* request, const uint8_t* data, size_t len, const char* type) {
+  AsyncWebServerResponse* response = request->beginResponse(200, type, data, len);
+  response->addHeader("Content-Encoding", "gzip");
+  response->addHeader("Cache-Control", "no-cache");
+  log_access_request(request, 200);
+  request->send(response);
+}
+
 void handle_static(AsyncWebServerRequest* request) {
   String path = request->url();
   if (path.length() == 0 || path == "/") {
@@ -3294,19 +3310,22 @@ void handle_static(AsyncWebServerRequest* request) {
   }
 
   String fs_path = path;
+  // Filesystem images carry only the .gz copies; serve them to every client
+  // (all browsers accept gzip). A plain file is used only if present.
   bool gzip = false;
-  if (request->hasHeader("Accept-Encoding")) {
-    const String encoding = request->header("Accept-Encoding");
-    if (encoding.indexOf("gzip") >= 0) {
-      const String gz_path = path + ".gz";
-      if (LittleFS.exists(gz_path)) {
-        fs_path = gz_path;
-        gzip = true;
-      }
-    }
+  const String gz_path = path + ".gz";
+  if (LittleFS.exists(gz_path)) {
+    fs_path = gz_path;
+    gzip = true;
   }
 
   if (!LittleFS.exists(fs_path)) {
+    // No portal files (a board still on the ESPHome layout, or an erased
+    // filesystem): the built-in maintenance page stands in for the portal.
+    if (path == "/index.html") {
+      send_maintenance(request, kMaintenanceHtmlGz, sizeof(kMaintenanceHtmlGz), "text/html");
+      return;
+    }
     send_error(request, 404, "not found");
     return;
   }
@@ -3342,11 +3361,10 @@ void handle_ota_final(AsyncWebServerRequest* request) {
   send_json(request, g_ota_ok ? 200 : 500, doc);
 }
 
-// POST /api/update            application image (OTA slot)
-// POST /api/update?target=fs  LittleFS image (portal assets)
-// Refused unless the upload window is open (security.h). The body is written
-// while it streams in, before the login middleware runs, so the login and the
-// window are checked on the first chunk.
+// POST /api/update?sha256=..            application image (OTA slot)
+// POST /api/update?sha256=..&target=fs  LittleFS image (portal assets)
+// Admin only. The body is written while it streams in, before the login
+// middleware runs, so the signature is checked on the first chunk.
 void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, size_t index,
                        uint8_t* data, size_t len, bool final) {
   (void)filename;
@@ -3369,11 +3387,6 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
     }
     for (size_t i = 0; i < 32; ++i) {
       g_ota_declared[i] = static_cast<uint8_t>(strtoul(hash->value().substring(i * 2, i * 2 + 2).c_str(), nullptr, 16));
-    }
-    if (!security::uploads_open()) {
-      g_ota_error = "uploads are closed: open them under Settings > Security";
-      log_event(1, 1702, "Upload rejected: upload window closed");
-      return;
     }
     const bool fs = request->hasParam("target") && request->getParam("target")->value() == "fs";
     if (fs) {
@@ -3474,9 +3487,17 @@ void handle_security_secret(AsyncWebServerRequest* request, JsonVariant& json) {
   handle_security_get(request);
 }
 
-void handle_security_uploads(AsyncWebServerRequest* request, JsonVariant& json) {
-  security::open_uploads(json["minutes"] | 0u);
-  handle_security_get(request);
+void handle_partitions_get(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  layout::status_json(doc.to<JsonObject>(), true);
+  send_json(request, 200, doc);
+}
+
+void handle_partitions_migrate(AsyncWebServerRequest* request) {
+  char err[160];
+  if (!layout::migrate(err, sizeof(err))) {   // reboots on success
+    send_error(request, 409, err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3526,6 +3547,7 @@ void HpnAuthMiddleware::run(AsyncWebServerRequest* request, ArMiddlewareNext nex
       return;
     }
     remember_auth(request, auth);
+    if (auth.role == security::ROLE_ADMIN) layout::note_admin_login();   // confirms a new image
     // Sealed JSON body: decrypt in place for the handler (plaintext is shorter).
     bool sealed = false;
     if (body_len > 0 && body[0] == '{' && strstr(reinterpret_cast<const char*>(body), "\"sealed\"") != nullptr) {
@@ -3747,10 +3769,8 @@ void register_routes() {
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_security_secret(request, json);
               });
-  g_server.on(AsyncURIMatcher::exact("/api/security/uploads"), HTTP_POST,
-              [](AsyncWebServerRequest* request, JsonVariant& json) {
-                handle_security_uploads(request, json);
-              });
+  g_server.on(AsyncURIMatcher::exact("/api/system/partitions"), HTTP_GET, handle_partitions_get);
+  g_server.on(AsyncURIMatcher::exact("/api/system/partitions/migrate"), HTTP_POST, handle_partitions_migrate);
   g_server.on(AsyncURIMatcher::exact("/api/mpc"), HTTP_GET, handle_mpc_get);
   g_server.on(AsyncURIMatcher::exact("/api/mpc/params"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {
@@ -3806,6 +3826,12 @@ void register_routes() {
   // WebSocket and static files. The catch-all is registered last so the API
   // and WebSocket handlers above win.
   g_server.addHandler(&g_ws);
+  g_server.on(AsyncURIMatcher::exact("/maintenance"), HTTP_GET, [](AsyncWebServerRequest* request) {
+    send_maintenance(request, kMaintenanceHtmlGz, sizeof(kMaintenanceHtmlGz), "text/html");
+  });
+  g_server.on(AsyncURIMatcher::exact("/maintenance/hpnauth.js"), HTTP_GET, [](AsyncWebServerRequest* request) {
+    send_maintenance(request, kMaintenanceAuthJsGz, sizeof(kMaintenanceAuthJsGz), "application/javascript");
+  });
   g_server.on(AsyncURIMatcher::exact("/"), HTTP_GET, handle_static);
   g_server.on(AsyncURIMatcher::all(), HTTP_GET, handle_static);
   g_server.onNotFound([](AsyncWebServerRequest* request) { send_error(request, 404, "not found"); });
@@ -3860,6 +3886,11 @@ void begin(const Config& config, SystemState& state) {
   }
 
   security::begin();
+#ifdef HPN_PASSWORD_RESET
+  if (security::reset_passwords_once()) {
+    log_event(2, 1613, "Password recovery build: factory passwords restored, command secret removed");
+  }
+#endif
   g_server.addMiddleware(&g_hpn_auth);
 
   g_ws.onEvent(on_ws_event);
@@ -3891,6 +3922,7 @@ void tick(const Config& config, SystemState& state) {
 
   const uint32_t now = millis();
   update_cpu_load(now);
+  layout::tick(wifi::status().connected);
 
   if (g_test_active) {
     if (static_cast<int32_t>(now - g_test_end_ms) >= 0) {

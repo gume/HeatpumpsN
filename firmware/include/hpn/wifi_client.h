@@ -4,12 +4,13 @@
 
 #include "hpn/config.h"
 
-// Minimal station-mode Wi-Fi client.
+// Station-mode Wi-Fi client with a fallback access point.
 //
-// This is deliberately a *client* only. Provisioning (captive portal, AP
-// fallback, NVS-backed credentials) belongs to the future Wi-Fi manager; for
-// now the credentials come from Config, which already carries the
-// provisioning fields from plan 01 §1.
+// The credentials come from Config. If the station has not connected 2 minutes
+// after boot, or its link has been down for 5 minutes (or no SSID is set), the
+// controller also opens an access point (Config ap_ssid / ap_password, portal
+// at 192.168.4.1) while it keeps retrying the station. The AP closes once the
+// station is connected and no client has used the AP for a minute.
 namespace hpn {
 namespace wifi {
 
@@ -19,6 +20,8 @@ struct Status {
   int8_t rssi;             // dBm, valid while connected
   uint32_t connect_count;  // successful associations since boot
   uint32_t last_connect_ms;
+  bool ap_active;          // fallback access point running
+  uint8_t ap_clients;      // stations connected to it
 };
 
 // Start the station. Non-blocking: association completes in tick().

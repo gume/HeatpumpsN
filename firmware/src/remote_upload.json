@@ -32,11 +32,11 @@ from SCons.Script import COMMAND_LINE_TARGETS
 # Keep this in sync with firmware/partitions.csv.
 PARTITIONS = [
     # name,       type, subtype, offset,    size
-    ("nvs",       1,    0x02,    0x9000,     0x5000),
-    ("otadata",   1,    0x00,    0xE000,     0x2000),
-    ("app0",      0,    0x10,    0x10000,    0x190000),
-    ("app1",      0,    0x11,    0x1A0000,   0x190000),
-    ("spiffs",    1,    0x82,    0x330000,   0xC0000),
+    ("otadata",   1,    0x00,    0x9000,     0x2000),
+    ("nvs",       1,    0x02,    0xB000,     0x5000),
+    ("app0",      0,    0x10,    0x10000,    0x1C0000),
+    ("app1",      0,    0x11,    0x1D0000,   0x1C0000),
+    ("spiffs",    1,    0x82,    0x390000,   0x60000),
     ("coredump",  1,    0x03,    0x3F0000,   0x10000),
 ]
 
@@ -79,25 +79,42 @@ def write_partition_bin(path):
         fp.write(data)
 
 
-# --- pre: hardware builds get a filesystem image without the emulation page --
-# The emulation page and its script only work with -DHPN_IO_EMULATION; real
-# boards serve 404 for them anyway, so they are left out of the LittleFS image.
-def _strip_emulation_assets():
+# --- pre: the LittleFS image carries only the gzip copies of the portal ------
+# Every asset in data/ has a precompressed .gz sibling and the server serves it
+# directly, so the plain copies are left out (the image fits the 384 KB
+# partition with room to spare). Hardware builds also leave out the emulation
+# page, which only works with -DHPN_IO_EMULATION.
+def _portal_assets():
     import shutil
     flags = " ".join(str(f) for f in env.Flatten(env.get("BUILD_FLAGS", [])))
-    if "HPN_IO_EMULATION" in flags:
-        return
+    emulation = "HPN_IO_EMULATION" in flags
     src = env.subst("$PROJECT_DATA_DIR")
-    dst = os.path.join(env.subst("$BUILD_DIR"), "data_hw")
+    dst = os.path.join(env.subst("$BUILD_DIR"), "data_fs")
     if not os.path.isdir(src):
         return
     shutil.rmtree(dst, ignore_errors=True)
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("emulation*", "README.md"))
+    for root, _, files in os.walk(src):
+        for name in files:
+            if name == "README.md" or (not emulation and name.startswith("emulation")):
+                continue
+            if not name.endswith(".gz") and name + ".gz" in files:
+                continue
+            rel = os.path.relpath(os.path.join(root, name), src)
+            os.makedirs(os.path.dirname(os.path.join(dst, rel)), exist_ok=True)
+            shutil.copy2(os.path.join(root, name), os.path.join(dst, rel))
     env.Replace(PROJECT_DATA_DIR=dst)
 
 
+# --- pre: keep the embedded maintenance page in step with its sources -----------
+def _maintenance_page():
+    gen = os.path.join(env.subst("$PROJECT_DIR"), "tools", "gen_maintenance.py")
+    if os.path.exists(gen):   # absent on a PlatformIO Remote agent: the committed header is used
+        env.Execute('"$PYTHONEXE" "{}"'.format(gen))
+
+
 if not env.get("HPN_REMOTE_UPLOAD_POST"):
-    _strip_emulation_assets()
+    _portal_assets()
+    _maintenance_page()
     build_dir = env.subst("$BUILD_DIR")
     os.makedirs(build_dir, exist_ok=True)
     partitions_csv = os.path.join(build_dir, "hpn_partitions.csv")
@@ -130,8 +147,8 @@ else:
         # are missing. This keeps both paths free of overlapping flash ranges.
         if "0x8000" not in flags and "partitions.bin" not in flags:
             images.append('0x8000 "{}"'.format(partitions_bin))
-        if "0xe000" not in flags and "boot_app0.bin" not in flags:
-            images.append('0xE000 "{}"'.format(otadata_bin))
+        if "0x9000" not in flags and "boot_app0.bin" not in flags:
+            images.append('0x9000 "{}"'.format(otadata_bin))
         if "0x10000" not in flags:
             images.append('0x10000 "$SOURCE"')
         env.Replace(

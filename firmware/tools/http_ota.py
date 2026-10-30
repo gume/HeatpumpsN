@@ -6,8 +6,6 @@ A LittleFS/SPIFFS image (pio run -t uploadfs) goes to ?target=fs.
 
 The request is HPN1-signed as admin (hpn_auth.py); the image's SHA-256 is a
 signed query parameter that the controller checks against the received bytes.
-Uploads are refused until the upload window is opened on the portal
-(Settings > Security); every reboot closes it again.
 
 Environment: HPN_PORTAL_USER / HPN_PORTAL_PASSWORD (default admin / admin).
 """
@@ -42,8 +40,6 @@ def main(image: str, port: str) -> int:
         print(f"upload failed: {e}")
         return 1
     print(f"HTTP {status}: {reply}")
-    if status != 200 and "closed" in str(reply):
-        print("Open the upload window on the portal: Settings > Security > Open for 10 min")
     return 0 if status == 200 else 1
 
 

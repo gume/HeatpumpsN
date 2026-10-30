@@ -16,5 +16,10 @@ bool start(const Config& config, const BoardConfig& board, SystemState& state);
 // deadlines. T_comms and T_logger are deliberately excluded.
 bool healthy();
 
+// For a flash operation that ends in a reboot (partition migration): for `ms`
+// T_io keeps feeding the task watchdog although T_control or T_safety fall
+// behind while long erases stall flash access. T_io itself stays supervised.
+void maintenance_grace(uint32_t ms);
+
 }  // namespace tasks
 }  // namespace hpn

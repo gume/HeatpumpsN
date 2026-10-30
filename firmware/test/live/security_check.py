@@ -61,6 +61,10 @@ def ws_handshake(path_query):
 
 admin = Client(HOST, "admin", "admin")
 monitor = Client(HOST, "monitor", "monitor")
+# The run ends by setting the monitor password back to the factory one, so
+# refuse to start on a device whose passwords were changed.
+if admin.request("GET", "/api/state")[0] != 200 or monitor.request("GET", "/api/state")[0] != 200:
+    sys.exit("needs the factory passwords admin/admin and monitor/monitor; not running")
 uptime0 = admin.request("GET", "/api/status")[1]["uptime"]
 
 # --- challenge and basic signing
@@ -82,10 +86,10 @@ check("first use of a signed request", raw("GET", "/api/state", hdr)[0] == 200)
 st, _, h = raw("GET", "/api/state", hdr)
 check("replayed request -> 401 (nonce spent)", st == 401 and h.get("X-HPN-Reason") == "nonce")
 nonce = admin.nonce()
-signed = json.dumps({"minutes": 0}).encode()
-hdr = admin.headers("POST", "/api/security/uploads", nonce, signed)
+signed = json.dumps({"mode": "mpc"}).encode()
+hdr = admin.headers("POST", "/api/mpc/mode", nonce, signed)
 hdr["Content-Type"] = "application/json"
-st, _, h = raw("POST", "/api/security/uploads", hdr, json.dumps({"minutes": 60}).encode())
+st, _, h = raw("POST", "/api/mpc/mode", hdr, json.dumps({"mode": "legacy"}).encode())
 check("body changed after signing -> 401", st == 401 and h.get("X-HPN-Reason") == "sig")
 nonce = admin.nonce()
 hdr = admin.headers("GET", "/api/state?x=1", nonce)
@@ -93,8 +97,8 @@ check("query changed after signing -> 401", raw("GET", "/api/state?x=2", hdr)[0]
 check("forged nonce -> 401", raw("GET", "/api/state", admin.headers("GET", "/api/state", "0" * 32))[0] == 401)
 
 # --- monitor is read-only
-st, reply = monitor.request("POST", "/api/security/uploads", {"minutes": 10})
-check("monitor cannot open the upload window", st == 403, reply)
+st, reply = monitor.request("POST", "/api/system/reboot")
+check("monitor cannot reboot the controller", st == 403, reply)
 st, _ = monitor.request("GET", "/api/config/export")
 check("monitor cannot export the configuration", st == 403)
 st, _ = monitor.request("POST", "/api/mpc/mode", {"mode": "legacy"})
@@ -159,17 +163,14 @@ def upload(client, image, declared_hash, target=None):
                           content_type=f"multipart/form-data; boundary={b}")
 
 bogus = os.urandom(8192)
-st, reply = upload(admin, bogus, hashlib.sha256(bogus).hexdigest())
-check("upload refused while the window is closed", st == 500 and "closed" in str(reply), reply)
 check("monitor upload refused", upload(monitor, bogus, hashlib.sha256(bogus).hexdigest())[0] in (401, 403, 500))
-admin.request("POST", "/api/security/uploads", {"minutes": 10})
 st, reply = upload(admin, bogus, hashlib.sha256(bogus).hexdigest())
-check("signed upload reaches the updater while open", st == 500 and "closed" not in str(reply), reply)
+check("signed admin upload reaches the updater (bogus image refused there)",
+      st == 500 and "authentication" not in str(reply), reply)
 if len(sys.argv) > 1:
     image = open(sys.argv[1], "rb").read()
     st, reply = upload(admin, image, hashlib.sha256(b"other bytes").hexdigest())
     check("valid image with a wrong signed hash refused", st == 500 and "does not match" in str(reply), reply)
-admin.request("POST", "/api/security/uploads", {"minutes": 0})
 check("no reboot during the upload tests", admin.request("GET", "/api/status")[1]["uptime"] >= uptime0)
 
 # --- MQTT commands with the shared secret

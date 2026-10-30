@@ -40,7 +40,7 @@ What must hold even against an eavesdropper:
 | Sequence numbers: how are they synchronised between sessions? | HTTP needs none: the controller issues the nonces, so there is no client counter or clock to keep in step. For MQTT (no request/response path) see section 4.8 |
 | No working clock without internet (NTP may never sync in the house) | Nonces expire by controller uptime (60 s), not by wall-clock time; no clock synchronisation is needed anywhere |
 | A fake portal app served to the browser by an active attacker could capture a typed password | Accepted residual risk (section 6), limited by two users: everyday viewing uses `monitor`, which cannot change anything; `admin` is meant to be used rarely. A later house-side proxy with its own client code (section 7) removes the risk |
-| A shared key on the observer vs. the update path | The observer's MQTT commands use their own secret; firmware uploads need the admin login *and* the upload window |
+| A shared key on the observer vs. the update path | The observer's MQTT commands use their own secret; firmware uploads need the admin login |
 
 ## 3. Alternatives considered
 
@@ -49,7 +49,8 @@ What must hold even against an eavesdropper:
 | **TLS on the controller** | The web library (ESPAsyncWebServer/AsyncTCP) has no TLS. ESP-IDF's `esp_https_server` would mean a TLS front end or rewriting about 60 routes. With the prebuilt mbedTLS config every TLS connection needs about 40 KB of internal RAM (two fixed 16 KB buffers), which leaves room for 1–2 concurrent connections on the ESP32 and fewer on the S2. It would cost 80–120 KB of flash. Remains possible later: the request signing here stays useful underneath it |
 | **TLS on a house server** | Ruled out by the requirements: the server-to-controller hop stays exposed |
 | **HTTP Digest** | Replayable as implemented (above); browser support for the body-protecting variant (`auth-int`) does not exist |
-| **ECDSA-signed uploads and commands** (implemented, then removed) | Protected integrity but not the login itself, so a captured login could still open the upload window. More moving parts (key pairs, signing tools) than the risk warranted |
+| **ECDSA-signed uploads and commands** (implemented, then removed) | Protected the images but not the login itself, so a captured Digest login could still be replayed. More moving parts (key pairs, signing tools) than the risk warranted |
+| **An "upload window" opened by the admin before an upload** (implemented, then removed) | Useful while a captured login could be replayed. Under HPN1 the upload request itself is admin-signed and single-use, and anyone holding an admin session could open the window just as well, so it added steps without protection |
 | **Hawk** | Exactly the "nonce + short time window + nonce cache" idea, but it depends on synchronised clocks; the reference implementation is no longer maintained |
 | **HTTP Message Signatures (RFC 9421) + Content-Digest (RFC 9530)** | The current IETF standard for signing HTTP messages, but its canonicalisation (structured fields, component identifiers) is a lot of code on a microcontroller and in a browser without WebCrypto. HPN1 borrows its idea (sign method, path, query, body digest and a nonce) in a much smaller form |
 
@@ -136,9 +137,7 @@ After 5 consecutive bad signatures a user is locked for 30 s (HTTP 423).
 * It hashes the bytes while writing and compares the result at the end. On a
   mismatch an application image is never activated, and a filesystem image
   (written in place) is erased.
-* An upload also needs the **upload window**, which only `admin` can open
-  (Settings → Security, up to 60 min). It lives in RAM, so every reboot
-  closes it.
+* Uploads are admin-only.
 
 ### 4.5 WebSocket
 
@@ -176,10 +175,9 @@ The controller **refuses unsealed bodies** for:
 The **configuration export is sent sealed.** Other configuration reads
 contain no secrets; they only show `has_*_password` flags.
 
-### 4.7 Upload window and roles
+### 4.7 Roles
 
-* Opening the upload window, every `POST`/`PUT`, and the configuration export
-  require `admin`.
+* Uploads, every `POST`/`PUT`, and the configuration export require `admin`.
 * `monitor` gets HTTP 403 for all of them.
 
 ### 4.8 MQTT commands (observer)
@@ -205,11 +203,11 @@ Home Assistant's own commands (`cmd/heating_*`, `cmd/floor_heating`,
 * The emulation API (`/api/sim/*`), the emulated board model and the
   emulation page exist only in `HPN_IO_EMULATION` builds. Hardware
   filesystem images leave the emulation files out.
-* A factory reset restores the factory passwords, removes the command secret
-  and closes the upload window.
-* Events: 1610 password changed, 1611 command secret, 1612 upload window,
-  1702 upload refused (window closed), 1704 upload hash mismatch, 1346
-  rejected MQTT/REST command.
+* A factory reset restores the factory passwords and removes the command
+  secret.
+* Events: 1610 password changed, 1611 command secret, 1613 password recovery
+  build reset the passwords, 1704 upload hash mismatch, 1346 rejected
+  MQTT/REST command.
 
 ## 6. Residual risks (accepted or out of scope)
 
@@ -240,10 +238,9 @@ Home Assistant's own commands (`cmd/heating_*`, `cmd/floor_heating`,
 # portal: open http://<controller>/, log in as monitor (viewing) or admin (changes)
 # change both factory passwords under Settings → Security
 
-# firmware update (admin): open the upload window first, then
+# firmware update (admin)
 export HPN_PORTAL_PASSWORD=<admin password>
 pio run -e esp32dev_sim_ota -t upload       # signed HPN1 upload
-# the reboot closes the window: open it again, then
 pio run -e esp32dev_sim_ota -t uploadfs
 
 # observer commands over MQTT
@@ -253,6 +250,23 @@ python firmware/tools/sign_command.py params '{"set":"rad2","delay_s":45}' --pub
 
 Python clients use `tools/hpn_auth.py` (standard library only); the HIL
 simulator takes `--controller-user` and `--controller-password`.
+
+### Forgotten password
+
+There is no network recovery path on purpose: anything that resets a password
+over the network would be the weakest login. Recovery needs the USB cable:
+
+```bash
+pio run -e esp32s2_password_reset -t upload --upload-port /dev/ttyACM0   # bench: esp32dev_sim_password_reset
+```
+
+This is the normal firmware with `HPN_PASSWORD_RESET`. On the first boot of
+that image it restores admin/admin and monitor/monitor and removes the MQTT
+command secret (event 1613); configuration, MPC parameters and Wi-Fi are kept.
+It remembers the image hash (NVS `hpnrst/image`), so later reboots of the same
+image do not reset again. Log in, set new passwords and the command secret,
+then upload the normal firmware over the air. `pio run -t erase` before a USB
+flash is the heavier alternative: everything back to defaults.
 
 ## 9. Verification
 
@@ -267,6 +281,5 @@ simulator takes `--controller-user` and `--controller-password`.
   * signed, unsigned and replayed WebSocket handshakes;
   * clear and tampered sealed bodies, sealed secret, sealed export;
   * password change, lockout and lockout release;
-  * upload window, monitor upload, and a valid image with a wrong signed
-    hash;
+  * monitor upload, and a valid image with a wrong signed hash;
   * signed and unsigned MQTT commands.

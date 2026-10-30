@@ -2074,9 +2074,7 @@ function renderSettingsFirmware() {
   const usedPct = fs.total ? Math.min(100, (fs.used / fs.total) * 100) : 0;
 
   return `<div class="stack">
-    <div class="banner ${state.security?.uploads?.open ? 'info' : 'warn'}">${state.security?.uploads?.open
-      ? `Uploads are open for ${Math.ceil(num(state.security.uploads.remainingS, 0) / 60)} more minutes.`
-      : 'Uploads are closed. Open them under Settings → Security first.'}</div>
+    <div class="banner info">Uploads need the admin login. The image's SHA-256 is signed with the request and checked against the received bytes before anything is activated.</div>
 
     <section class="card writable accent-top">
       <div class="card-head"><div><h2>Firmware update</h2><p>Upload a compiled application image over HTTP</p></div><span class="chip">${esc(status.version || '?')}</span></div>
@@ -2151,7 +2149,6 @@ async function refreshSecurity() {
 function renderSettingsSecurity() {
   const sec = state.security;
   if (!sec) return loadingCard('Loading security settings…');
-  const up = sec.uploads || {};
   const cmd = sec.commands || {};
   const users = sec.users || {};
   const defaults = Object.entries(users).filter(([, u]) => u.defaultPassword).map(([n]) => n);
@@ -2171,16 +2168,6 @@ function renderSettingsSecurity() {
       </div>
       <div class="form-actions"><button class="btn btn-primary" type="button" data-action="sec-password">Set password</button>
         <span class="small faint">Changing your own password logs you out.</span></div>
-    </section>
-
-    <section class="card guarded">
-      <div class="card-head"><div><h2>Firmware uploads</h2><p>Application and portal-file uploads are refused unless opened here</p></div>
-        <span class="chip ${up.open ? 'chip-err' : 'chip-ok'}">${up.open ? `open · ${Math.ceil(num(up.remainingS, 0) / 60)} min left` : 'closed'}</span></div>
-      <div class="form-actions">
-        <button class="btn" type="button" data-action="sec-uploads" data-minutes="10">Open for 10 min</button>
-        <button class="btn" type="button" data-action="sec-uploads" data-minutes="0" ${up.open ? '' : 'disabled'}>Close now</button>
-      </div>
-      <p class="small faint" style="margin-top:10px">The window closes by itself and with every reboot, so after an application update open it again for the portal files.</p>
     </section>
 
     <section class="card writable accent-top">
@@ -2221,8 +2208,6 @@ async function securityAction(action, button) {
       if (action === 'sec-secret-remove' && !(await confirmDialog('Remove secret?', 'MQTT commands will be accepted without a signature.', 'Remove', true))) return;
       state.security = await apiSealed('POST', '/api/security/secret', { secret });
       toast(secret ? 'Secret set.' : 'Secret removed.', 'ok');
-    } else if (action === 'sec-uploads') {
-      state.security = await apiPost('/api/security/uploads', { minutes: Number(button.dataset.minutes) });
     }
     renderCurrent();
   } catch (err) {
@@ -2960,7 +2945,6 @@ async function handleViewClick(event) {
     case 'sec-password':
     case 'sec-secret':
     case 'sec-secret-remove':
-    case 'sec-uploads':
       await securityAction(action, button);
       break;
     case 'config-export':
@@ -3064,7 +3048,7 @@ const routes = {
   },
   'settings/security': {
     title: 'Security',
-    subtitle: 'Portal login, upload window and command secret',
+    subtitle: 'Users, passwords and the MQTT command secret',
     render: renderSettingsSecurity,
     enter: async () => { await refreshSecurity(); }
   },

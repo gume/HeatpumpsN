@@ -55,6 +55,9 @@ volatile uint8_t g_seen_mask = 0;
 portMUX_TYPE g_seen_mux = portMUX_INITIALIZER_UNLOCKED;
 
 TickType_t g_start_tick = 0;
+// Until this tick T_io feeds the watchdog without the health check
+// (maintenance_grace(); 0 = none).
+volatile TickType_t g_grace_until_tick = 0;
 uint32_t g_control_period_ms = 2000;
 bool g_started = false;
 
@@ -161,7 +164,9 @@ void task_io(void* arg) {
     mark(TaskId::Io);
 
     const TickType_t now = xTaskGetTickCount();
-    const bool startup_grace = (now - g_start_tick) < pdMS_TO_TICKS(2000);
+    const TickType_t grace_until = g_grace_until_tick;
+    const bool startup_grace = (now - g_start_tick) < pdMS_TO_TICKS(2000) ||
+                               (grace_until != 0 && static_cast<int32_t>(grace_until - now) > 0);
     if (g_wdt_subscribed) {
       if (startup_grace) {
         esp_task_wdt_reset();
@@ -327,6 +332,8 @@ bool start(const Config& config, const BoardConfig& board, SystemState& state) {
                 static_cast<unsigned>(kCommsPeriodMs), static_cast<unsigned>(kLoggerPeriodMs));
   return true;
 }
+
+void maintenance_grace(uint32_t ms) { g_grace_until_tick = xTaskGetTickCount() + pdMS_TO_TICKS(ms); }
 
 bool healthy() { return g_started && health_ok(); }
 

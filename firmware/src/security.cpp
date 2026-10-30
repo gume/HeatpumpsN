@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <esp_app_desc.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -33,7 +34,6 @@ constexpr uint8_t kMaxFailures = 5;
 constexpr uint32_t kLockMs = 30000;
 constexpr size_t kSecretMin = 16;
 constexpr size_t kSecretMax = 64;
-constexpr uint32_t kMaxUploadMinutes = 60;
 
 const char* const kUserNames[kUsers] = {"admin", "monitor"};
 const Role kUserRoles[kUsers] = {ROLE_ADMIN, ROLE_MONITOR};
@@ -81,8 +81,6 @@ Nonce* g_nonces = nullptr;
 uint8_t g_failures[kUsers] = {};
 uint32_t g_locked_until[kUsers] = {};
 uint64_t g_last_seq = 0;
-uint32_t g_upload_until_ms = 0;
-bool g_upload_open = false;
 
 struct Lock {
   Lock() { if (g_mutex) xSemaphoreTake(g_mutex, portMAX_DELAY); }
@@ -260,7 +258,7 @@ void begin() {
     prefs.end();
   }
   if (!ok) set_defaults_locked();
-  Serial.printf("[security] credentials %s, command secret %s, uploads closed\n",
+  Serial.printf("[security] credentials %s, command secret %s\n",
                 ok ? "stored" : "factory defaults", g_blob->secret[0] ? "set" : "not set");
 }
 
@@ -269,13 +267,26 @@ void clear() {
     Lock lock;
     set_defaults_locked();
     g_last_seq = 0;
-    g_upload_open = false;
   }
   Preferences prefs;
   if (prefs.begin(kNamespace, false)) {
     prefs.clear();
     prefs.end();
   }
+}
+
+bool reset_passwords_once() {
+  char image[65];
+  esp_app_get_elf_sha256(image, sizeof(image));
+  Preferences prefs;
+  if (!prefs.begin("hpnrst", false)) return false;
+  const bool done = prefs.getString("image", "") == image;
+  if (!done) {
+    clear();
+    prefs.putString("image", image);
+  }
+  prefs.end();
+  return !done;
 }
 
 const char* user_name(uint8_t user) { return user < kUsers ? kUserNames[user] : "?"; }
@@ -460,32 +471,6 @@ bool set_user_keys(const char* user, const char* salt_hex, const char* k_auth_he
   return saved;
 }
 
-bool uploads_open() {
-  Lock lock;
-  if (g_upload_open && static_cast<int32_t>(millis() - g_upload_until_ms) >= 0) g_upload_open = false;
-  return g_upload_open;
-}
-
-void open_uploads(uint32_t minutes) {
-  if (minutes > kMaxUploadMinutes) minutes = kMaxUploadMinutes;
-  {
-    Lock lock;
-    g_upload_open = minutes > 0;
-    g_upload_until_ms = millis() + minutes * 60000u;
-  }
-  char detail[64];
-  snprintf(detail, sizeof(detail), minutes ? "Firmware uploads opened for %u min" : "Firmware uploads closed",
-           static_cast<unsigned>(minutes));
-  web::log_event(minutes ? 1 : 0, 1612, detail);
-}
-
-uint32_t uploads_remaining_s() {
-  if (!uploads_open()) return 0;
-  Lock lock;
-  const int32_t left = static_cast<int32_t>(g_upload_until_ms - millis());
-  return left > 0 ? static_cast<uint32_t>(left) / 1000u : 0;
-}
-
 bool set_command_secret(const char* secret, char* err, size_t err_size) {
   err[0] = '\0';
   const size_t len = secret ? strlen(secret) : 0;
@@ -575,9 +560,6 @@ void status_json(JsonObject out) {
     o["role"] = kUserRoles[u] == ROLE_ADMIN ? "admin" : "read-only";
     o["defaultPassword"] = defaults[u];
   }
-  JsonObject up = out["uploads"].to<JsonObject>();
-  up["open"] = uploads_open();
-  up["remainingS"] = uploads_remaining_s();
   JsonObject cmd = out["commands"].to<JsonObject>();
   cmd["secretSet"] = secret;
   cmd["fingerprint"] = fp;
