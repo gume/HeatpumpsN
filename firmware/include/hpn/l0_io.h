@@ -25,6 +25,9 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state);
 // Logical actuator interfaces for L1. Do not call from L2/L4.
 void set_relay(Relay relay, bool on);
 void set_mixer_motor(bool enabled, bool open_direction);
+// Switch-ons of the two mixer relays since boot (open/close on v1.x,
+// direction/motion on v0.1). Any task.
+void mixer_relay_ops(uint32_t ops[2]);
 
 // Addressable LED chain. rgb is count * 3 bytes in logical RGB order.
 void set_leds(const uint8_t* rgb, uint16_t count);

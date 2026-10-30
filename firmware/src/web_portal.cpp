@@ -83,7 +83,7 @@ enum CounterId : uint8_t {
 constexpr const char* kCounterNamespace = "hpnctr";
 constexpr const char* kCounterKey = "counters";
 constexpr uint32_t kCounterMagic = 0x48504E54u;  // "HPNT"
-constexpr uint16_t kCounterVersion = 2;
+constexpr uint16_t kCounterVersion = 3;   // 3: operations (switch-ons); 2 counted every change
 constexpr uint32_t kCounterSaveIntervalMs = 3600000u;
 
 struct CounterBlobPrefix {
@@ -1520,11 +1520,9 @@ void counters_save() {
 
 #ifdef HPN_COUNTER_PRESET
 // Relay wear carried over from a board's previous firmware (counter preset
-// build, docs/partition-migration.md). The values are the ESPHome counters:
-// switch-ons per relay. This firmware counts every state change, so a relay
-// switched on n times has 2n here. The ESPHome mixer counted switch-ons of
-// the motion relay (every move); they are split evenly between opening and
-// closing. Applied on the first boot of the image only.
+// build, docs/partition-migration.md): the ESPHome relay_counter values,
+// switch-ons per relay, which is what this firmware counts. Applied on the
+// first boot of the image only.
 #ifndef HPN_PRESET_HEATING
 #define HPN_PRESET_HEATING 0
 #endif
@@ -1537,8 +1535,11 @@ void counters_save() {
 #ifndef HPN_PRESET_PUMP3
 #define HPN_PRESET_PUMP3 0
 #endif
-#ifndef HPN_PRESET_MOTION
-#define HPN_PRESET_MOTION 0
+#ifndef HPN_PRESET_MIX1
+#define HPN_PRESET_MIX1 0   // v0.1 direction relay / v1.x open relay
+#endif
+#ifndef HPN_PRESET_MIX2
+#define HPN_PRESET_MIX2 0   // v0.1 motion relay / v1.x close relay
 #endif
 void apply_counter_preset() {
   char image[65];
@@ -1550,8 +1551,8 @@ void apply_counter_preset() {
   prefs.end();
   if (done) return;
   const uint32_t cycles[CTR_COUNT] = {
-      2u * HPN_PRESET_HEATING, 2u * HPN_PRESET_PUMP1, 2u * HPN_PRESET_PUMP2,
-      2u * HPN_PRESET_PUMP3,   HPN_PRESET_MOTION,     HPN_PRESET_MOTION,
+      HPN_PRESET_HEATING, HPN_PRESET_PUMP1, HPN_PRESET_PUMP2,
+      HPN_PRESET_PUMP3,   HPN_PRESET_MIX1,  HPN_PRESET_MIX2,
   };
   taskENTER_CRITICAL(&g_counter_mux);
   for (size_t i = 0; i < CTR_COUNT; ++i) g_counters[i].cycles = cycles[i];
@@ -1591,8 +1592,33 @@ void update_counter_locked(CounterId id, bool on, uint32_t now_ms) {
   }
   if (counter.last_state != on) {
     counter.last_state = on;
-    counter.cycles++;
+    if (on) counter.cycles++;   // one operation per switch-on
     counter.last_change_ms = now_ms;
+    g_counters_dirty = true;
+  }
+}
+
+// Mixer relays: operations counted by L0 at the output (see mixer_relay_ops).
+uint32_t g_mix_ops_seen[2] = {0, 0};
+bool g_mix_ops_primed = false;
+
+void update_mixer_counters_locked(uint32_t now_ms) {
+  uint32_t ops[2];
+  l0::mixer_relay_ops(ops);
+  if (!g_mix_ops_primed) {
+    g_mix_ops_seen[0] = ops[0];
+    g_mix_ops_seen[1] = ops[1];
+    g_mix_ops_primed = true;
+    return;
+  }
+  for (int i = 0; i < 2; ++i) {
+    const uint32_t delta = ops[i] - g_mix_ops_seen[i];
+    if (delta == 0) continue;
+    g_mix_ops_seen[i] = ops[i];
+    CounterEntry& c = g_counters[CTR_MIX_OPEN + i];
+    c.cycles += delta;
+    c.last_change_ms = now_ms;
+    c.initialized = true;
     g_counters_dirty = true;
   }
 }
@@ -1603,8 +1629,7 @@ void update_counters(const SystemState& st, uint32_t now_ms) {
   update_counter_locked(CTR_RAD1, st.pump_rad1_phys, now_ms);
   update_counter_locked(CTR_RAD2, st.pump_rad2_phys, now_ms);
   update_counter_locked(CTR_FLOOR, st.pump_floor_phys, now_ms);
-  update_counter_locked(CTR_MIX_OPEN, st.mix_motion && st.mix_dir > 0, now_ms);
-  update_counter_locked(CTR_MIX_CLOSE, st.mix_motion && st.mix_dir < 0, now_ms);
+  update_mixer_counters_locked(now_ms);
 
   if (g_counter_runtime_ms == 0) {
     g_counter_runtime_ms = now_ms;

@@ -330,7 +330,25 @@ void begin(const Config& config, const BoardConfig& board) {
   apply_safe_state();
 }
 
+// Written by T_safety only (set_mixer_motor, apply_safe_state); read by the portal.
+volatile bool g_mix_relay_on[2] = {false, false};
+volatile uint32_t g_mix_relay_ops[2] = {0, 0};
+
+void note_mixer_relays(bool first, bool second) {
+  const bool on[2] = {first, second};
+  for (int i = 0; i < 2; ++i) {
+    if (on[i] && !g_mix_relay_on[i]) g_mix_relay_ops[i] = g_mix_relay_ops[i] + 1;
+    g_mix_relay_on[i] = on[i];
+  }
+}
+
+void mixer_relay_ops(uint32_t ops[2]) {
+  ops[0] = g_mix_relay_ops[0];
+  ops[1] = g_mix_relay_ops[1];
+}
+
 void apply_safe_state() {
+  note_mixer_relays(false, false);
   if (uses_expander()) {
     // All relays off, mixer motion off, and MUX channel 0 selected. Each output
     // is driven to its own inactive level.
@@ -454,6 +472,11 @@ void set_relay(Relay relay, bool on) {
 
 void set_mixer_motor(bool enabled, bool open_direction) {
   const bool open_close = g_config.mixer_wiring == MIX_WIRING_OPEN_CLOSE;
+  // The two mixer relays as they are energized: open/close (v1.x) or
+  // direction/motion (v0.1, where direction holds after a move). Their
+  // operations are counted here, at the output, so short moves are not lost.
+  note_mixer_relays(open_close ? (enabled && open_direction) : open_direction,
+                    open_close ? (enabled && !open_direction) : enabled);
   const bool direction_low = g_config.output_active_low_mix_direction;
   const bool motion_low = g_config.output_active_low_mix_motion;
 

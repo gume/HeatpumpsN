@@ -219,7 +219,8 @@ RAM and the retained backlog is sent after reconnection.
 
 ## Relay counter persistence
 
-Relay cycles and runtime live in the portal's RAM cache. In hardware builds
+Relay operations (switch-ons; the mixer relays counted at the output) and
+runtime live in the portal's RAM cache. In hardware builds
 (`!HPN_IO_EMULATION`) they are also stored in the separate `hpnctr` NVS
 namespace:
 

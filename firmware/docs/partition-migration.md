@@ -170,21 +170,23 @@ is paused for the scan. There is no automatic scan at boot any more.
 
 ## 5. Relay wear from the previous firmware
 
-The relay cycle counters (RAM, written to NVS `hpnctr` at most hourly) start
-at zero on a board that came from ESPHome. The `esp32s2_counter_preset` build
-sets them once:
+The relay counters count operations (switch-ons), like ESPHome's
+`relay_counter` and like relay datasheets. They live in RAM and are written
+to NVS `hpnctr` at most hourly. The mixer relays are counted at the output as
+they exist on the board: direction and motion on v0.1, open and close on
+v1.x (the direction relay stays energized after an opening move, so it
+operates less often than the motion relay).
 
-1. Read the ESPHome counters (`relay_counter[0..5]`, switch-ons) before the
-   upgrade.
-2. Enter them in `platformio.ini` under `[env:esp32s2_counter_preset]`:
-   `HPN_PRESET_HEATING` = [0], `HPN_PRESET_PUMP1` = [1] (radiator 1),
-   `HPN_PRESET_PUMP2` = [2] (radiator 2), `HPN_PRESET_PUMP3` = [3] (floor),
-   `HPN_PRESET_MOTION` = [5] (mixer motion relay). [4], the direction relay,
-   has no counter in this firmware.
+A board that came from ESPHome starts at zero. The `esp32s2_counter_preset`
+build sets the counters once:
+
+1. Read the ESPHome counters `relay_counter[0..5]` before the upgrade.
+2. Enter them in `platformio.ini` under `[env:esp32s2_counter_preset]`,
+   one to one: [0] heating, [1] pump 1 (radiator 1), [2] pump 2 (radiator 2),
+   [3] pump 3 (floor), [4] mixer direction, [5] mixer motion.
 3. `pio run -e esp32s2_counter_preset`, upload `firmware.bin` like any update.
-   On its first boot the counters are set and saved at once (event 1614).
-   This firmware counts each state change, so the relays show twice the
-   ESPHome value; the mixer moves are split evenly between open and close.
+   On its first boot the counters are set and saved at once (event 1614);
+   runtimes are kept.
 4. Upload the normal `esp32s2` firmware. The preset is applied once per image
    (NVS `hpnrst/counters`), so leaving it installed does no harm.
 
