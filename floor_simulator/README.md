@@ -23,6 +23,9 @@ uv run --project floor_simulator python -m floor_simulator.hil_server \
 uv run --project floor_simulator python -m floor_simulator.hil_server --mock
 ```
 
+The controller's portal login (firmware 0.4+) defaults to admin/admin; pass
+`--controller-password` (or set `HPN_PORTAL_PASSWORD`) after changing it.
+
 Open `http://<host>:8080/`. Options: `--mqtt-user/--mqtt-password`, `--mqtt-base`
 (default: read from the controller), `--preset`, `--max-rate`, `--seed`,
 `--expect-tuning-hash`, `--no-safe-shutdown`, `--log-dir` (default `floor_simulator/logs`).

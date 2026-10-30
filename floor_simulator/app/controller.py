@@ -119,8 +119,10 @@ def parse_state(st: dict, sim: dict | None) -> Telemetry:
 
 class ControllerClient:
     def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport | None = None,
-                 timeout: float = 3.0):
-        self.http = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+                 timeout: float = 3.0, auth: tuple[str, str] | None = None):
+        # Firmware >= 0.4 requires the portal login (HTTP Digest) on every route.
+        self.http = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport,
+                                      auth=httpx.DigestAuth(*auth) if auth else None)
         self.base_url = base_url
 
     async def close(self):
@@ -153,8 +155,13 @@ class ControllerClient:
         """Fail unless the controller runs an emulation build (spec section 7, P1)."""
         try:
             status = await self.get("/api/status")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise PreflightError("controller rejected the portal login: check --controller-user/"
+                                     "--controller-password (or HPN_PORTAL_PASSWORD)") from e
+            raise PreflightError(f"controller error at {self.base_url}: {e}") from e
         except Exception as e:  # noqa: BLE001
-            raise PreflightError(f"controller unreachable at {self.base_url}: {e}") from e
+            raise PreflightError(f"controller unreachable at {self.base_url}: {describe(e)}") from e
         emulation = bool(status.get("portal", {}).get("emulation"))
         try:
             sim = await self.get("/api/sim")

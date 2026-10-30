@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,10 @@ log = logging.getLogger("hil")
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--controller-ip", help="ESP32 address, host[:port] or http://... URL")
+    ap.add_argument("--controller-user", default=os.environ.get("HPN_PORTAL_USER", "admin"),
+                    help="portal login (default admin, or $HPN_PORTAL_USER)")
+    ap.add_argument("--controller-password", default=os.environ.get("HPN_PORTAL_PASSWORD", "admin"),
+                    help="portal password (default admin, or $HPN_PORTAL_PASSWORD)")
     ap.add_argument("--mqtt-broker", help="HOST:PORT of the controller's broker; without it "
                     "demands go through /api/sim/intent and the setpoint cannot be set")
     ap.add_argument("--mqtt-user")
@@ -65,7 +70,8 @@ def build(args):
         transport = httpx.ASGITransport(app=create_mock_app())
     else:
         url = controller_url(args.controller_ip)
-    client = ControllerClient(url, transport=transport)
+    client = ControllerClient(url, transport=transport,
+                              auth=None if args.mock else (args.controller_user, args.controller_password))
 
     async def factory():
         try:

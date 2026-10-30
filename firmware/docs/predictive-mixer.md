@@ -165,8 +165,10 @@ An update is a JSON object. Fields that are left out keep their value:
   `/api/state` carries the same status under `mpc`, including the predicted T_fwd
   trajectory.
 
-A rejected update changes nothing (all or none), and the event log names the
-offending field. Accepted sets are stored in their own NVS blob (`hpnmpc`), so
+Once an observer public key is installed, parameter updates and MQTT mode
+commands must be signed envelopes (see `security.md`); plain JSON is then
+rejected. A rejected update changes nothing (all or none), and the event log
+names the offending field. Accepted sets are stored in their own NVS blob (`hpnmpc`), so
 the main configuration blob is untouched.
 
 ## 5. Learned predictor (planned)
@@ -200,6 +202,11 @@ backtrace). Decode it with the matching `firmware.elf`:
 pio run -e esp32dev_sim_ota -t upload --upload-port <host:port>     # application
 pio run -e esp32dev_sim_ota -t uploadfs --upload-port <host:port>   # portal files
 ```
+
+The upload logs in with `HPN_PORTAL_USER` / `HPN_PORTAL_PASSWORD` (default
+admin / admin). It signs the image when `HPN_OTA_KEY` names the OTA private
+key, which is required once the controller has an OTA public key; see
+`security.md`.
 
 `-t uploadfs` sends the LittleFS portal image the same way (`?target=fs`).
 The device reboots after each upload. This posts the image to `POST /api/update` on the device's port 80, through

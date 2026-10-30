@@ -79,8 +79,25 @@ def write_partition_bin(path):
         fp.write(data)
 
 
-# --- pre: make the partition table discoverable under nobuild ---------------
+# --- pre: hardware builds get a filesystem image without the emulation page --
+# The emulation page and its script only work with -DHPN_IO_EMULATION; real
+# boards serve 404 for them anyway, so they are left out of the LittleFS image.
+def _strip_emulation_assets():
+    import shutil
+    flags = " ".join(str(f) for f in env.Flatten(env.get("BUILD_FLAGS", [])))
+    if "HPN_IO_EMULATION" in flags:
+        return
+    src = env.subst("$PROJECT_DATA_DIR")
+    dst = os.path.join(env.subst("$BUILD_DIR"), "data_hw")
+    if not os.path.isdir(src):
+        return
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("emulation*", "README.md"))
+    env.Replace(PROJECT_DATA_DIR=dst)
+
+
 if not env.get("HPN_REMOTE_UPLOAD_POST"):
+    _strip_emulation_assets()
     build_dir = env.subst("$BUILD_DIR")
     os.makedirs(build_dir, exist_ok=True)
     partitions_csv = os.path.join(build_dir, "hpn_partitions.csv")

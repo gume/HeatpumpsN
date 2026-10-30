@@ -750,7 +750,7 @@ void handle_command(const char* topic, const char* value) {
   }
   if (strcmp(suffix, "cmd/mpc/mode") == 0) {
     char err[128];
-    mpc::apply_mode(value, "mqtt", err, sizeof(err));
+    mpc::apply_mode_command(value, "mqtt", err, sizeof(err));
     return;
   }
 

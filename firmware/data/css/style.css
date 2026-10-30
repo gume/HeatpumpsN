@@ -480,6 +480,7 @@ td.mono, th.mono { font-family: var(--mono); }
 .field input[type="password"],
 .field input[type="number"],
 .field input[type="file"],
+.field textarea,
 .field select {
   width: 100%;
   min-height: 36px;
@@ -490,7 +491,7 @@ td.mono, th.mono { font-family: var(--mono); }
   color: var(--text);
   outline: none;
 }
-.field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .field small { color: var(--faint); font-size: 11px; }
 .field .inline { display: flex; align-items: center; gap: 8px; }
 /* Number field with its polarity tick on the same row */
@@ -841,3 +842,5 @@ td.mono, th.mono { font-family: var(--mono); }
 .progress .bar { height: 9px; }
 .emu-mixer .mixer-bar span.moving { animation: mixer-pulse 1.1s ease-in-out infinite alternate; }
 @keyframes mixer-pulse { from { opacity: .55; } to { opacity: 1; } }
+
+.field textarea { resize: vertical; font-size: 12px; }
