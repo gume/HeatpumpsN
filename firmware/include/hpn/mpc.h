@@ -44,11 +44,11 @@ void floor_idle();
 
 // Commands (any task). Results are written to `err` (empty on success) and
 // queued for <base>/state/mpc/ack. Parameter updates go through
-// security::open_command (observer signature once its key is installed).
+// security::open_command (HMAC signature once a command secret is set).
 bool apply_params(JsonVariantConst in, const char* source, char* err, size_t err_size);
 bool apply_params_json(const char* json, const char* source, char* err, size_t err_size);
 bool apply_mode(const char* mode, const char* source, char* err, size_t err_size);
-// MQTT mode command: signed envelope once an observer key is installed.
+// MQTT mode command: signed envelope once a command secret is set.
 bool apply_mode_command(const char* payload, const char* source, char* err, size_t err_size);
 
 // Telemetry (any task).

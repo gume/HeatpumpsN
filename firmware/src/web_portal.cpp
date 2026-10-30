@@ -11,8 +11,6 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <esp_core_dump.h>
-#include <esp_partition.h>
-#include <mbedtls/sha256.h>
 #include <esp_system.h>
 #include <math.h>
 #include <stdio.h>
@@ -162,10 +160,6 @@ uint32_t g_reboot_at_ms = 0;
 
 bool g_ota_ok = false;
 String g_ota_error;
-mbedtls_sha256_context g_ota_sha;
-uint8_t g_ota_declared[32];
-bool g_ota_has_hash = false;
-bool g_ota_fs = false;
 
 // Web login (security.h). Digest for every route; the WebSocket handshake
 // cannot answer a Digest challenge in browsers, so it carries the session
@@ -3037,7 +3031,7 @@ void handle_system_factory_reset(AsyncWebServerRequest* request) {
   log_event(1, 1601, "Factory reset requested from portal");
   reset_all_counters();
   config_clear();
-  security::clear();   // default login, no keys
+  security::clear();   // default login, no command secret
   g_reboot_requested = true;
   g_reboot_at_ms = millis() + 500u;
 
@@ -3307,10 +3301,9 @@ void handle_ota_final(AsyncWebServerRequest* request) {
 
 // POST /api/update            application image (OTA slot)
 // POST /api/update?target=fs  LittleFS image (portal assets)
-// Optional / required once an OTA key is installed (security.h):
-//   &sha256=<64 hex>&sig=<base64 DER ECDSA-P256 signature over the image>
-// The body is written while it streams in, before the login middleware runs,
-// so the login and the declared signature are checked on the first chunk.
+// Refused unless the upload window is open (security.h). The body is written
+// while it streams in, before the login middleware runs, so the login and the
+// window are checked on the first chunk.
 void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, size_t index,
                        uint8_t* data, size_t len, bool final) {
   (void)filename;
@@ -3318,35 +3311,20 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   if (index == 0) {
     g_ota_ok = false;
     g_ota_error = "";
-    g_ota_has_hash = false;
     if (!request_authorized(request)) {
       g_ota_error = "login required";
       return;
     }
-    g_ota_fs = request->hasParam("target") && request->getParam("target")->value() == "fs";
-    const AsyncWebParameter* hash = request->getParam("sha256");
-    const AsyncWebParameter* sig = request->getParam("sig");
-    g_ota_has_hash = hash != nullptr && security::parse_hex32(hash->value().c_str(), g_ota_declared);
-    if (security::ota_signature_required()) {
-      uint8_t sig_der[96];
-      const size_t sig_len = sig ? security::base64_decode(sig->value().c_str(), sig_der, sizeof(sig_der)) : 0;
-      if (!g_ota_has_hash || sig_len == 0) {
-        g_ota_error = "signed image required (sha256 and sig parameters)";
-        log_event(1, 1702, "Unsigned update rejected");
-        return;
-      }
-      if (!security::verify(security::KEY_OTA, g_ota_declared, sig_der, sig_len)) {
-        g_ota_error = "image signature invalid";
-        log_event(2, 1703, "Update rejected: signature invalid");
-        return;
-      }
+    if (!security::uploads_open()) {
+      g_ota_error = "uploads are closed: open them under Settings > Security";
+      log_event(1, 1702, "Upload rejected: upload window closed");
+      return;
     }
-    mbedtls_sha256_init(&g_ota_sha);
-    mbedtls_sha256_starts(&g_ota_sha, 0);
-    if (g_ota_fs) {
+    const bool fs = request->hasParam("target") && request->getParam("target")->value() == "fs";
+    if (fs) {
       LittleFS.end();   // the partition is rewritten underneath; remounted after the reboot
     }
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN, g_ota_fs ? U_SPIFFS : U_FLASH)) {
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, fs ? U_SPIFFS : U_FLASH)) {
       g_ota_error = Update.errorString();
       return;
     }
@@ -3357,7 +3335,6 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   }
 
   if (len > 0) {
-    mbedtls_sha256_update(&g_ota_sha, data, len);
     if (Update.write(data, len) != len) {
       g_ota_error = Update.errorString();
       return;
@@ -3365,24 +3342,6 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   }
 
   if (final) {
-    uint8_t digest[32];
-    mbedtls_sha256_finish(&g_ota_sha, digest);
-    mbedtls_sha256_free(&g_ota_sha);
-    if (g_ota_has_hash && memcmp(digest, g_ota_declared, sizeof(digest)) != 0) {
-      // The signature covered the declared hash, not these bytes.
-      Update.abort();
-      g_ota_error = "image does not match its signed hash";
-      if (g_ota_fs) {
-        // An application image is never activated; a filesystem image was
-        // written in place, so wipe it rather than serve unverified assets.
-        const esp_partition_t* part = esp_partition_find_first(
-            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
-        if (part != nullptr) esp_partition_erase_range(part, 0, part->size);
-        g_ota_error += "; filesystem erased";
-      }
-      log_event(2, 1704, g_ota_error.c_str());
-      return;
-    }
     if (!Update.end(true)) {
       g_ota_error = Update.errorString();
     } else {
@@ -3413,28 +3372,17 @@ void handle_security_password(AsyncWebServerRequest* request, JsonVariant& json)
   handle_security_get(request);
 }
 
-void handle_security_key(AsyncWebServerRequest* request, JsonVariant& json) {
-  const char* slot = json["slot"] | "";
-  security::KeySlot k;
-  if (strcmp(slot, "ota") == 0) {
-    k = security::KEY_OTA;
-  } else if (strcmp(slot, "observer") == 0) {
-    k = security::KEY_OBSERVER;
-  } else {
-    send_error(request, 400, "slot must be ota or observer");
-    return;
-  }
+void handle_security_secret(AsyncWebServerRequest* request, JsonVariant& json) {
   char err[96];
-  if (!security::set_key(k, json["pem"] | "", err, sizeof(err))) {
+  if (!security::set_command_secret(json["secret"] | "", err, sizeof(err))) {
     send_error(request, 400, err);
     return;
   }
   handle_security_get(request);
 }
 
-void handle_security_unsigned(AsyncWebServerRequest* request, JsonVariant& json) {
-  const uint32_t minutes = json["minutes"] | 0u;
-  security::allow_unsigned(minutes);
+void handle_security_uploads(AsyncWebServerRequest* request, JsonVariant& json) {
+  security::open_uploads(json["minutes"] | 0u);
   handle_security_get(request);
 }
 
@@ -3628,13 +3576,13 @@ void register_routes() {
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_security_password(request, json);
               });
-  g_server.on(AsyncURIMatcher::exact("/api/security/key"), HTTP_POST,
+  g_server.on(AsyncURIMatcher::exact("/api/security/secret"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {
-                handle_security_key(request, json);
+                handle_security_secret(request, json);
               });
-  g_server.on(AsyncURIMatcher::exact("/api/security/unsigned"), HTTP_POST,
+  g_server.on(AsyncURIMatcher::exact("/api/security/uploads"), HTTP_POST,
               [](AsyncWebServerRequest* request, JsonVariant& json) {
-                handle_security_unsigned(request, json);
+                handle_security_uploads(request, json);
               });
   g_server.on(AsyncURIMatcher::exact("/api/mpc"), HTTP_GET, handle_mpc_get);
   g_server.on(AsyncURIMatcher::exact("/api/mpc/params"), HTTP_POST,

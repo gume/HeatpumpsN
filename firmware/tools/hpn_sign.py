@@ -1,16 +1,13 @@
-"""Shared helpers: ECDSA P-256 signing through the openssl CLI, Digest auth."""
-import base64
+"""Shared helpers: HMAC command signatures and the controller's Digest login."""
 import hashlib
+import hmac
 import os
-import subprocess
 import uuid
 
 
-def sign_bytes(data: bytes, private_key: str) -> str:
-    """Base64 DER ECDSA signature over SHA-256(data)."""
-    sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", private_key], input=data,
-                         capture_output=True, check=True).stdout
-    return base64.b64encode(sig).decode()
+def sign_msg(msg: str, secret: str) -> str:
+    """Hex HMAC-SHA256 of the exact msg bytes with the shared command secret."""
+    return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
 def digest_header(method: str, uri: str, user: str, password: str, realm: str = "HeatpumpsN") -> str:

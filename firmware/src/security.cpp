@@ -6,8 +6,7 @@
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <mbedtls/base64.h>
-#include <mbedtls/pk.h>
+#include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <string.h>
 
@@ -22,12 +21,13 @@ constexpr const char* kNamespace = "hpnsec";
 constexpr const char* kKey = "blob";
 constexpr const char* kSeqKey = "seq";
 constexpr uint32_t kMagic = 0x48504E53u;  // "HPNS"
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersion = 2;           // no migration: another version loads the defaults
 constexpr const char* kRealm = "HeatpumpsN";
 constexpr const char* kUser = "admin";
 constexpr const char* kDefaultPassword = "admin";
-constexpr size_t kPemMax = 256;          // a P-256 public key PEM is ~180 bytes
-constexpr uint32_t kMaxUnsignedMinutes = 60;
+constexpr size_t kSecretMin = 16;
+constexpr size_t kSecretMax = 64;
+constexpr uint32_t kMaxUploadMinutes = 60;
 
 struct Blob {
   uint32_t magic;
@@ -35,17 +35,14 @@ struct Blob {
   uint16_t size;
   uint32_t crc;
   char ha1[33];
-  char pem[KEY_COUNT][kPemMax];
+  char secret[kSecretMax + 1];
 };
 
 SemaphoreHandle_t g_mutex = nullptr;
-// On the heap: the ESP32-S2 has no static DRAM to spare for the two PEMs.
-Blob* g_blob = nullptr;
-mbedtls_pk_context g_pk[KEY_COUNT];
-bool g_pk_ok[KEY_COUNT] = {};
+Blob g_blob{};
 uint64_t g_last_seq = 0;
-uint32_t g_unsigned_until_ms = 0;
-bool g_unsigned = false;
+uint32_t g_upload_until_ms = 0;
+bool g_upload_open = false;
 char g_ws_token[33] = {};
 
 struct Lock {
@@ -62,71 +59,49 @@ uint32_t blob_crc(Blob& b) {
 }
 
 bool save_locked() {
-  g_blob->magic = kMagic;
-  g_blob->version = kVersion;
-  g_blob->size = sizeof(Blob);
-  g_blob->crc = blob_crc(*g_blob);
+  g_blob.magic = kMagic;
+  g_blob.version = kVersion;
+  g_blob.size = sizeof(Blob);
+  g_blob.crc = blob_crc(g_blob);
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) return false;
-  const bool ok = prefs.putBytes(kKey, g_blob, sizeof(Blob)) == sizeof(Blob);
+  const bool ok = prefs.putBytes(kKey, &g_blob, sizeof(g_blob)) == sizeof(g_blob);
   prefs.end();
   return ok;
 }
 
 void set_defaults_locked() {
-  *g_blob = Blob{};
+  g_blob = Blob{};
   const String ha1 = generateDigestHash(kUser, kDefaultPassword, kRealm);
-  snprintf(g_blob->ha1, sizeof(g_blob->ha1), "%s", ha1.c_str());
+  snprintf(g_blob.ha1, sizeof(g_blob.ha1), "%s", ha1.c_str());
 }
 
-// Parse a PEM public key into `ctx`; only ECDSA P-256 is accepted.
-bool parse_pem(mbedtls_pk_context& ctx, const char* pem) {
-  mbedtls_pk_free(&ctx);
-  mbedtls_pk_init(&ctx);
-  if (pem == nullptr || pem[0] == '\0') return false;
-  const int rc = mbedtls_pk_parse_public_key(&ctx, reinterpret_cast<const unsigned char*>(pem),
-                                             strlen(pem) + 1);
-  return rc == 0 && mbedtls_pk_can_do(&ctx, MBEDTLS_PK_ECDSA) && mbedtls_pk_get_bitlen(&ctx) == 256;
+void to_hex(const uint8_t* in, size_t n, char* out) {
+  for (size_t i = 0; i < n; ++i) snprintf(out + i * 2, 3, "%02x", in[i]);
 }
 
-// Fingerprint as `openssl ec -pubin -outform DER | sha256sum` prints it (first 16 hex).
-void fingerprint(const char* pem, char* out, size_t out_size) {
-  out[0] = '\0';
-  if (pem == nullptr || pem[0] == '\0') return;
-  char body[kPemMax];
-  size_t n = 0;
-  const char* p = strstr(pem, "-----BEGIN PUBLIC KEY-----");
-  const char* e = strstr(pem, "-----END PUBLIC KEY-----");
-  if (p == nullptr || e == nullptr) return;
-  for (p += strlen("-----BEGIN PUBLIC KEY-----"); p < e && n < sizeof(body) - 1; ++p) {
-    if (*p != '\n' && *p != '\r' && *p != ' ') body[n++] = *p;
+// Constant-time comparison of two equal-length strings.
+bool equal_ct(const char* a, const char* b, size_t n) {
+  uint8_t diff = 0;
+  for (size_t i = 0; i < n; ++i) diff |= static_cast<uint8_t>(a[i] ^ b[i]);
+  return diff == 0;
+}
+
+bool open_signed(const char* msg, const char* sig_hex, JsonDocument& out, char* err, size_t err_size) {
+  uint8_t mac[32];
+  {
+    Lock lock;
+    const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    mbedtls_md_hmac(md, reinterpret_cast<const unsigned char*>(g_blob.secret), strlen(g_blob.secret),
+                    reinterpret_cast<const unsigned char*>(msg), strlen(msg), mac);
   }
-  body[n] = '\0';
-  uint8_t der[160];
-  size_t der_len = 0;
-  if (mbedtls_base64_decode(der, sizeof(der), &der_len, reinterpret_cast<const unsigned char*>(body), n) != 0) {
-    return;
-  }
-  uint8_t hash[32];
-  mbedtls_sha256(der, der_len, hash, 0);
-  for (size_t i = 0; i < 8 && (i * 2 + 2) < out_size; ++i) snprintf(out + i * 2, 3, "%02x", hash[i]);
-}
-
-bool open_signed(const char* msg, size_t msg_len, const char* sig_b64, JsonDocument& out, char* err,
-                 size_t err_size) {
-  uint8_t sig[96];
-  const size_t sig_len = base64_decode(sig_b64, sig, sizeof(sig));
-  if (sig_len == 0) {
-    snprintf(err, err_size, "sig is not valid base64");
+  char expect[65];
+  to_hex(mac, sizeof(mac), expect);
+  if (strlen(sig_hex) != 64 || !equal_ct(expect, sig_hex, 64)) {
+    snprintf(err, err_size, "command signature invalid");
     return false;
   }
-  uint8_t hash[32];
-  mbedtls_sha256(reinterpret_cast<const unsigned char*>(msg), msg_len, hash, 0);
-  if (!verify(KEY_OBSERVER, hash, sig, sig_len)) {
-    snprintf(err, err_size, "observer signature invalid");
-    return false;
-  }
-  if (deserializeJson(out, msg, msg_len) != DeserializationError::Ok || !out.is<JsonObject>()) {
+  if (deserializeJson(out, msg) != DeserializationError::Ok || !out.is<JsonObject>()) {
     snprintf(err, err_size, "msg is not a JSON object");
     return false;
   }
@@ -149,40 +124,33 @@ bool open_signed(const char* msg, size_t msg_len, const char* sig_b64, JsonDocum
 
 void begin() {
   if (g_mutex == nullptr) g_mutex = xSemaphoreCreateMutex();
-  if (g_blob == nullptr) g_blob = new Blob();
-  for (auto& ctx : g_pk) mbedtls_pk_init(&ctx);
   Lock lock;
   bool ok = false;
   Preferences prefs;
   if (prefs.begin(kNamespace, true)) {
     if (prefs.getBytesLength(kKey) == sizeof(Blob) &&
-        prefs.getBytes(kKey, g_blob, sizeof(Blob)) == sizeof(Blob)) {
-      ok = g_blob->magic == kMagic && g_blob->version == kVersion && g_blob->size == sizeof(Blob) &&
-           g_blob->crc == blob_crc(*g_blob) && g_blob->ha1[32] == '\0' && strlen(g_blob->ha1) == 32;
+        prefs.getBytes(kKey, &g_blob, sizeof(g_blob)) == sizeof(g_blob)) {
+      ok = g_blob.magic == kMagic && g_blob.version == kVersion && g_blob.size == sizeof(Blob) &&
+           g_blob.crc == blob_crc(g_blob) && strnlen(g_blob.ha1, sizeof(g_blob.ha1)) == 32 &&
+           strnlen(g_blob.secret, sizeof(g_blob.secret)) <= kSecretMax;
     }
     g_last_seq = prefs.getULong64(kSeqKey, 0);
     prefs.end();
   }
   if (!ok) set_defaults_locked();
-  for (uint8_t i = 0; i < KEY_COUNT; ++i) {
-    g_blob->pem[i][kPemMax - 1] = '\0';
-    g_pk_ok[i] = parse_pem(g_pk[i], g_blob->pem[i]);
-  }
   for (size_t i = 0; i < 16; ++i) {
     snprintf(g_ws_token + i * 2, 3, "%02x", static_cast<unsigned>(esp_random() & 0xFF));
   }
-  Serial.printf("[security] login %s, OTA key %s, observer key %s\n",
-                ok ? "stored" : "default (admin/admin)", g_pk_ok[KEY_OTA] ? "installed" : "none",
-                g_pk_ok[KEY_OBSERVER] ? "installed" : "none");
+  Serial.printf("[security] login %s, command secret %s, uploads closed\n",
+                ok ? "stored" : "default (admin/admin)", g_blob.secret[0] ? "set" : "not set");
 }
 
 void clear() {
   {
     Lock lock;
     set_defaults_locked();
-    for (uint8_t i = 0; i < KEY_COUNT; ++i) g_pk_ok[i] = parse_pem(g_pk[i], "");
     g_last_seq = 0;
-    g_unsigned = false;
+    g_upload_open = false;
   }
   Preferences prefs;
   if (prefs.begin(kNamespace, false)) {
@@ -196,7 +164,7 @@ const char* username() { return kUser; }
 
 String digest_ha1() {
   Lock lock;
-  return String(g_blob->ha1);
+  return String(g_blob.ha1);
 }
 
 bool set_password(const char* current, const char* next, char* err, size_t err_size) {
@@ -210,12 +178,12 @@ bool set_password(const char* current, const char* next, char* err, size_t err_s
   bool saved = false;
   {
     Lock lock;
-    if (strcmp(cur.c_str(), g_blob->ha1) != 0) {
+    if (!equal_ct(cur.c_str(), g_blob.ha1, 32)) {
       snprintf(err, err_size, "current password is wrong");
       return false;
     }
     const String ha1 = generateDigestHash(kUser, next, kRealm);
-    snprintf(g_blob->ha1, sizeof(g_blob->ha1), "%s", ha1.c_str());
+    snprintf(g_blob.ha1, sizeof(g_blob.ha1), "%s", ha1.c_str());
     saved = save_locked();
   }
   web::log_event(saved ? 0 : 1, 1610, saved ? "Portal password changed" : "Portal password not saved");
@@ -226,99 +194,57 @@ bool set_password(const char* current, const char* next, char* err, size_t err_s
 const char* ws_token() { return g_ws_token; }
 
 bool check_ws_token(const char* token) {
-  if (token == nullptr || strlen(token) != 32) return false;
-  uint8_t diff = 0;
-  for (size_t i = 0; i < 32; ++i) diff |= static_cast<uint8_t>(token[i] ^ g_ws_token[i]);
-  return diff == 0;
+  return token != nullptr && strlen(token) == 32 && equal_ct(token, g_ws_token, 32);
 }
 
-bool set_key(KeySlot slot, const char* pem, char* err, size_t err_size) {
-  err[0] = '\0';
-  if (slot >= KEY_COUNT) return false;
-  const size_t len = pem ? strlen(pem) : 0;
-  if (len >= kPemMax) {
-    snprintf(err, err_size, "key too long (PEM public key expected)");
-    return false;
-  }
-  if (len > 0) {
-    mbedtls_pk_context probe;
-    mbedtls_pk_init(&probe);
-    const bool valid = parse_pem(probe, pem);
-    mbedtls_pk_free(&probe);
-    if (!valid) {
-      snprintf(err, err_size, "not an ECDSA P-256 public key in PEM format");
-      return false;
-    }
-  }
-  bool saved = false;
+bool uploads_open() {
+  Lock lock;
+  if (g_upload_open && static_cast<int32_t>(millis() - g_upload_until_ms) >= 0) g_upload_open = false;
+  return g_upload_open;
+}
+
+void open_uploads(uint32_t minutes) {
+  if (minutes > kMaxUploadMinutes) minutes = kMaxUploadMinutes;
   {
     Lock lock;
-    snprintf(g_blob->pem[slot], kPemMax, "%s", len ? pem : "");
-    g_pk_ok[slot] = parse_pem(g_pk[slot], g_blob->pem[slot]);
-    saved = save_locked();
+    g_upload_open = minutes > 0;
+    g_upload_until_ms = millis() + minutes * 60000u;
   }
-  char detail[80];
-  snprintf(detail, sizeof(detail), "%s public key %s", slot == KEY_OTA ? "OTA" : "Observer",
-           len ? "installed" : "removed");
-  web::log_event(saved ? 0 : 1, 1611, detail);
-  if (!saved) snprintf(err, err_size, "NVS write failed");
-  return saved;
-}
-
-bool key_installed(KeySlot slot) {
-  Lock lock;
-  return slot < KEY_COUNT && g_pk_ok[slot];
-}
-
-bool verify(KeySlot slot, const uint8_t hash[32], const uint8_t* sig, size_t sig_len) {
-  Lock lock;
-  if (slot >= KEY_COUNT || !g_pk_ok[slot]) return false;
-  return mbedtls_pk_verify(&g_pk[slot], MBEDTLS_MD_SHA256, hash, 32, sig, sig_len) == 0;
-}
-
-size_t base64_decode(const char* in, uint8_t* out, size_t out_size) {
-  if (in == nullptr) return 0;
-  size_t len = 0;
-  if (mbedtls_base64_decode(out, out_size, &len, reinterpret_cast<const unsigned char*>(in), strlen(in)) != 0) {
-    return 0;
-  }
-  return len;
-}
-
-bool parse_hex32(const char* hex, uint8_t out[32]) {
-  if (hex == nullptr || strlen(hex) != 64) return false;
-  for (size_t i = 0; i < 32; ++i) {
-    unsigned v = 0;
-    if (sscanf(hex + i * 2, "%2x", &v) != 1) return false;
-    out[i] = static_cast<uint8_t>(v);
-  }
-  return true;
-}
-
-bool ota_signature_required() {
-  Lock lock;
-  if (g_unsigned && static_cast<int32_t>(millis() - g_unsigned_until_ms) >= 0) g_unsigned = false;
-  return g_pk_ok[KEY_OTA] && !g_unsigned;
-}
-
-void allow_unsigned(uint32_t minutes) {
-  if (minutes > kMaxUnsignedMinutes) minutes = kMaxUnsignedMinutes;
-  {
-    Lock lock;
-    g_unsigned = minutes > 0;
-    g_unsigned_until_ms = millis() + minutes * 60000u;
-  }
-  char detail[80];
-  snprintf(detail, sizeof(detail), minutes ? "Unsigned updates allowed for %u min" : "Update signatures enforced",
+  char detail[64];
+  snprintf(detail, sizeof(detail), minutes ? "Firmware uploads opened for %u min" : "Firmware uploads closed",
            static_cast<unsigned>(minutes));
   web::log_event(minutes ? 1 : 0, 1612, detail);
 }
 
-uint32_t unsigned_remaining_s() {
+uint32_t uploads_remaining_s() {
+  if (!uploads_open()) return 0;
   Lock lock;
-  if (!g_unsigned) return 0;
-  const int32_t left = static_cast<int32_t>(g_unsigned_until_ms - millis());
+  const int32_t left = static_cast<int32_t>(g_upload_until_ms - millis());
   return left > 0 ? static_cast<uint32_t>(left) / 1000u : 0;
+}
+
+bool set_command_secret(const char* secret, char* err, size_t err_size) {
+  err[0] = '\0';
+  const size_t len = secret ? strlen(secret) : 0;
+  if (len != 0 && (len < kSecretMin || len > kSecretMax)) {
+    snprintf(err, err_size, "secret must be %u-%u characters", static_cast<unsigned>(kSecretMin),
+             static_cast<unsigned>(kSecretMax));
+    return false;
+  }
+  bool saved = false;
+  {
+    Lock lock;
+    snprintf(g_blob.secret, sizeof(g_blob.secret), "%s", len ? secret : "");
+    saved = save_locked();
+  }
+  web::log_event(saved ? 0 : 1, 1611, len ? "Command secret set" : "Command secret removed");
+  if (!saved) snprintf(err, err_size, "NVS write failed");
+  return saved;
+}
+
+bool command_secret_set() {
+  Lock lock;
+  return g_blob.secret[0] != '\0';
 }
 
 bool open_command(const char* payload, JsonDocument& out, char* err, size_t err_size) {
@@ -334,14 +260,14 @@ bool open_command(JsonVariantConst in, JsonDocument& out, char* err, size_t err_
   err[0] = '\0';
   const char* msg = in["msg"] | static_cast<const char*>(nullptr);
   const char* sig = in["sig"] | static_cast<const char*>(nullptr);
-  if (key_installed(KEY_OBSERVER)) {
+  if (command_secret_set()) {
     if (msg == nullptr || sig == nullptr) {
       snprintf(err, err_size, "signed envelope {msg, sig} required");
       return false;
     }
-    return open_signed(msg, strlen(msg), sig, out, err, err_size);
+    return open_signed(msg, sig, out, err, err_size);
   }
-  // No observer key yet: plain JSON (or the msg of an envelope) is accepted.
+  // No secret yet: plain JSON (or the msg of an envelope) is accepted.
   if (msg != nullptr) {
     if (deserializeJson(out, msg) != DeserializationError::Ok) {
       snprintf(err, err_size, "msg is not JSON");
@@ -354,29 +280,30 @@ bool open_command(JsonVariantConst in, JsonDocument& out, char* err, size_t err_
 }
 
 void status_json(JsonObject out) {
-  char fp[2][24];
-  bool installed[KEY_COUNT];
+  char fp[17] = {};
   uint64_t seq;
+  bool secret;
   {
     Lock lock;
-    for (uint8_t i = 0; i < KEY_COUNT; ++i) {
-      fingerprint(g_blob->pem[i], fp[i], sizeof(fp[i]));
-      installed[i] = g_pk_ok[i];
+    secret = g_blob.secret[0] != '\0';
+    if (secret) {
+      // Lets the observer side check that both hold the same secret.
+      uint8_t h[32];
+      mbedtls_sha256(reinterpret_cast<const unsigned char*>(g_blob.secret), strlen(g_blob.secret), h, 0);
+      to_hex(h, 8, fp);
     }
     seq = g_last_seq;
   }
   const String def = generateDigestHash(kUser, kDefaultPassword, kRealm);
   out["user"] = kUser;
   out["defaultPassword"] = digest_ha1() == def;
-  JsonObject ota = out["ota"].to<JsonObject>();
-  ota["keyInstalled"] = installed[KEY_OTA];
-  ota["fingerprint"] = fp[KEY_OTA];
-  ota["signatureRequired"] = ota_signature_required();
-  ota["unsignedRemainingS"] = unsigned_remaining_s();
-  JsonObject obs = out["observer"].to<JsonObject>();
-  obs["keyInstalled"] = installed[KEY_OBSERVER];
-  obs["fingerprint"] = fp[KEY_OBSERVER];
-  obs["lastSeq"] = seq;
+  JsonObject up = out["uploads"].to<JsonObject>();
+  up["open"] = uploads_open();
+  up["remainingS"] = uploads_remaining_s();
+  JsonObject cmd = out["commands"].to<JsonObject>();
+  cmd["secretSet"] = secret;
+  cmd["fingerprint"] = fp;
+  cmd["lastSeq"] = seq;
 }
 
 }  // namespace security

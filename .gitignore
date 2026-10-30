@@ -60,7 +60,3 @@ Thumbs.db
 .env.*
 !.env.example
 secrets.h
-
-# Signing keys (firmware/tools/gen_keys.sh): never commit
-firmware/keys/
-*_private.pem

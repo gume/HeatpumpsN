@@ -361,8 +361,8 @@ bool apply_opened(JsonVariantConst in, const char* source, char* err, size_t err
 
 }  // namespace
 
-// Observer parameter updates: a signed envelope once an observer key is
-// installed (security.h), plain JSON before that.
+// Observer parameter updates: a signed envelope once a command secret is set
+// (security.h), plain JSON before that.
 bool apply_params(JsonVariantConst in, const char* source, char* err, size_t err_size) {
   JsonDocument opened;
   if (!security::open_command(in, opened, err, err_size)) {
@@ -466,10 +466,10 @@ bool apply_params_json(const char* json, const char* source, char* err, size_t e
 }
 
 bool apply_mode_command(const char* payload, const char* source, char* err, size_t err_size) {
-  // Signed envelope {"msg":"{\"seq\":..,\"mode\":..}","sig":..} once an observer key
-  // is installed; before that also plain "mpc" or {"mode":"mpc"}.
+  // Signed envelope {"msg":"{\"seq\":..,\"mode\":..}","sig":..} once a command
+  // secret is set; before that also plain "mpc" or {"mode":"mpc"}.
   if (payload[0] != '{') {
-    if (security::key_installed(security::KEY_OBSERVER)) {
+    if (security::command_secret_set()) {
       snprintf(err, err_size, "signed envelope {msg, sig} required");
       set_ack(false, source, "mode", err);
       web::log_event(1, 1346, err);

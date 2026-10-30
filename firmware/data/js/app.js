@@ -2068,9 +2068,9 @@ function renderSettingsFirmware() {
   const usedPct = fs.total ? Math.min(100, (fs.used / fs.total) * 100) : 0;
 
   return `<div class="stack">
-    <div class="banner ${state.security?.ota?.signatureRequired ? 'info' : 'warn'}">${state.security?.ota?.signatureRequired
-      ? 'Signed updates only: select the image and its .sig file (written by firmware/tools/sign_image.py).'
-      : (state.security?.ota?.keyInstalled ? `Unsigned updates are allowed for ${Math.ceil(num(state.security.ota.unsignedRemainingS, 0) / 60)} more minutes.` : 'No OTA key installed: any image is accepted. Install one under Settings → Security.')}</div>
+    <div class="banner ${state.security?.uploads?.open ? 'info' : 'warn'}">${state.security?.uploads?.open
+      ? `Uploads are open for ${Math.ceil(num(state.security.uploads.remainingS, 0) / 60)} more minutes.`
+      : 'Uploads are closed. Open them under Settings → Security first.'}</div>
 
     <section class="card writable accent-top">
       <div class="card-head"><div><h2>Firmware update</h2><p>Upload a compiled application image over HTTP</p></div><span class="chip">${esc(status.version || '?')}</span></div>
@@ -2104,11 +2104,6 @@ function renderSettingsFirmware() {
             <label for="ota-file">Image file (.bin)</label>
             <input id="ota-file" type="file" accept=".bin,application/octet-stream">
             <small>Do not power off during the update.</small>
-          </div>
-          <div class="field">
-            <label for="ota-sig">Signature (.sig)</label>
-            <input id="ota-sig" type="file" accept=".sig,.json,application/json">
-            <small>Required while signatures are enforced.</small>
           </div>
         </div>
         <div class="progress hidden" id="ota-progress-wrap">
@@ -2147,30 +2142,13 @@ async function refreshSecurity() {
   return state.security;
 }
 
-function keyCard(slot, title, purpose, info) {
-  return `<section class="card writable accent-top">
-      <div class="card-head"><div><h2>${title}</h2><p>${purpose}</p></div>
-        <span class="chip ${info.keyInstalled ? 'chip-ok' : 'chip-warn'}">${info.keyInstalled ? 'installed' : 'not installed'}</span></div>
-      ${info.keyInstalled ? `<div class="metric-row"><span class="k">Fingerprint</span><span class="v mono">${esc(info.fingerprint)}</span></div>` : ''}
-      <div class="field" style="margin-top:10px">
-        <label for="key-${slot}">Public key (PEM, ECDSA P-256)</label>
-        <textarea id="key-${slot}" rows="5" class="mono" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
-      </div>
-      <div class="form-actions">
-        <button class="btn btn-primary" type="button" data-action="sec-key" data-slot="${slot}">Install key</button>
-        ${info.keyInstalled ? `<button class="btn btn-danger" type="button" data-action="sec-key-remove" data-slot="${slot}">Remove key</button>` : ''}
-      </div>
-    </section>`;
-}
-
 function renderSettingsSecurity() {
   const sec = state.security;
   if (!sec) return loadingCard('Loading security settings…');
-  const ota = sec.ota || {};
-  const obs = sec.observer || {};
-  const left = num(ota.unsignedRemainingS, 0);
+  const up = sec.uploads || {};
+  const cmd = sec.commands || {};
   return `<div class="stack">
-    <div class="banner warn">Basic protection without TLS: passwords and keys keep out casual access and unsigned code, not someone who can read the network traffic.</div>
+    <div class="banner warn">Basic protection without TLS: it keeps out casual access and stray uploads, not someone who can read the network traffic.</div>
     ${sec.defaultPassword ? '<div class="banner err">The default password (admin / admin) is still set. Change it below.</div>' : ''}
 
     <section class="card writable accent-top">
@@ -2184,20 +2162,31 @@ function renderSettingsSecurity() {
         <span class="small faint">The browser asks for the new password on the next request.</span></div>
     </section>
 
-    ${keyCard('ota', 'Update signing key', 'Firmware and portal-file uploads must be signed with the matching private key', ota)}
-
     <section class="card guarded">
-      <div class="card-head"><div><h2>Unsigned updates</h2><p>Temporary exception, for example to install a new key's first image</p></div>
-        <span class="chip ${ota.signatureRequired ? 'chip-ok' : 'chip-err'}">${ota.signatureRequired ? 'signatures enforced' : (ota.keyInstalled ? `unsigned allowed · ${Math.ceil(left / 60)} min left` : 'no key: not enforced')}</span></div>
+      <div class="card-head"><div><h2>Firmware uploads</h2><p>Application and portal-file uploads are refused unless opened here</p></div>
+        <span class="chip ${up.open ? 'chip-err' : 'chip-ok'}">${up.open ? `open · ${Math.ceil(num(up.remainingS, 0) / 60)} min left` : 'closed'}</span></div>
       <div class="form-actions">
-        <button class="btn" type="button" data-action="sec-unsigned" data-minutes="15" ${ota.keyInstalled ? '' : 'disabled'}>Allow unsigned for 15 min</button>
-        <button class="btn" type="button" data-action="sec-unsigned" data-minutes="0" ${left ? '' : 'disabled'}>Enforce now</button>
+        <button class="btn" type="button" data-action="sec-uploads" data-minutes="10">Open for 10 min</button>
+        <button class="btn" type="button" data-action="sec-uploads" data-minutes="0" ${up.open ? '' : 'disabled'}>Close now</button>
       </div>
-      <p class="small faint" style="margin-top:10px">The exception ends by itself and does not survive a reboot.</p>
+      <p class="small faint" style="margin-top:10px">The window closes by itself and with every reboot, so after an application update open it again for the portal files.</p>
     </section>
 
-    ${keyCard('observer', 'Observer signing key', 'MPC parameter and mode commands must be signed by the observer (Home Assistant commands are not affected)', obs)}
-    ${obs.keyInstalled ? `<div class="small faint">Last accepted observer sequence: <span class="mono">${esc(obs.lastSeq)}</span></div>` : ''}
+    <section class="card writable accent-top">
+      <div class="card-head"><div><h2>Command secret</h2><p>MPC parameter and mode commands from the observer must carry an HMAC with this secret (Home Assistant commands are not affected)</p></div>
+        <span class="chip ${cmd.secretSet ? 'chip-ok' : 'chip-warn'}">${cmd.secretSet ? 'set' : 'not set'}</span></div>
+      ${cmd.secretSet ? `<div class="metric-row"><span class="k">Fingerprint (SHA-256, first 8 bytes)</span><span class="v mono">${esc(cmd.fingerprint)}</span></div>
+      <div class="metric-row"><span class="k">Last accepted sequence</span><span class="v mono">${esc(cmd.lastSeq)}</span></div>` : ''}
+      <div class="field" style="margin-top:10px">
+        <label for="cmd-secret">New secret</label>
+        <input id="cmd-secret" type="password" autocomplete="off">
+        <small>16-64 characters. The same value goes to the observer; it is never shown again.</small>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="button" data-action="sec-secret">Set secret</button>
+        ${cmd.secretSet ? '<button class="btn btn-danger" type="button" data-action="sec-secret-remove">Remove secret</button>' : ''}
+      </div>
+    </section>
   </div>`;
 }
 
@@ -2208,15 +2197,14 @@ async function securityAction(action, button) {
       if (next !== $('#pw-confirm').value) { toast('The new passwords differ.', 'warn'); return; }
       state.security = await apiPost('/api/security/password', { current: $('#pw-current').value, new: next });
       toast('Password changed.', 'ok');
-    } else if (action === 'sec-key' || action === 'sec-key-remove') {
-      const slot = button.dataset.slot;
-      const pem = action === 'sec-key' ? $(`#key-${slot}`).value.trim() : '';
-      if (action === 'sec-key' && !pem) { toast('Paste a PEM public key first.', 'warn'); return; }
-      if (action === 'sec-key-remove' && !(await confirmDialog('Remove key?', 'Signatures will no longer be checked for this key.', 'Remove', true))) return;
-      state.security = await apiPost('/api/security/key', { slot, pem });
-      toast(pem ? 'Key installed.' : 'Key removed.', 'ok');
-    } else if (action === 'sec-unsigned') {
-      state.security = await apiPost('/api/security/unsigned', { minutes: Number(button.dataset.minutes) });
+    } else if (action === 'sec-secret' || action === 'sec-secret-remove') {
+      const secret = action === 'sec-secret' ? $('#cmd-secret').value : '';
+      if (action === 'sec-secret' && !secret) { toast('Enter a secret first.', 'warn'); return; }
+      if (action === 'sec-secret-remove' && !(await confirmDialog('Remove secret?', 'Commands will be accepted without a signature.', 'Remove', true))) return;
+      state.security = await apiPost('/api/security/secret', { secret });
+      toast(secret ? 'Secret set.' : 'Secret removed.', 'ok');
+    } else if (action === 'sec-uploads') {
+      state.security = await apiPost('/api/security/uploads', { minutes: Number(button.dataset.minutes) });
     }
     renderCurrent();
   } catch (err) {
@@ -2686,18 +2674,6 @@ async function uploadFirmware() {
 
   const params = new URLSearchParams();
   if ($('#ota-target')?.value === 'fs') params.set('target', 'fs');
-  const sigFile = $('#ota-sig')?.files?.[0];
-  if (sigFile) {
-    try {
-      const sig = JSON.parse(await sigFile.text());
-      params.set('sha256', sig.sha256);
-      params.set('sig', sig.sig);
-    } catch (err) {
-      state.otaBusy = false;
-      toast('The .sig file is not valid.', 'err');
-      return;
-    }
-  }
 
   const formData = new FormData();
   formData.append('firmware', file, file.name);
@@ -2908,9 +2884,9 @@ async function handleViewClick(event) {
       await uploadFirmware();
       break;
     case 'sec-password':
-    case 'sec-key':
-    case 'sec-key-remove':
-    case 'sec-unsigned':
+    case 'sec-secret':
+    case 'sec-secret-remove':
+    case 'sec-uploads':
       await securityAction(action, button);
       break;
     case 'config-export':
@@ -3014,7 +2990,7 @@ const routes = {
   },
   'settings/security': {
     title: 'Security',
-    subtitle: 'Portal login, update signing and observer keys',
+    subtitle: 'Portal login, upload window and command secret',
     render: renderSettingsSecurity,
     enter: async () => { await refreshSecurity(); }
   },
