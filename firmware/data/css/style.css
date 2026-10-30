@@ -844,3 +844,8 @@ td.mono, th.mono { font-family: var(--mono); }
 @keyframes mixer-pulse { from { opacity: .55; } to { opacity: 1; } }
 
 .field textarea { resize: vertical; font-size: 12px; }
+
+.login-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(5, 8, 14, .82); padding: 16px; }
+.login-card { width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; }
+#login-msg { min-height: 1.2em; color: var(--warn); }
+body.readonly-user .writable button[type="submit"], body.readonly-user .guarded .btn { opacity: .45; }

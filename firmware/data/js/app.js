@@ -176,7 +176,17 @@ function emptyCard(message) {
 /* ------------------------------------------------------------------------- */
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { cache: 'no-store', ...options });
+  let response;
+  try {
+    response = await hpnAuth.authFetch(path, options);
+  } catch (err) {
+    if (err.auth) showLogin();
+    throw err;
+  }
+  if (response.status === 401 || response.status === 423) {
+    showLogin(response.status === 423 ? 'Too many failed logins; wait 30 s.' : 'Session expired. Log in again.');
+  }
+  if (options.unseal && response.ok) return response.json();
   const text = await response.text();
   let data = null;
   if (text) {
@@ -203,6 +213,9 @@ const apiPut = (path, body) => api(path, {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body)
 });
+// Requests that carry secrets (passwords, Wi-Fi/MQTT credentials) are sealed
+// with the session's encryption key; the controller rejects them otherwise.
+const apiSealed = (method, path, body) => api(path, { method, seal: JSON.stringify(body) });
 
 /* ------------------------------------------------------------------------- */
 /* Toast, modal and theme                                                     */
@@ -274,22 +287,16 @@ function updateConnection() {
     : 'WebSocket: reconnecting…';
 }
 
-function connectWs() {
+async function connectWs() {
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
-  const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  // Browsers cannot answer a Digest challenge on a WebSocket handshake, so the
-  // logged-in page fetches a session token and passes it in the URL.
-  if (!state.wsToken) {
-    apiGet('/api/session')
-      .then((s) => { state.wsToken = s.wsToken; connectWs(); })
-      .catch(() => setTimeout(connectWs, 2500));
-    return;
-  }
+  if (!hpnAuth.user) return;
   let ws;
   try {
-    ws = new WebSocket(`${protocol}://${location.host}/ws?token=${encodeURIComponent(state.wsToken)}`);
+    // The handshake cannot carry headers: the signed credentials go in the URL
+    // (single-use nonce, so a captured URL cannot be replayed).
+    ws = new WebSocket(await hpnAuth.websocketUrl('/ws'));
   } catch (err) {
     setTimeout(connectWs, 2500);
     return;
@@ -304,7 +311,6 @@ function connectWs() {
   ws.onclose = () => {
     state.wsConnected = false;
     state.ws = null;
-    state.wsToken = null;   // the controller may have rebooted (new token)
     updateConnection();
     setTimeout(connectWs, 2200);
   };
@@ -2147,19 +2153,22 @@ function renderSettingsSecurity() {
   if (!sec) return loadingCard('Loading security settings…');
   const up = sec.uploads || {};
   const cmd = sec.commands || {};
+  const users = sec.users || {};
+  const defaults = Object.entries(users).filter(([, u]) => u.defaultPassword).map(([n]) => n);
   return `<div class="stack">
-    <div class="banner warn">Basic protection without TLS: it keeps out casual access and stray uploads, not someone who can read the network traffic.</div>
-    ${sec.defaultPassword ? '<div class="banner err">The default password (admin / admin) is still set. Change it below.</div>' : ''}
+    <div class="banner info">Requests are signed with a key derived from your password and a single-use challenge from the controller; passwords and other secrets never cross the network in clear. See docs/security.md.</div>
+    ${defaults.length ? `<div class="banner err">Factory password still set for: ${defaults.map(esc).join(', ')}. Change it below.</div>` : ''}
 
     <section class="card writable accent-top">
-      <div class="card-head"><div><h2>Portal login</h2><p>HTTP Digest login for every page and API</p></div><span class="chip">user: ${esc(sec.user)}</span></div>
+      <div class="card-head"><div><h2>Users and passwords</h2><p>admin changes settings; monitor can only look</p></div><span class="chip">logged in: ${esc(hpnAuth.user || '?')}</span></div>
       <div class="form-grid">
-        <div class="field"><label for="pw-current">Current password</label><input id="pw-current" type="password" autocomplete="current-password"></div>
-        <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><small>4-63 characters.</small></div>
+        <div class="field"><label for="pw-user">User</label>
+          <select id="pw-user">${Object.keys(users).map((n) => `<option value="${esc(n)}">${esc(n)} (${esc(users[n].role)})</option>`).join('')}</select></div>
+        <div class="field"><label for="pw-new">New password</label><input id="pw-new" type="password" autocomplete="new-password"><small>At least 8 characters.</small></div>
         <div class="field"><label for="pw-confirm">Repeat new password</label><input id="pw-confirm" type="password" autocomplete="new-password"></div>
       </div>
-      <div class="form-actions"><button class="btn btn-primary" type="button" data-action="sec-password">Change password</button>
-        <span class="small faint">The browser asks for the new password on the next request.</span></div>
+      <div class="form-actions"><button class="btn btn-primary" type="button" data-action="sec-password">Set password</button>
+        <span class="small faint">Changing your own password logs you out.</span></div>
     </section>
 
     <section class="card guarded">
@@ -2173,7 +2182,7 @@ function renderSettingsSecurity() {
     </section>
 
     <section class="card writable accent-top">
-      <div class="card-head"><div><h2>Command secret</h2><p>MPC parameter and mode commands from the observer must carry an HMAC with this secret (Home Assistant commands are not affected)</p></div>
+      <div class="card-head"><div><h2>MQTT command secret</h2><p>MPC parameter and mode commands over MQTT must carry an HMAC with this secret (Home Assistant commands are not affected)</p></div>
         <span class="chip ${cmd.secretSet ? 'chip-ok' : 'chip-warn'}">${cmd.secretSet ? 'set' : 'not set'}</span></div>
       ${cmd.secretSet ? `<div class="metric-row"><span class="k">Fingerprint (SHA-256, first 8 bytes)</span><span class="v mono">${esc(cmd.fingerprint)}</span></div>
       <div class="metric-row"><span class="k">Last accepted sequence</span><span class="v mono">${esc(cmd.lastSeq)}</span></div>` : ''}
@@ -2193,15 +2202,22 @@ function renderSettingsSecurity() {
 async function securityAction(action, button) {
   try {
     if (action === 'sec-password') {
+      const user = $('#pw-user').value;
       const next = $('#pw-new').value;
+      if (next.length < 8) { toast('Use at least 8 characters.', 'warn'); return; }
       if (next !== $('#pw-confirm').value) { toast('The new passwords differ.', 'warn'); return; }
-      state.security = await apiPost('/api/security/password', { current: $('#pw-current').value, new: next });
-      toast('Password changed.', 'ok');
+      // The device stores keys derived from the password, never the password.
+      const salt = hpnAuth.toHex(crypto.getRandomValues(new Uint8Array(16)));
+      const keys = hpnAuth.deriveKeys(next, salt, 10000);
+      state.security = await apiSealed('POST', '/api/security/password',
+        { user, salt, k_auth: hpnAuth.toHex(keys.kAuth), k_enc: hpnAuth.toHex(keys.kEnc) });
+      toast(`Password of ${user} changed.`, 'ok');
+      if (user === hpnAuth.user) { hpnAuth.logout(); showLogin('Password changed. Log in with the new password.'); return; }
     } else if (action === 'sec-secret' || action === 'sec-secret-remove') {
       const secret = action === 'sec-secret' ? $('#cmd-secret').value : '';
       if (action === 'sec-secret' && !secret) { toast('Enter a secret first.', 'warn'); return; }
-      if (action === 'sec-secret-remove' && !(await confirmDialog('Remove secret?', 'Commands will be accepted without a signature.', 'Remove', true))) return;
-      state.security = await apiPost('/api/security/secret', { secret });
+      if (action === 'sec-secret-remove' && !(await confirmDialog('Remove secret?', 'MQTT commands will be accepted without a signature.', 'Remove', true))) return;
+      state.security = await apiSealed('POST', '/api/security/secret', { secret });
       toast(secret ? 'Secret set.' : 'Secret removed.', 'ok');
     } else if (action === 'sec-uploads') {
       state.security = await apiPost('/api/security/uploads', { minutes: Number(button.dataset.minutes) });
@@ -2209,6 +2225,61 @@ async function securityAction(action, button) {
     renderCurrent();
   } catch (err) {
     toast(err.message, 'err', 6000);
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Login                                                                      */
+/* ------------------------------------------------------------------------- */
+
+function showLogin(message = '') {
+  if ($('#login-overlay')) {
+    if (message) $('#login-msg').textContent = message;
+    return;
+  }
+  const el = document.createElement('div');
+  el.id = 'login-overlay';
+  el.className = 'login-overlay';
+  el.innerHTML = `<form class="card login-card" id="login-form">
+      <h2>HeatpumpsN controller</h2>
+      <div class="field"><label for="login-user">User</label>
+        <select id="login-user"><option value="monitor">monitor (read-only)</option><option value="admin">admin</option></select></div>
+      <div class="field"><label for="login-pass">Password</label><input id="login-pass" type="password" autocomplete="current-password"></div>
+      <div class="small" id="login-msg">${esc(message)}</div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Log in</button></div>
+      <p class="small faint">Use admin only to change settings: everyday viewing needs only monitor.</p>
+    </form>`;
+  document.body.appendChild(el);
+  $('#login-pass').focus();
+  $('#login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    $('#login-msg').textContent = 'Checking…';
+    try {
+      const who = await hpnAuth.login($('#login-user').value, $('#login-pass').value);
+      el.remove();
+      updateUserBadge(who);
+      startSession();
+    } catch (err) {
+      $('#login-msg').textContent = err.message;
+    }
+  });
+}
+
+function updateUserBadge(who) {
+  const badge = $('#user-badge');
+  if (!badge) return;
+  badge.textContent = who ? `${who.user}${who.role === 'admin' ? '' : ' · read-only'}` : '';
+  document.body.classList.toggle('readonly-user', !!who && who.role !== 'admin');
+}
+
+let sessionStarted = false;
+async function startSession() {
+  await Promise.allSettled([refreshStatus(), refreshEvents(), refreshAccess()]);
+  connectWs();
+  await onRoute();
+  if (!sessionStarted) {
+    sessionStarted = true;
+    setInterval(tick, 5000);
   }
 }
 
@@ -2471,7 +2542,9 @@ async function saveSettingsForm(form) {
   const submit = form.querySelector('button[type="submit"]');
   if (submit) submit.disabled = true;
   try {
-    const result = await apiPut(`/api/config/${section}`, normalizeSettings(section, collectForm(form)));
+    const body = normalizeSettings(section, collectForm(form));
+    const result = section === 'network' ? await apiSealed('PUT', '/api/config/network', body)
+      : await apiPut(`/api/config/${section}`, body);
     setDirty(false);
     form.classList.remove('dirty');
     toast(
@@ -2678,8 +2751,14 @@ async function uploadFirmware() {
   const formData = new FormData();
   formData.append('firmware', file, file.name);
 
+  // The image hash is a signed query parameter; the controller compares it
+  // with the streamed bytes before activating anything.
+  setOtaProgress(0, 'Hashing image…');
+  params.set('sha256', hpnAuth.toHex(hpnAuth.sha256(new Uint8Array(await file.arrayBuffer()))));
+  const url = `/api/update?${params}`;
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', `/api/update${params.toString() ? `?${params}` : ''}`);
+  xhr.open('POST', url);
+  xhr.setRequestHeader('X-HPN-Auth', await hpnAuth.uploadAuth(url));
   xhr.upload.onprogress = (event) => {
     if (!event.lengthComputable) return;
     const percent = (event.loaded / event.total) * 100;
@@ -2687,6 +2766,7 @@ async function uploadFirmware() {
   };
   xhr.onload = () => {
     state.otaBusy = false;
+    hpnAuth.takeNonce({ headers: { get: (h) => xhr.getResponseHeader(h) } });
     let data = null;
     try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (err) { /* ignore */ }
     if (xhr.status >= 200 && xhr.status < 300 && data?.ok) {
@@ -2759,18 +2839,10 @@ function exportSlow() {
 
 async function exportConfig() {
   try {
-    const response = await fetch('/api/config/export', { cache: 'no-store' });
-    const text = await response.text();
-    if (!response.ok) {
-      let message = response.statusText || `HTTP ${response.status}`;
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed && parsed.error) message = parsed.error;
-      } catch (err) { /* keep HTTP status */ }
-      throw new Error(message);
-    }
+    // The export holds credentials: the controller seals it for this session.
+    const data = await api('/api/config/export', { unseal: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    downloadText(`heatpumpsn-config-${stamp}.json`, text, 'application/json;charset=utf-8');
+    downloadText(`heatpumpsn-config-${stamp}.json`, JSON.stringify(data, null, 2), 'application/json;charset=utf-8');
     toast('Configuration file downloaded.', 'ok');
   } catch (err) {
     toast(`Could not export configuration: ${err.message}`, 'err', 6000);
@@ -2787,7 +2859,7 @@ async function importConfigFile(file) {
     } catch (err) {
       throw new Error('file is not valid JSON');
     }
-    const result = await apiPost('/api/config/import', data);
+    const result = await apiSealed('POST', '/api/config/import', data);
     toast(
       result.reboot_required
         ? 'Configuration restored. Reboot required for the new values to take effect.'
@@ -3108,10 +3180,22 @@ async function boot() {
   applyTheme();
   setupStaticEvents();
   updateConnection();
-  await Promise.allSettled([refreshStatus(), refreshEvents(), refreshAccess()]);
-  connectWs();
-  await onRoute();
-  setInterval(tick, 5000);
+  $('#logout-btn')?.addEventListener('click', () => {
+    hpnAuth.logout();
+    state.ws?.close();
+    updateUserBadge(null);
+    showLogin('Logged out.');
+  });
+  if (!hpnAuth.user) {
+    showLogin();
+    return;
+  }
+  try {
+    updateUserBadge(await api('/api/session'));
+  } catch (err) {
+    return;   // showLogin() was called by api()
+  }
+  startSession();
 }
 
 boot();

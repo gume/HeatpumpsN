@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -117,12 +119,54 @@ def parse_state(st: dict, sim: dict | None) -> Telemetry:
     return t
 
 
+class HpnAuth(httpx.Auth):
+    """HPN1 challenge-response signing (firmware/docs/security.md) for httpx.
+
+    Device nonces are single use; every authenticated response carries the next
+    one in X-HPN-Nonce, so a steady poller needs no extra challenge requests.
+    """
+
+    requires_request_body = True
+    requires_response_body = True
+
+    def __init__(self, user: str, password: str):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "firmware" / "tools"))
+        import hpn_auth  # noqa: PLC0415
+        self._h = hpn_auth
+        self.user, self.password = user, password
+        self.k_auth: bytes | None = None
+        self.nonces: list[str] = []
+
+    def _challenge_request(self, request: httpx.Request) -> httpx.Request:
+        return httpx.Request("GET", request.url.copy_with(path="/api/auth/challenge", query=f"user={self.user}".encode()))
+
+    def auth_flow(self, request: httpx.Request):
+        for attempt in range(2):
+            if self.k_auth is None or not self.nonces:
+                resp = yield self._challenge_request(request)
+                c = resp.json()
+                if self.k_auth is None:
+                    self.k_auth, _ = self._h.derive_keys(self.password, c["salt"], c["iter"])
+                self.nonces.append(c["nonce"])
+            nonce = self.nonces.pop(0)
+            body_hash = hashlib.sha256(request.content or b"").hexdigest()
+            sig = self._h.signature(self.k_auth, request.method, str(request.url.raw_path, "ascii"), nonce, body_hash)
+            request.headers["X-HPN-Auth"] = f"user={self.user},nonce={nonce},sig={sig}"
+            response = yield request
+            if response.headers.get("X-HPN-Nonce"):
+                self.nonces.append(response.headers["X-HPN-Nonce"])
+            if response.status_code == 401 and response.headers.get("X-HPN-Reason") == "nonce" and attempt == 0:
+                self.nonces.clear()
+                continue
+            return
+
+
 class ControllerClient:
     def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport | None = None,
                  timeout: float = 3.0, auth: tuple[str, str] | None = None):
-        # Firmware >= 0.4 requires the portal login (HTTP Digest) on every route.
+        # Firmware >= 0.4 requires HPN1-signed requests on every API route.
         self.http = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport,
-                                      auth=httpx.DigestAuth(*auth) if auth else None)
+                                      auth=HpnAuth(*auth) if auth else None)
         self.base_url = base_url
 
     async def close(self):
@@ -183,17 +227,15 @@ class ControllerClient:
                     hostname=status.get("hostname"), ramp=bool(sim.get("rampSupported")),
                     uptime=status.get("uptime"), reset_reason=status.get("resetReason"))
         try:
-            export = await self.http.get("/api/config/export")
-            export.raise_for_status()
-            info["config_export_sha256"] = hashlib.sha256(export.content).hexdigest()
-            cfg = export.json()
-            hw = cfg.get("hardware", cfg.get("config", {}).get("hardware", {})) if isinstance(cfg, dict) else {}
+            # The full export is sealed (it holds credentials); the tuning
+            # lives in the hardware section, which carries no secrets.
+            hw = await self.get("/api/config/hardware")
             tuning = {k: hw.get(k) for k in ("kp", "ki", "delay_s", "mix_ff_offset", "ff_boiler",
                                              "ff_return", "rad_coupling_ff", "travel_time_ms") if k in hw}
             info["tuning"] = tuning
             info["tuning_sha256"] = hashlib.sha256(json.dumps(tuning, sort_keys=True).encode()).hexdigest()
         except Exception as e:  # noqa: BLE001
-            log.warning("config export unavailable: %s", e)
+            log.warning("controller tuning unavailable: %s", describe(e))
         try:
             net = await self.get("/api/config/network")
             info["mqtt_base_topic"] = net.get("mqtt_base_topic")

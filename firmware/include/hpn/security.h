@@ -4,48 +4,66 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Basic access protection (no TLS: it stops casual access and stray uploads,
-// not an eavesdropper on the network).
+// Access protection on plain HTTP: HPN1 challenge-response request signing.
+// Design, threat model and the reasons for the choices: docs/security.md.
 //
-//   * Web login: HTTP Digest, user "admin", default password "admin". The
-//     device stores only the Digest hash (HA1). /ws uses a session token that
-//     the logged-in portal fetches from /api/session.
-//   * Upload window: firmware and LittleFS uploads (/api/update) are refused
-//     unless a logged-in user opened the window for a few minutes. The window
-//     lives in RAM, so a reboot closes it.
-//   * Signed commands: MPC parameter and mode commands from the observer are an
-//     envelope {"msg": "<json>", "sig": "<hex HMAC-SHA256(secret, msg)>"} with a
-//     strictly increasing "seq" in msg. Enforced once a shared secret is set.
-//     Home Assistant commands are not affected.
-//
-// State lives in its own NVS namespace ("hpnsec"); a factory reset clears it.
+//   * Two users: "admin" (everything) and "monitor" (read-only). The device
+//     stores per user a salt and two keys derived from the password with
+//     PBKDF2-HMAC-SHA256; passwords never cross the network.
+//   * Every API request carries X-HPN-Auth: user, a single-use nonce issued by
+//     the device (valid 60 s) and an HMAC over method, path, canonical query,
+//     nonce and the SHA-256 of the body. No clocks, no shared counters.
+//   * Secrets in requests and responses are sealed (encrypt-then-MAC built
+//     from HMAC-SHA256) with the user's encryption key, bound to the nonce.
+//   * Firmware uploads additionally need the upload window (admin opens it).
+//   * MQTT MPC commands are HMAC-signed with a shared secret and an increasing
+//     sequence number (MQTT has no request/response to carry a nonce).
 namespace hpn {
 namespace security {
 
-void begin();
-void clear();   // factory reset: default password, no secret
+enum Role : uint8_t { ROLE_NONE = 0, ROLE_MONITOR = 1, ROLE_ADMIN = 2 };
 
-// --- Web login -------------------------------------------------------------
-const char* realm();
-const char* username();
-String digest_ha1();
-bool set_password(const char* current, const char* next, char* err, size_t err_size);
-const char* ws_token();
-bool check_ws_token(const char* token);
+void begin();
+void clear();   // factory reset: default passwords, no command secret
+
+// --- HPN1 request authentication -------------------------------------------
+struct Auth {
+  Role role;
+  uint8_t user;        // index into the user table
+  char nonce[33];
+  int status;          // 0 ok, else HTTP status for the rejection
+  const char* reason;  // "nonce", "user", "sig", "locked", "header"
+};
+
+// Fills {"user","salt","iter","nonce","ttl"} for a challenge; false for an unknown user.
+bool challenge(const char* user, JsonObject out);
+// Issues a fresh nonce (hex) into `out`, e.g. for the X-HPN-Nonce response header.
+void issue_nonce(char out[33]);
+// Verifies one request. `auth_header` is "user=..,nonce=..,sig=..".
+Auth verify(const char* auth_header, const char* method, const char* path, const char* canonical_query,
+            const char* body_hash_hex);
+const char* user_name(uint8_t user);
+
+// Sealed payloads (base64 iv|ct|tag), bound to the request nonce.
+bool unseal(uint8_t user, const char* nonce, const char* b64, char* out, size_t out_size, size_t* out_len);
+String seal(uint8_t user, const char* nonce, const char* plaintext, size_t len);
+
+// Admin: new keys for a user, computed by the client from the new password.
+bool set_user_keys(const char* user, const char* salt_hex, const char* k_auth_hex, const char* k_enc_hex,
+                   char* err, size_t err_size);
 
 // --- Upload window ---------------------------------------------------------
 bool uploads_open();
 void open_uploads(uint32_t minutes);   // 0 closes
 uint32_t uploads_remaining_s();
 
-// --- Signed commands -------------------------------------------------------
+// --- Signed MQTT commands (shared secret) ------------------------------------
 bool set_command_secret(const char* secret, char* err, size_t err_size);   // "" removes it
 bool command_secret_set();
-// Opens a command payload (signed envelope, or plain JSON while no secret is
-// set) into `out`. Rejects bad signatures and replays.
 bool open_command(const char* payload, JsonDocument& out, char* err, size_t err_size);
 bool open_command(JsonVariantConst in, JsonDocument& out, char* err, size_t err_size);
 
+void sha256_hex(const uint8_t* data, size_t len, char out[65]);
 void status_json(JsonObject out);
 
 }  // namespace security

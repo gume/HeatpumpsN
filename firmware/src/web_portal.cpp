@@ -11,11 +11,15 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <esp_core_dump.h>
+#include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #include <esp_system.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <algorithm>
+#include <utility>
 #include <vector>
 
 #include "hpn/web_portal.h"
@@ -161,18 +165,56 @@ uint32_t g_reboot_at_ms = 0;
 bool g_ota_ok = false;
 String g_ota_error;
 
-// Web login (security.h). Digest for every route; the WebSocket handshake
-// cannot answer a Digest challenge in browsers, so it carries the session
-// token the logged-in portal fetched from /api/session instead.
-AsyncAuthenticationMiddleware g_auth;
+mbedtls_sha256_context* g_ota_sha = nullptr;
+uint8_t g_ota_declared[32];
 
-bool request_authorized(AsyncWebServerRequest* request) {
-  if (request->url() == "/ws") {
-    const AsyncWebParameter* token = request->getParam("token");
-    return token != nullptr && security::check_ws_token(token->value().c_str());
+// HPN1 request authentication (security.h, docs/security.md). Static portal
+// files are public; every /api route except the challenge, and /ws, needs a
+// signed request. Runs after the body has been received, so it can hash and
+// unseal JSON bodies before their handler parses them.
+class HpnAuthMiddleware : public AsyncMiddleware {
+ public:
+  void run(AsyncWebServerRequest* request, ArMiddlewareNext next) override;
+};
+HpnAuthMiddleware g_hpn_auth;
+
+// Request parts as signed: canonical query = sorted name=value pairs of the
+// URL parameters, hpn_* (WebSocket credentials) excluded.
+String canonical_query(AsyncWebServerRequest* request) {
+  std::vector<std::pair<String, String>> pairs;
+  for (size_t i = 0; i < request->params(); ++i) {
+    const AsyncWebParameter* p = request->getParam(i);
+    if (p->isPost() || p->isFile() || p->name().startsWith("hpn_")) continue;
+    pairs.emplace_back(p->name(), p->value());
   }
-  return request->authenticate(security::username(), security::digest_ha1().c_str(),
-                                security::realm(), true);
+  std::sort(pairs.begin(), pairs.end());
+  String out;
+  for (const auto& kv : pairs) {
+    if (out.length()) out += '&';
+    out += kv.first + "=" + kv.second;
+  }
+  return out;
+}
+
+security::Auth authenticate_request(AsyncWebServerRequest* request, const char* body_hash) {
+  String header;
+  if (request->url() == "/ws") {
+    // Browsers cannot set headers on a WebSocket handshake.
+    const AsyncWebParameter* u = request->getParam("hpn_user");
+    const AsyncWebParameter* n = request->getParam("hpn_nonce");
+    const AsyncWebParameter* g = request->getParam("hpn_sig");
+    if (u && n && g) header = "user=" + u->value() + ",nonce=" + n->value() + ",sig=" + g->value();
+  } else if (request->hasHeader("X-HPN-Auth")) {
+    header = request->header("X-HPN-Auth");
+  }
+  return security::verify(header.length() ? header.c_str() : nullptr, request->methodToString(),
+                          request->url().c_str(), canonical_query(request).c_str(), body_hash);
+}
+
+void remember_auth(AsyncWebServerRequest* request, const security::Auth& auth) {
+  request->setAttribute("hpn_user", static_cast<long>(auth.user));
+  request->setAttribute("hpn_role", static_cast<long>(auth.role));
+  request->setAttribute("hpn_nonce", auth.nonce);
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,14 +2055,15 @@ void handle_config_export(AsyncWebServerRequest* request) {
   JsonObject system = root["system"].to<JsonObject>();
   fill_system(system, *g_config);
 
-  AsyncResponseStream* response = request->beginResponseStream("application/json");
-  response->setCode(200);
-  response->addHeader("Cache-Control", "no-store");
-  response->addHeader("Content-Disposition",
-                      "attachment; filename=\"heatpumpsn-config.json\"");
-  serializeJsonPretty(doc, *response);
-  log_access_request(request, 200);
-  request->send(response);
+  // The export holds the Wi-Fi and MQTT passwords: sealed with the
+  // requesting user's key and bound to the request nonce.
+  String plain;
+  serializeJsonPretty(doc, plain);
+  JsonDocument sealed;
+  sealed["sealed"] = security::seal(static_cast<uint8_t>(request->getAttribute("hpn_user", 0L)),
+                                    request->getAttribute("hpn_nonce").c_str(), plain.c_str(),
+                                    plain.length());
+  send_json(request, 200, sealed);
 }
 
 void handle_config_import(AsyncWebServerRequest* request, JsonVariant& json) {
@@ -3311,9 +3354,21 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   if (index == 0) {
     g_ota_ok = false;
     g_ota_error = "";
-    if (!request_authorized(request)) {
-      g_ota_error = "login required";
+    // The image's SHA-256 is a signed query parameter; the multipart body
+    // itself is marked "multipart" in the signature and checked at the end.
+    const security::Auth auth = authenticate_request(request, "multipart");
+    if (auth.status != 0 || auth.role != security::ROLE_ADMIN) {
+      g_ota_error = auth.status ? "authentication required" : "admin login required";
       return;
+    }
+    remember_auth(request, auth);   // the middleware must not re-check the spent nonce
+    const AsyncWebParameter* hash = request->getParam("sha256");
+    if (hash == nullptr || hash->value().length() != 64) {
+      g_ota_error = "sha256 query parameter required";
+      return;
+    }
+    for (size_t i = 0; i < 32; ++i) {
+      g_ota_declared[i] = static_cast<uint8_t>(strtoul(hash->value().substring(i * 2, i * 2 + 2).c_str(), nullptr, 16));
     }
     if (!security::uploads_open()) {
       g_ota_error = "uploads are closed: open them under Settings > Security";
@@ -3328,6 +3383,10 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
       g_ota_error = Update.errorString();
       return;
     }
+    delete g_ota_sha;
+    g_ota_sha = new mbedtls_sha256_context();
+    mbedtls_sha256_init(g_ota_sha);
+    mbedtls_sha256_starts(g_ota_sha, 0);
   }
 
   if (g_ota_error.length() > 0) {
@@ -3335,6 +3394,7 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   }
 
   if (len > 0) {
+    mbedtls_sha256_update(g_ota_sha, data, len);
     if (Update.write(data, len) != len) {
       g_ota_error = Update.errorString();
       return;
@@ -3342,6 +3402,25 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   }
 
   if (final) {
+    uint8_t digest[32];
+    mbedtls_sha256_finish(g_ota_sha, digest);
+    mbedtls_sha256_free(g_ota_sha);
+    delete g_ota_sha;
+    g_ota_sha = nullptr;
+    if (memcmp(digest, g_ota_declared, sizeof(digest)) != 0) {
+      // The signature covered the declared hash, not these bytes.
+      Update.abort();
+      g_ota_error = "image does not match its signed sha256";
+      if (request->hasParam("target") && request->getParam("target")->value() == "fs") {
+        // A filesystem image is written in place: wipe it rather than serve it.
+        const esp_partition_t* part = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+        if (part != nullptr) esp_partition_erase_range(part, 0, part->size);
+        g_ota_error += "; filesystem erased";
+      }
+      log_event(2, 1704, g_ota_error.c_str());
+      return;
+    }
     if (!Update.end(true)) {
       g_ota_error = Update.errorString();
     } else {
@@ -3350,10 +3429,21 @@ void handle_ota_upload(AsyncWebServerRequest* request, const String& filename, s
   }
 }
 
+void handle_auth_challenge(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  const AsyncWebParameter* user = request->getParam("user");
+  if (!security::challenge(user ? user->value().c_str() : "", doc.to<JsonObject>())) {
+    send_error(request, 400, "user must be admin or monitor");
+    return;
+  }
+  send_json(request, 200, doc);
+}
+
 void handle_session(AsyncWebServerRequest* request) {
   JsonDocument doc;
-  doc["user"] = security::username();
-  doc["wsToken"] = security::ws_token();
+  const long role = request->getAttribute("hpn_role", 0L);
+  doc["user"] = security::user_name(static_cast<uint8_t>(request->getAttribute("hpn_user", 0L)));
+  doc["role"] = role == security::ROLE_ADMIN ? "admin" : "monitor";
   send_json(request, 200, doc);
 }
 
@@ -3363,9 +3453,12 @@ void handle_security_get(AsyncWebServerRequest* request) {
   send_json(request, 200, doc);
 }
 
+// Sealed body {"user", "salt", "k_auth", "k_enc"}: keys the client derived
+// from the new password; the password itself never reaches the device.
 void handle_security_password(AsyncWebServerRequest* request, JsonVariant& json) {
   char err[96];
-  if (!security::set_password(json["current"] | "", json["new"] | "", err, sizeof(err))) {
+  if (!security::set_user_keys(json["user"] | "", json["salt"] | "", json["k_auth"] | "",
+                               json["k_enc"] | "", err, sizeof(err))) {
     send_error(request, 400, err);
     return;
   }
@@ -3389,6 +3482,79 @@ void handle_security_uploads(AsyncWebServerRequest* request, JsonVariant& json) 
 // ---------------------------------------------------------------------------
 // Routes, WebSocket and lifecycle
 // ---------------------------------------------------------------------------
+
+bool path_needs_sealed_body(const String& path, const char* method) {
+  return path == "/api/security/password" || path == "/api/security/secret" ||
+         path == "/api/config/import" || (path == "/api/config/network" && strcmp(method, "PUT") == 0);
+}
+
+void reject(AsyncWebServerRequest* request, int code, const char* reason, const char* message) {
+  JsonDocument doc;
+  doc["ok"] = false;
+  doc["error"] = message;
+  AsyncResponseStream* response = request->beginResponseStream("application/json");
+  response->setCode(code);
+  response->addHeader("X-HPN-Reason", reason);
+  response->addHeader("Cache-Control", "no-store");
+  serializeJson(doc, *response);
+  log_access_request(request, code);
+  request->send(response);
+}
+
+void HpnAuthMiddleware::run(AsyncWebServerRequest* request, ArMiddlewareNext next) {
+  const String path = request->url();
+  const bool protected_path = (path.startsWith("/api/") && path != "/api/auth/challenge") || path == "/ws";
+  if (!protected_path) {
+    next();
+    return;
+  }
+  // The upload handler authenticated on its first chunk (and spent the nonce).
+  if (!request->hasAttribute("hpn_user")) {
+    char body_hash[65];
+    const uint8_t* body = static_cast<const uint8_t*>(request->_tempObject);
+    const size_t body_len = body ? strlen(reinterpret_cast<const char*>(body)) : 0;
+    security::sha256_hex(body ? body : reinterpret_cast<const uint8_t*>(""), body_len, body_hash);
+    const security::Auth auth = authenticate_request(request, body_hash);
+    if (auth.status != 0) {
+      reject(request, auth.status, auth.reason,
+             auth.status == 423 ? "too many failed logins; wait 30 s" : "authentication required");
+      return;
+    }
+    const char* method = request->methodToString();
+    if (auth.role != security::ROLE_ADMIN && (strcmp(method, "GET") != 0 || path == "/api/config/export")) {
+      reject(request, 403, "role", "the monitor user is read-only");
+      return;
+    }
+    remember_auth(request, auth);
+    // Sealed JSON body: decrypt in place for the handler (plaintext is shorter).
+    bool sealed = false;
+    if (body_len > 0 && body[0] == '{' && strstr(reinterpret_cast<const char*>(body), "\"sealed\"") != nullptr) {
+      JsonDocument env;
+      if (deserializeJson(env, reinterpret_cast<const char*>(body)) == DeserializationError::Ok &&
+          env["sealed"].is<const char*>() && env.size() == 1) {
+        const String b64 = env["sealed"].as<const char*>();
+        if (!security::unseal(auth.user, auth.nonce, b64.c_str(), static_cast<char*>(request->_tempObject),
+                              body_len + 1, nullptr)) {
+          reject(request, 400, "sealed", "sealed body failed its integrity check");
+          return;
+        }
+        sealed = true;
+      }
+    }
+    if (!sealed && path_needs_sealed_body(path, method)) {
+      reject(request, 400, "sealed", "this request carries secrets and must be sealed");
+      return;
+    }
+  }
+  next();
+  // Chain the next nonce so the client needs no extra challenge round trip.
+  AsyncWebServerResponse* response = request->getResponse();
+  if (response != nullptr) {
+    char nonce[33];
+    security::issue_nonce(nonce);
+    response->addHeader("X-HPN-Nonce", nonce);
+  }
+}
 
 void send_snapshot_to(AsyncWebSocketClient* client) {
   if (client == nullptr) {
@@ -3570,6 +3736,7 @@ void register_routes() {
 
   // OTA
   g_server.on(AsyncURIMatcher::exact("/api/update"), HTTP_POST, handle_ota_final, handle_ota_upload);
+  g_server.on(AsyncURIMatcher::exact("/api/auth/challenge"), HTTP_GET, handle_auth_challenge);
   g_server.on(AsyncURIMatcher::exact("/api/session"), HTTP_GET, handle_session);
   g_server.on(AsyncURIMatcher::exact("/api/security"), HTTP_GET, handle_security_get);
   g_server.on(AsyncURIMatcher::exact("/api/security/password"), HTTP_POST,
@@ -3693,13 +3860,7 @@ void begin(const Config& config, SystemState& state) {
   }
 
   security::begin();
-  g_auth.setUsername(security::username());
-  g_auth.setPasswordHash(security::digest_ha1().c_str());   // marks credentials present
-  g_auth.setRealm(security::realm());
-  g_auth.setAuthType(AsyncAuthType::AUTH_DIGEST);
-  g_auth.setAuthFailureMessage("Login required");
-  g_auth.setAuthentificationFunction(request_authorized);
-  g_server.addMiddleware(&g_auth);
+  g_server.addMiddleware(&g_hpn_auth);
 
   g_ws.onEvent(on_ws_event);
   register_routes();

@@ -80,7 +80,12 @@ function toast(message, kind = 'info', ms = 4000) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { cache: 'no-store', ...options });
+  // Signed with the session of the main portal's login (js/hpnauth.js).
+  if (!hpnAuth.user) {
+    location.href = '/';
+    throw new Error('not logged in');
+  }
+  const response = await hpnAuth.authFetch(path, options);
   const text = await response.text();
   let data = null;
   if (text) {
