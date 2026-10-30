@@ -1,6 +1,7 @@
 #include "hpn/wifi_client.h"
 
 #include <Arduino.h>
+#include <DNSServer.h>
 #include <WiFi.h>
 #include <string.h>
 #include <time.h>
@@ -20,6 +21,10 @@ constexpr uint32_t kRetryWithApClientMs = 120000;  // a station retry hops chann
 constexpr const char* kApFallbackPassword = "heatpumps-setup";
 
 Status g_status{};
+// Captive DNS on the fallback AP: every name resolves to the controller, so a
+// phone's connectivity probe reaches the portal (web_portal redirects it) and
+// the phone offers "Sign in to network" instead of routing over mobile data.
+DNSServer g_dns;
 uint32_t g_last_attempt_ms = 0;
 uint32_t g_last_rssi_log_ms = 0;
 wl_status_t g_last_wl_status = WL_IDLE_STATUS;
@@ -116,6 +121,10 @@ void start_ap(const Config& config) {
     Serial.println("[wifi] fallback AP failed to start");
     return;
   }
+  g_dns.setErrorReplyCode(DNSReplyCode::NoError);
+  if (!g_dns.start(53, "*", WiFi.softAPIP())) {
+    Serial.println("[wifi] captive DNS failed to start");
+  }
   g_status.ap_active = true;
   g_ap_idle_since_ms = 0;
   char detail[96];
@@ -125,6 +134,7 @@ void start_ap(const Config& config) {
 }
 
 void stop_ap() {
+  g_dns.stop();
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   g_status.ap_active = false;

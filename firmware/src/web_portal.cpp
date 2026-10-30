@@ -3284,7 +3284,29 @@ void send_maintenance(AsyncWebServerRequest* request, const uint8_t* data, size_
   request->send(response);
 }
 
+// While the fallback AP is up, a request for another host (a phone's
+// connectivity probe such as /generate_204 or /hotspot-detect.html, resolved
+// here by the captive DNS) is sent to the portal. That makes the phone treat
+// the AP as a captive portal and open the page over Wi-Fi.
+bool captive_redirect(AsyncWebServerRequest* request) {
+  if (!wifi::status().ap_active || request->client() == nullptr) return false;
+  const IPAddress ap = WiFi.softAPIP();
+  if (request->client()->localIP() != ap) return false;   // came in over the station link
+  String host = request->host();
+  const int colon = host.indexOf(':');
+  if (colon >= 0) host = host.substring(0, colon);
+  host.toLowerCase();
+  const String ap_ip = ap.toString();
+  const char* name = g_config->hostname[0] != '\0' ? g_config->hostname : "heatpumpsn";
+  if (host.isEmpty() || host == ap_ip || host == name || host == String(name) + ".local") {
+    return false;
+  }
+  request->redirect("http://" + ap_ip + "/");
+  return true;
+}
+
 void handle_static(AsyncWebServerRequest* request) {
+  if (captive_redirect(request)) return;
   String path = request->url();
   if (path.length() == 0 || path == "/") {
     path = "/index.html";
@@ -3834,7 +3856,10 @@ void register_routes() {
   });
   g_server.on(AsyncURIMatcher::exact("/"), HTTP_GET, handle_static);
   g_server.on(AsyncURIMatcher::all(), HTTP_GET, handle_static);
-  g_server.onNotFound([](AsyncWebServerRequest* request) { send_error(request, 404, "not found"); });
+  g_server.onNotFound([](AsyncWebServerRequest* request) {
+    if (captive_redirect(request)) return;
+    send_error(request, 404, "not found");
+  });
 }
 
 }  // namespace

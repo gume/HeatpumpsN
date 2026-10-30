@@ -146,7 +146,13 @@ WPA2 password `ap_password`, default `heatpumps-setup`; never open) when:
 * the station has not connected within 2 minutes after boot;
 * the station has been down for 5 minutes.
 
-The portal (and the maintenance page) is at `http://192.168.4.1/`. Station
+The portal (and the maintenance page) is at `http://192.168.4.1/`. The AP
+runs a captive DNS (every name resolves to 192.168.4.1) and redirects requests
+for other hosts that arrive over the AP to the portal. A phone's connectivity
+probe therefore finds a captive portal and the phone offers "Sign in to
+network", which opens the portal over Wi-Fi. Without it, Android and iOS mark
+the AP "no internet" and send the browser's traffic over mobile data, so ping
+from a network tool works while the browser shows nothing. Station
 retries continue in the background, every 2 minutes while a client is on the
 AP so the AP channel stays usable. The AP closes once the station is connected
 and no client has been on the AP for a minute. Events: 1012 AP started, 1013
