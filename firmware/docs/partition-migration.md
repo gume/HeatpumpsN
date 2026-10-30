@@ -158,7 +158,37 @@ AP so the AP channel stays usable. The AP closes once the station is connected
 and no client has been on the AP for a minute. Events: 1012 AP started, 1013
 AP closed.
 
-## 5. Bench rehearsal (development ESP32)
+### Choosing the network
+
+Settings → Network has a **Scan networks** button (admin; `POST
+/api/wifi/scan`, results from `GET /api/wifi/scan`). It lists the nearby
+2.4 GHz networks, strongest first, one line per SSID with RSSI, a signal word
+and the channel; clicking one fills in the SSID. A connected station stays
+connected and phones on the AP stay associated (the radio leaves the channel
+for about two seconds). While the station is failing to connect, its attempt
+is paused for the scan. There is no automatic scan at boot any more.
+
+## 5. Relay wear from the previous firmware
+
+The relay cycle counters (RAM, written to NVS `hpnctr` at most hourly) start
+at zero on a board that came from ESPHome. The `esp32s2_counter_preset` build
+sets them once:
+
+1. Read the ESPHome counters (`relay_counter[0..5]`, switch-ons) before the
+   upgrade.
+2. Enter them in `platformio.ini` under `[env:esp32s2_counter_preset]`:
+   `HPN_PRESET_HEATING` = [0], `HPN_PRESET_PUMP1` = [1] (radiator 1),
+   `HPN_PRESET_PUMP2` = [2] (radiator 2), `HPN_PRESET_PUMP3` = [3] (floor),
+   `HPN_PRESET_MOTION` = [5] (mixer motion relay). [4], the direction relay,
+   has no counter in this firmware.
+3. `pio run -e esp32s2_counter_preset`, upload `firmware.bin` like any update.
+   On its first boot the counters are set and saved at once (event 1614).
+   This firmware counts each state change, so the relays show twice the
+   ESPHome value; the mixer moves are split evenly between open and close.
+4. Upload the normal `esp32s2` firmware. The preset is applied once per image
+   (NVS `hpnrst/counters`), so leaving it installed does no harm.
+
+## 6. Bench rehearsal (development ESP32)
 
 The bench devkit started on the previous layout. Reproduce:
 
@@ -171,7 +201,7 @@ python3 tools/partition_check.py           # compares the device's target table 
 pio run -e esp32dev_sim_ota -t uploadfs
 ```
 
-## 6. Password recovery
+## 7. Password recovery
 
 The keys live only in NVS (`hpnsec/blob`) and a migration carries them over.
 A forgotten password needs the USB cable and the one-shot recovery build

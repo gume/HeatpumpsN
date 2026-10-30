@@ -4,6 +4,8 @@
 #include <DNSServer.h>
 #include <WiFi.h>
 #include <string.h>
+
+#include <new>
 #include <time.h>
 
 #include "hpn/logger.h"
@@ -29,7 +31,6 @@ uint32_t g_last_attempt_ms = 0;
 uint32_t g_last_rssi_log_ms = 0;
 wl_status_t g_last_wl_status = WL_IDLE_STATUS;
 bool g_started = false;
-bool g_scanned = false;
 bool g_ntp_started = false;
 uint32_t g_down_since_ms = 0;   // 0 while connected
 uint32_t g_ap_idle_since_ms = 0;
@@ -61,42 +62,111 @@ void begin_connection(const Config& config) {
   g_last_attempt_ms = millis();
 }
 
-// If the configured AP is not visible, list nearby 2.4 GHz networks once. This
-// turns a silent "no AP" into an actionable bench/provisioning message.
-void log_scan_once(const Config& config) {
-  if (g_scanned) {
+// --- On-demand scan ------------------------------------------------------------
+struct Network {
+  char ssid[33];
+  int8_t rssi;
+  uint8_t channel;
+  bool secure;
+};
+constexpr size_t kMaxNetworks = 20;
+constexpr uint32_t kScanTimeoutMs = 15000;
+portMUX_TYPE g_scan_mux = portMUX_INITIALIZER_UNLOCKED;
+// On the heap, allocated by the first scan: the ESP32-S2 has no static DRAM to spare.
+Network* g_networks = nullptr;
+size_t g_network_count = 0;
+volatile bool g_scan_requested = false;
+bool g_scan_running = false;
+uint32_t g_scan_started_ms = 0;
+uint32_t g_scan_done_ms = 0;
+const char* g_scan_error = "";
+
+void collect_scan(int16_t count) {
+  if (g_networks == nullptr) g_networks = new (std::nothrow) Network[kMaxNetworks];
+  Network* found = new (std::nothrow) Network[kMaxNetworks];
+  if (g_networks == nullptr || found == nullptr) {
+    delete[] found;
+    g_scan_error = "out of memory";
     return;
   }
-  g_scanned = true;
-
-  Serial.println("[wifi] configured AP not found; scanning nearby networks");
-
-  // A scan while an association attempt is in flight returns WIFI_SCAN_FAILED.
-  // Power the station down, bring it back up, and let the driver settle so the
-  // scan runs from an idle radio.
-  WiFi.disconnect(true, false);
-  delay(250);
-  WiFi.mode(g_status.ap_active ? WIFI_AP_STA : WIFI_STA);
-  WiFi.setHostname(config.hostname[0] != '\0' ? config.hostname : "heatpumpsn");
-  delay(250);
-
-  const int16_t count = WiFi.scanNetworks(false, true);
-  if (count <= 0) {
-    Serial.printf("[wifi] scan: no networks found (%d)\n", static_cast<int>(count));
-  } else {
-    Serial.printf("[wifi] scan: %d network(s)\n", static_cast<int>(count));
-    const int16_t shown = count > 12 ? 12 : count;
-    for (int16_t i = 0; i < shown; ++i) {
-      Serial.printf("[wifi]   %2d  %-32s %4d dBm  ch=%u%s\n", static_cast<int>(i + 1),
-                    WiFi.SSID(i).c_str(), WiFi.RSSI(i), static_cast<unsigned>(WiFi.channel(i)),
-                    WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "  open" : "");
+  size_t n = 0;
+  for (int16_t i = 0; i < count; ++i) {
+    const String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty()) continue;   // hidden network
+    const int8_t rssi = static_cast<int8_t>(WiFi.RSSI(i));
+    size_t k = 0;
+    while (k < n && strcmp(found[k].ssid, ssid.c_str()) != 0) ++k;
+    if (k < n) {   // same SSID from another access point: keep the strongest
+      if (rssi > found[k].rssi) {
+        found[k].rssi = rssi;
+        found[k].channel = static_cast<uint8_t>(WiFi.channel(i));
+      }
+      continue;
+    }
+    if (n == kMaxNetworks) {   // replace the weakest if this one is stronger
+      size_t weakest = 0;
+      for (size_t m = 1; m < n; ++m) {
+        if (found[m].rssi < found[weakest].rssi) weakest = m;
+      }
+      if (rssi <= found[weakest].rssi) continue;
+      k = weakest;
+    } else {
+      k = n++;
+    }
+    strncpy(found[k].ssid, ssid.c_str(), sizeof(found[k].ssid) - 1);
+    found[k].ssid[sizeof(found[k].ssid) - 1] = '\0';
+    found[k].rssi = rssi;
+    found[k].channel = static_cast<uint8_t>(WiFi.channel(i));
+    found[k].secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+  }
+  for (size_t a = 1; a < n; ++a) {   // strongest first
+    for (size_t b = a; b > 0 && found[b].rssi > found[b - 1].rssi; --b) {
+      const Network t = found[b];
+      found[b] = found[b - 1];
+      found[b - 1] = t;
     }
   }
-  WiFi.scanDelete();
+  taskENTER_CRITICAL(&g_scan_mux);
+  memcpy(g_networks, found, n * sizeof(Network));
+  g_network_count = n;
+  taskEXIT_CRITICAL(&g_scan_mux);
+  delete[] found;
+}
 
-  // The scan blocks T_comms for a few seconds; restart the retry interval so
-  // the next association attempt is not fired immediately afterwards.
-  g_last_attempt_ms = millis();
+void service_scan() {
+  if (g_scan_running) {
+    const int16_t r = WiFi.scanComplete();
+    if (r == WIFI_SCAN_RUNNING && millis() - g_scan_started_ms < kScanTimeoutMs) return;
+    if (r >= 0) {
+      g_scan_error = "";
+      collect_scan(r);
+      Serial.printf("[wifi] scan: %d result(s)\n", static_cast<int>(r));
+    } else {
+      g_scan_error = r == WIFI_SCAN_RUNNING ? "scan timed out" : "scan failed";
+      Serial.printf("[wifi] %s\n", g_scan_error);
+    }
+    WiFi.scanDelete();
+    g_scan_running = false;
+    g_scan_done_ms = millis();
+    g_last_attempt_ms = millis();   // the next station retry waits a full interval
+    return;
+  }
+  if (!g_scan_requested) return;
+  g_scan_requested = false;
+  if (!g_status.connected && g_status.configured) {
+    // A scan cannot run beside an association attempt; stop the attempt
+    // (the station is not connected, so nothing is lost).
+    WiFi.disconnect(false, false);
+  }
+  if (WiFi.scanNetworks(true, false) == WIFI_SCAN_FAILED) {
+    g_scan_error = "scan failed to start";
+    g_scan_done_ms = millis();
+    Serial.println("[wifi] scan failed to start");
+    return;
+  }
+  g_scan_running = true;
+  g_scan_started_ms = millis();
+  g_scan_error = "";
 }
 
 void start_ntp(const Config& config) {
@@ -172,7 +242,6 @@ void begin(const Config& config) {
   g_last_attempt_ms = 0;
   g_last_rssi_log_ms = 0;
   g_started = false;
-  g_scanned = false;
   g_ntp_started = false;
 
   if (config.wifi_ssid[0] == '\0') {
@@ -203,6 +272,7 @@ void tick(const Config& config) {
     return;
   }
 
+  service_scan();
   const uint32_t now = millis();
   service_ap(config, now);
   if (!g_status.configured) {
@@ -241,19 +311,10 @@ void tick(const Config& config) {
       Serial.printf("[wifi] state: %s\n", wl_name(wl));
     }
 
-    if (wl == WL_NO_SSID_AVAIL && !g_scanned && !g_status.ap_active) {
-      log_scan_once(config);
-      // The scan cancelled the in-flight attempt; start a fresh one and skip
-      // the retry check for this tick (now was sampled before the scan).
-      begin_connection(config);
-      g_last_wl_status = WiFi.status();
-      return;
-    }
-
     // A retry scans other channels and briefly drops AP clients: slow down
     // while someone is using the fallback AP.
     const uint32_t retry = g_status.ap_clients > 0 ? kRetryWithApClientMs : kRetryIntervalMs;
-    if (now - g_last_attempt_ms >= retry) {
+    if (!g_scan_running && now - g_last_attempt_ms >= retry) {
       begin_connection(config);
     }
   }
@@ -262,6 +323,27 @@ void tick(const Config& config) {
 }
 
 const Status& status() { return g_status; }
+
+void request_scan() { g_scan_requested = true; }
+
+void scan_json(JsonObject out) {
+  out["running"] = g_scan_running || g_scan_requested;
+  out["ageS"] = g_scan_done_ms ? (millis() - g_scan_done_ms) / 1000 : -1;
+  out["error"] = g_scan_error;
+  JsonArray list = out["networks"].to<JsonArray>();
+  Network copy[kMaxNetworks];   // ~720 bytes on the web task's stack
+  taskENTER_CRITICAL(&g_scan_mux);
+  const size_t n = g_networks != nullptr ? g_network_count : 0;
+  if (n) memcpy(copy, g_networks, n * sizeof(Network));
+  taskEXIT_CRITICAL(&g_scan_mux);
+  for (size_t i = 0; i < n; ++i) {
+    JsonObject o = list.add<JsonObject>();
+    o["ssid"] = copy[i].ssid;
+    o["rssi"] = copy[i].rssi;
+    o["channel"] = copy[i].channel;
+    o["secure"] = copy[i].secure;
+  }
+}
 
 const char* state_name() {
   if (!g_status.configured) {

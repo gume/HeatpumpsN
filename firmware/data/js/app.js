@@ -1968,6 +1968,45 @@ function renderSettingsControl() {
 /* Settings: Network & MQTT                                                   */
 /* ------------------------------------------------------------------------- */
 
+function signalWord(rssi) {
+  if (rssi >= -55) return 'excellent';
+  if (rssi >= -67) return 'good';
+  if (rssi >= -75) return 'fair';
+  return 'weak';
+}
+
+function renderWifiScan() {
+  const scan = state.wifiScan;
+  if (!scan) {
+    return '<p class="small faint">Scan lists nearby 2.4 GHz networks with their signal strength; pick one to fill in the SSID. The current connection stays up.</p>';
+  }
+  if (scan.running) return '<p class="small faint">Scanning… (a few seconds)</p>';
+  if (scan.error) return `<p class="small warn">${esc(scan.error)}</p>`;
+  if (!scan.networks?.length) return '<p class="small faint">No networks found.</p>';
+  return `<div class="wifi-list">${scan.networks.map((n) => `
+    <button type="button" class="wifi-net" data-action="wifi-pick" data-ssid="${esc(n.ssid)}">
+      <span class="wifi-ssid">${esc(n.ssid)}</span>
+      <span class="wifi-meta">${esc(n.rssi)} dBm · ${signalWord(n.rssi)} · ch ${esc(n.channel)}${n.secure ? '' : ' · open'}</span>
+    </button>`).join('')}</div>`;
+}
+
+async function scanWifi() {
+  const box = () => $('#wifi-scan');
+  try {
+    state.wifiScan = await apiPost('/api/wifi/scan');
+    if (box()) box().innerHTML = renderWifiScan();
+    const deadline = Date.now() + 20000;
+    while (state.wifiScan.running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      state.wifiScan = await apiGet('/api/wifi/scan');
+    }
+    if (state.wifiScan.running) state.wifiScan = { error: 'The scan did not finish.' };
+  } catch (err) {
+    state.wifiScan = { error: err.message };
+  }
+  if (box()) box().innerHTML = renderWifiScan();
+}
+
 function renderSettingsNetwork() {
   const cfg = state.config.network;
   if (!cfg) return loadingCard('Loading network settings…');
@@ -1987,11 +2026,15 @@ function renderSettingsNetwork() {
         </div>
 
         <div class="form-section">
-          <h3>Wi-Fi station</h3>
+          <div class="row between">
+            <h3>Wi-Fi station</h3>
+            <button class="btn btn-sm" type="button" data-action="wifi-scan">Scan networks</button>
+          </div>
+          <div id="wifi-scan">${renderWifiScan()}</div>
           <div class="form-grid">
             ${fieldText('wifi_ssid', 'Wi-Fi SSID', cfg.wifi_ssid, 'Station network name.', 'text', 'Testing')}
             ${fieldPassword('wifi_password', 'Wi-Fi password', cfg.has_wifi_password, 'Leave blank to keep the stored password.')}
-            ${fieldText('ap_ssid', 'Fallback AP SSID', cfg.ap_ssid, 'Reserved for the future provisioning portal.', 'text', 'HeatpumpsN-Setup')}
+            ${fieldText('ap_ssid', 'Fallback AP SSID', cfg.ap_ssid, 'Opened when the station cannot connect; portal at http://192.168.4.1/.', 'text', 'HeatpumpsN-Setup')}
             ${fieldPassword('ap_password', 'Fallback AP password', cfg.has_ap_password, 'Leave blank to keep the stored password.')}
           </div>
         </div>
@@ -2947,6 +2990,20 @@ async function handleViewClick(event) {
     case 'sec-secret-remove':
       await securityAction(action, button);
       break;
+    case 'wifi-scan':
+      button.disabled = true;
+      await scanWifi();
+      button.disabled = false;
+      break;
+    case 'wifi-pick': {
+      const input = $('#f_wifi_ssid');
+      if (input) {
+        input.value = button.dataset.ssid;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        $('#f_wifi_password')?.focus();
+      }
+      break;
+    }
     case 'config-export':
       await exportConfig();
       break;

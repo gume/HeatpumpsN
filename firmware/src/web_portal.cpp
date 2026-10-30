@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <esp_app_desc.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
@@ -1516,6 +1517,51 @@ void counters_save() {
   g_counters_persisted = false;
 #endif
 }
+
+#ifdef HPN_COUNTER_PRESET
+// Relay wear carried over from a board's previous firmware (counter preset
+// build, docs/partition-migration.md). The values are the ESPHome counters:
+// switch-ons per relay. This firmware counts every state change, so a relay
+// switched on n times has 2n here. The ESPHome mixer counted switch-ons of
+// the motion relay (every move); they are split evenly between opening and
+// closing. Applied on the first boot of the image only.
+#ifndef HPN_PRESET_HEATING
+#define HPN_PRESET_HEATING 0
+#endif
+#ifndef HPN_PRESET_PUMP1
+#define HPN_PRESET_PUMP1 0
+#endif
+#ifndef HPN_PRESET_PUMP2
+#define HPN_PRESET_PUMP2 0
+#endif
+#ifndef HPN_PRESET_PUMP3
+#define HPN_PRESET_PUMP3 0
+#endif
+#ifndef HPN_PRESET_MOTION
+#define HPN_PRESET_MOTION 0
+#endif
+void apply_counter_preset() {
+  char image[65];
+  esp_app_get_elf_sha256(image, sizeof(image));
+  Preferences prefs;
+  if (!prefs.begin("hpnrst", false)) return;
+  const bool done = prefs.getString("counters", "") == image;
+  if (!done) prefs.putString("counters", image);
+  prefs.end();
+  if (done) return;
+  const uint32_t cycles[CTR_COUNT] = {
+      2u * HPN_PRESET_HEATING, 2u * HPN_PRESET_PUMP1, 2u * HPN_PRESET_PUMP2,
+      2u * HPN_PRESET_PUMP3,   HPN_PRESET_MOTION,     HPN_PRESET_MOTION,
+  };
+  taskENTER_CRITICAL(&g_counter_mux);
+  for (size_t i = 0; i < CTR_COUNT; ++i) g_counters[i].cycles = cycles[i];
+  g_counters_dirty = true;
+  g_counter_save_requested = true;
+  taskEXIT_CRITICAL(&g_counter_mux);
+  log_event(1, 1614, "Counter preset build: relay cycles set from the previous firmware");
+  Serial.println("[counters] relay cycles set by the counter preset build");
+}
+#endif
 
 void reset_counter_locked(CounterId id) {
   g_counters[id] = CounterEntry{};
@@ -3509,6 +3555,21 @@ void handle_security_secret(AsyncWebServerRequest* request, JsonVariant& json) {
   handle_security_get(request);
 }
 
+void handle_wifi_scan_get(AsyncWebServerRequest* request) {
+  JsonDocument doc;
+  wifi::scan_json(doc.to<JsonObject>());
+  send_json(request, 200, doc);
+}
+
+// Admin (POST): starts a scan; poll GET /api/wifi/scan for the result.
+void handle_wifi_scan_start(AsyncWebServerRequest* request) {
+  wifi::request_scan();
+  JsonDocument doc;
+  wifi::scan_json(doc.to<JsonObject>());
+  doc["running"] = true;
+  send_json(request, 200, doc);
+}
+
 void handle_partitions_get(AsyncWebServerRequest* request) {
   JsonDocument doc;
   layout::status_json(doc.to<JsonObject>(), true);
@@ -3792,6 +3853,8 @@ void register_routes() {
                 handle_security_secret(request, json);
               });
   g_server.on(AsyncURIMatcher::exact("/api/system/partitions"), HTTP_GET, handle_partitions_get);
+  g_server.on(AsyncURIMatcher::exact("/api/wifi/scan"), HTTP_GET, handle_wifi_scan_get);
+  g_server.on(AsyncURIMatcher::exact("/api/wifi/scan"), HTTP_POST, handle_wifi_scan_start);
   g_server.on(AsyncURIMatcher::exact("/api/system/partitions/migrate"), HTTP_POST, handle_partitions_migrate);
   g_server.on(AsyncURIMatcher::exact("/api/mpc"), HTTP_GET, handle_mpc_get);
   g_server.on(AsyncURIMatcher::exact("/api/mpc/params"), HTTP_POST,
@@ -3879,6 +3942,9 @@ void begin(const Config& config, SystemState& state) {
   g_counter_save_requested = false;
   g_last_counter_save_ms = millis();
   counters_load();
+#ifdef HPN_COUNTER_PRESET
+  apply_counter_preset();
+#endif
   g_anti_seize_next_day = 0;
   g_anti_seize_dirty = false;
   g_anti_seize_loaded = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ArduinoJson.h>
 #include <stdint.h>
 
 #include "hpn/config.h"
@@ -34,6 +35,14 @@ const Status& status();
 
 // Human-readable link state for logs and the future portal.
 const char* state_name();
+
+// On-demand network scan for the portal (any task). The scan itself runs in
+// tick(). A connected station stays connected and AP clients stay associated;
+// a failing association attempt is paused for the scan.
+void request_scan();
+// {"running","ageS","error","networks":[{"ssid","rssi","channel","secure"}]},
+// strongest first, one entry per SSID.
+void scan_json(JsonObject out);
 
 }  // namespace wifi
 }  // namespace hpn
