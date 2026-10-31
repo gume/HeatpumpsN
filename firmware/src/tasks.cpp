@@ -41,7 +41,15 @@ constexpr uint32_t kLoggerStack = 3072;
 
 constexpr UBaseType_t kPrioSafety = configMAX_PRIORITIES - 1;
 constexpr UBaseType_t kPrioIo = configMAX_PRIORITIES - 2;
+#if HPN_HAS_DUAL_CORE
 constexpr UBaseType_t kPrioControl = configMAX_PRIORITIES - 3;
+#else
+// Single core (ESP32-S2/C3): T_control shares the core with Wi-Fi, lwIP
+// (priority 18) and the web server (10). A planning step can take seconds
+// there (the S2 has no FPU), so it runs below them; T_safety and T_io stay on
+// top and still supervise it.
+constexpr UBaseType_t kPrioControl = tskIDLE_PRIORITY + 5;
+#endif
 constexpr UBaseType_t kPrioComms = tskIDLE_PRIORITY + 3;
 constexpr UBaseType_t kPrioLogger = tskIDLE_PRIORITY + 1;
 
@@ -60,6 +68,16 @@ TickType_t g_start_tick = 0;
 volatile TickType_t g_grace_until_tick = 0;
 uint32_t g_control_period_ms = 2000;
 bool g_started = false;
+
+// Why T_io last withheld the watchdog feed; survives the reset it causes.
+struct WatchdogTrace {
+  uint32_t magic;
+  uint32_t uptime_ms;
+  uint32_t safety_ms, io_ms, control_ms;
+  uint32_t started;
+};
+constexpr uint32_t kWatchdogTraceMagic = 0x48574454u;   // "HWDT"
+RTC_NOINIT_ATTR WatchdogTrace g_wdt_trace;
 
 bool g_wdt_ready = false;
 bool g_wdt_subscribed = false;
@@ -181,6 +199,8 @@ void task_io(void* arg) {
           // observed ages once per second first, otherwise the reset reason is
           // impossible to diagnose from the RAM-only event log.
           const uint32_t now_ms = millis();
+          g_wdt_trace = {kWatchdogTraceMagic, now_ms, ages.safety_ms, ages.io_ms, ages.control_ms,
+                         ages.started ? 1u : 0u};
           if (g_last_health_log_ms == 0 || now_ms - g_last_health_log_ms >= 1000u) {
             g_last_health_log_ms = now_ms;
             if (!ages.started) {
@@ -330,6 +350,16 @@ bool start(const Config& config, const BoardConfig& board, SystemState& state) {
                 static_cast<unsigned>(kSafetyPeriodMs), static_cast<unsigned>(kIoPeriodMs),
                 static_cast<unsigned>(g_control_period_ms),
                 static_cast<unsigned>(kCommsPeriodMs), static_cast<unsigned>(kLoggerPeriodMs));
+  return true;
+}
+
+bool last_watchdog(WatchdogInfo* out) {
+  if (g_wdt_trace.magic != kWatchdogTraceMagic) return false;
+  out->uptime_ms = g_wdt_trace.uptime_ms;
+  out->safety_ms = g_wdt_trace.safety_ms;
+  out->io_ms = g_wdt_trace.io_ms;
+  out->control_ms = g_wdt_trace.control_ms;
+  out->started = g_wdt_trace.started != 0;
   return true;
 }
 

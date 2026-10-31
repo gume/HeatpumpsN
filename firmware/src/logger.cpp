@@ -1,6 +1,7 @@
 #include "hpn/logger.h"
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,13 +10,15 @@ namespace logger {
 namespace {
 
 portMUX_TYPE g_event_mux = portMUX_INITIALIZER_UNLOCKED;
-Event g_events[kEventCapacity] = {};
+// The rings live on the heap, in PSRAM when the board has it: on the ESP32-S2
+// internal RAM is the scarce resource. Allocated once by begin().
+Event* g_events = nullptr;
 uint32_t g_event_head = 0;
 uint32_t g_event_count = 0;
 uint32_t g_event_seq = 0;
 
 portMUX_TYPE g_slow_mux = portMUX_INITIALIZER_UNLOCKED;
-SlowSample g_slow[kSlowCapacity] = {};
+SlowSample* g_slow = nullptr;
 uint32_t g_slow_head = 0;
 uint32_t g_slow_count = 0;
 uint32_t g_slow_seq = 0;
@@ -23,6 +26,11 @@ uint32_t g_slow_seq = 0;
 uint32_t g_last_slow_ms = 0;
 uint16_t g_last_error_code = ERR_OK;
 uint32_t g_last_alarms = 0;
+
+void* ring_alloc(size_t bytes) {
+  void* p = psramFound() ? heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM) : nullptr;
+  return p != nullptr ? p : heap_caps_calloc(1, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
 
 uint8_t severity_for_state(const SystemState& state) {
   const uint32_t critical =
@@ -40,6 +48,7 @@ uint8_t severity_for_state(const SystemState& state) {
 }
 
 void sample_slow(const SystemState& state, uint32_t now_ms) {
+  if (g_slow == nullptr) return;
   SlowSample sample{};
   sample.ms = now_ms;
   sample.boiler = state.T_boiler.value_c;
@@ -79,16 +88,19 @@ void publish_diagnostic_event(const SystemState& state) {
 
 void begin(const Config& config, SystemState& state) {
   (void)config;
+  if (g_events == nullptr) g_events = static_cast<Event*>(ring_alloc(kEventCapacity * sizeof(Event)));
+  if (g_slow == nullptr) g_slow = static_cast<SlowSample*>(ring_alloc(kSlowCapacity * sizeof(SlowSample)));
+  if (g_events == nullptr || g_slow == nullptr) Serial.println("[logger] out of memory: logs disabled");
 
   taskENTER_CRITICAL(&g_event_mux);
-  memset(g_events, 0, sizeof(g_events));
+  if (g_events) memset(g_events, 0, kEventCapacity * sizeof(Event));
   g_event_head = 0;
   g_event_count = 0;
   g_event_seq = 0;
   taskEXIT_CRITICAL(&g_event_mux);
 
   taskENTER_CRITICAL(&g_slow_mux);
-  memset(g_slow, 0, sizeof(g_slow));
+  if (g_slow) memset(g_slow, 0, kSlowCapacity * sizeof(SlowSample));
   g_slow_head = 0;
   g_slow_count = 0;
   g_slow_seq = 0;
@@ -123,6 +135,7 @@ void log_event(uint8_t severity, uint16_t code, const char* detail) {
   entry.latched = entry.severity >= 3;
   snprintf(entry.detail, sizeof(entry.detail), "%s", detail != nullptr ? detail : "");
 
+  if (g_events == nullptr) return;
   taskENTER_CRITICAL(&g_event_mux);
   entry.seq = ++g_event_seq;
   g_events[g_event_head] = entry;
@@ -158,7 +171,7 @@ uint32_t event_seq() {
 }
 
 size_t events_after(uint32_t after, Event* out, size_t max) {
-  if (out == nullptr || max == 0) {
+  if (out == nullptr || max == 0 || g_events == nullptr) {
     return 0;
   }
 
@@ -184,7 +197,7 @@ uint32_t slow_seq() {
 }
 
 size_t slow_after(uint32_t after, SlowSample* out, size_t max) {
-  if (out == nullptr || max == 0) {
+  if (out == nullptr || max == 0 || g_slow == nullptr) {
     return 0;
   }
 

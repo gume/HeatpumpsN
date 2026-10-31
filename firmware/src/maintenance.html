@@ -43,6 +43,7 @@
   <section class="card" id="status-card" hidden>
     <h2>Status</h2>
     <dl id="status"></dl>
+    <div id="status-msg" class="warn"></div>
     <div class="row"><button id="logout">Log out</button><a href="/" class="dim">open the full portal</a></div>
   </section>
 
@@ -84,7 +85,10 @@ async function call(path, options) {
 async function refresh() {
   if (!hpnAuth.user) return;
   try {
-    const [st, lay, live] = await Promise.all([call('/api/status'), call('/api/system/partitions'), call('/api/state')]);
+    // One request at a time: the controller (single-core on the S2) serves them in turn anyway.
+    const st = await call('/api/status');
+    const lay = await call('/api/system/partitions');
+    const live = await call('/api/state');
     const run = lay.running || {};
     const wifi = live.wifi || {};
     const rows = [
@@ -97,6 +101,7 @@ async function refresh() {
       ['Logged in', `${hpnAuth.user}${role === 'admin' ? '' : ' (read-only)'}`],
     ];
     $('#status').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+    $('#status-msg').textContent = '';
     const admin = role === 'admin';
     $('#migrate-card').hidden = lay.layout === 'current';
     $('#migrate-text').innerHTML = lay.migrationReady
@@ -106,7 +111,7 @@ async function refresh() {
     $('#upload-card').hidden = !admin;
     $('#reboot-card').hidden = !admin;
   } catch (err) {
-    if (err.auth) showLogin(); else $('#upmsg').textContent = `status: ${err.message}`;
+    if (err.auth) showLogin(); else $('#status-msg').textContent = `Status not available: ${err.message} (retrying every 5 s)`;
   }
 }
 

@@ -155,11 +155,17 @@ esp_ota_img_states_t running_state() {
   return s;
 }
 
+// Verifying the image hashes all of it (~1.3 MB of flash reads); the result
+// cannot change while it runs, so it is computed once.
 uint32_t running_image_len() {
-  const esp_partition_t* run = esp_ota_get_running_partition();
-  const esp_partition_pos_t pos = {run->address, run->size};
-  esp_image_metadata_t meta{};
-  return esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) == ESP_OK ? meta.image_len : 0;
+  static uint32_t len = UINT32_MAX;
+  if (len == UINT32_MAX) {
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    const esp_partition_pos_t pos = {run->address, run->size};
+    esp_image_metadata_t meta{};
+    len = esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) == ESP_OK ? meta.image_len : 0;
+  }
+  return len;
 }
 
 // Why a migration cannot run now, or nullptr.

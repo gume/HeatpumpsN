@@ -11,6 +11,7 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <esp_app_desc.h>
+#include <esp_heap_caps.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
@@ -34,6 +35,7 @@
 #include "hpn/security.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/sensor_roles.h"
+#include "hpn/tasks.h"
 #include "hpn/wifi_client.h"
 
 #if defined(HPN_IO_EMULATION)
@@ -132,7 +134,7 @@ const Config* g_config = nullptr;
 SystemState* g_state = nullptr;
 
 portMUX_TYPE g_access_mux = portMUX_INITIALIZER_UNLOCKED;
-AccessEntry g_access[kAccessLogSize] = {};
+AccessEntry* g_access = nullptr;   // heap, PSRAM when present (see logger rings)
 uint32_t g_access_head = 0;
 uint32_t g_access_count = 0;
 uint32_t g_access_seq = 0;
@@ -405,6 +407,7 @@ void log_access_raw(const char* ip, const char* method, const char* path, int st
   copy_str(entry.method, sizeof(entry.method), method);
   copy_str(entry.path, sizeof(entry.path), path);
 
+  if (g_access == nullptr) return;
   taskENTER_CRITICAL(&g_access_mux);
   entry.seq = ++g_access_seq;
   g_access[g_access_head] = entry;
@@ -2251,6 +2254,10 @@ void handle_log_access(AsyncWebServerRequest* request) {
   entries.reserve(kAccessLogSize);
   uint32_t seq = 0;
 
+  if (g_access == nullptr) {
+    send_error(request, 503, "access log unavailable");
+    return;
+  }
   taskENTER_CRITICAL(&g_access_mux);
   seq = g_access_seq;
   const uint32_t start = (g_access_head + kAccessLogSize - g_access_count) % kAccessLogSize;
@@ -3263,11 +3270,23 @@ void handle_status(AsyncWebServerRequest* request) {
   doc["uptime"] = millis() / 1000;
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["minFreeHeap"] = ESP.getMinFreeHeap();
+  doc["largestFreeBlock"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  doc["psramSize"] = ESP.getPsramSize();
+  doc["freePsram"] = ESP.getFreePsram();
   doc["taskCount"] = static_cast<uint32_t>(uxTaskGetNumberOfTasks());
   doc["cpuLoad"] = g_cpu_load_pct;
   doc["cpuTotalDelta"] = g_cpu_total_delta;
   doc["cpuIdleDelta"] = g_cpu_idle_delta;
   doc["resetReason"] = reset_reason_name();
+  tasks::WatchdogInfo wd{};
+  if (tasks::last_watchdog(&wd)) {
+    JsonObject w = doc["lastWatchdog"].to<JsonObject>();
+    w["uptimeMs"] = wd.uptime_ms;
+    w["started"] = wd.started;
+    w["safetyMs"] = wd.safety_ms;
+    w["ioMs"] = wd.io_ms;
+    w["controlMs"] = wd.control_ms;
+  }
   doc["hostname"] = WiFi.getHostname();
 
   const time_t epoch = time(nullptr);
@@ -3957,6 +3976,11 @@ void begin(const Config& config, SystemState& state) {
   g_state = &state;
   state.mode = config.summer_mode ? MODE_SUMMER : MODE_HEAT;
 
+  if (g_access == nullptr) {
+    const size_t bytes = kAccessLogSize * sizeof(AccessEntry);
+    void* p = psramFound() ? heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM) : nullptr;
+    g_access = static_cast<AccessEntry*>(p != nullptr ? p : heap_caps_calloc(1, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  }
   g_access_head = 0;
   g_access_count = 0;
   g_access_seq = 0;

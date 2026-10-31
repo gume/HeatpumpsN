@@ -21,5 +21,14 @@ bool healthy();
 // behind while long erases stall flash access. T_io itself stays supervised.
 void maintenance_grace(uint32_t ms);
 
+// The last time T_io withheld the watchdog feed (task ages at that moment);
+// kept in RTC memory across the reset that follows. False if none recorded.
+struct WatchdogInfo {
+  uint32_t uptime_ms;
+  uint32_t safety_ms, io_ms, control_ms;
+  bool started;
+};
+bool last_watchdog(WatchdogInfo* out);
+
 }  // namespace tasks
 }  // namespace hpn
