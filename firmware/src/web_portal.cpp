@@ -36,6 +36,7 @@
 #include "hpn/security.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/sensor_roles.h"
+#include "hpn/board.h"
 #include "hpn/build_target.h"
 #include "hpn/tasks.h"
 #include "hpn/wifi_client.h"
@@ -584,6 +585,9 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   test["remaining"] = st.test_mode_rem_s;
   test["sequence"] = sequence_name();
   test["leds"] = led::test_active();
+  // Where this board has each status LED role (system, boiler, floor, rad1, rad2).
+  JsonArray led_positions = doc["ledPositions"].to<JsonArray>();
+  for (uint8_t position : board_config().led_position) led_positions.add(position);
 
   JsonObject system = doc["system"].to<JsonObject>();
   system["freeHeap"] = ESP.getFreeHeap();
@@ -3364,6 +3368,9 @@ void handle_status(AsyncWebServerRequest* request) {
   test["remaining"] = test_remaining_s();
   test["sequence"] = sequence_name();
   test["leds"] = led::test_active();
+  // Where this board has each status LED role (system, boiler, floor, rad1, rad2).
+  JsonArray led_positions = doc["ledPositions"].to<JsonArray>();
+  for (uint8_t position : board_config().led_position) led_positions.add(position);
 
   JsonObject portal = doc["portal"].to<JsonObject>();
   portal["accessLogSize"] = kAccessLogSize;

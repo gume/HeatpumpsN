@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "hpn/board.h"
 #include "hpn/l0_io.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/wifi_client.h"
@@ -114,7 +115,7 @@ void status_frame(uint8_t* frame, const SystemState& state, uint32_t now) {
     if (pump_fault) {
       put(frame, index, kRed, 255);
     } else if (rad_on[i]) {
-      put(frame, index, kOrange, 255);
+      put(frame, index, kGreen, 255);   // green like the floor pump: circuit running
     }
   }
 }
@@ -139,7 +140,14 @@ void tick(const Config& config, const SystemState& state) {
       put(frame, i, color, 255);
     }
   } else {
-    status_frame(frame, state, now);
+    // Painted by role, then placed where this board has each LED.
+    uint8_t roles[kMaxLeds * 3] = {};
+    status_frame(roles, state, now);
+    const uint8_t* position = board_config().led_position;
+    for (uint8_t role = 0; role < 5 && role < kMaxLeds; ++role) {
+      const uint8_t at = position[role] < kMaxLeds ? position[role] : role;
+      memcpy(frame + at * 3, roles + role * 3, 3);
+    }
   }
 
   uint16_t count = config.num_leds;

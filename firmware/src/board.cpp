@@ -18,6 +18,7 @@ const BoardConfig kHhn1 = {
     /* mux s3        */ 5,
     /* mux channels  */ {1, 3, 0, 2},  // floor, rad1, rad2, mixer
     /* ads channels  */ {0xFF, 0xFF, 0xFF, 0xFF},
+    /* LED positions */ {0, 1, 2, 4, 3},  // system, boiler, floor, pump 2 (rad2), pump 1 (rad1)
 };
 
 // --- HomeNet Heating control v1.x -----------------------------------------
@@ -35,6 +36,7 @@ const BoardConfig kHhn1x = {
     /* mux s3        */ HPN_GPIO_UNASSIGNED,
     /* mux channels  */ {0xFF, 0xFF, 0xFF, 0xFF},
     /* ads channels  */ {3, 0, 1, 2},  // floor=A3, rad1=A0, rad2=A1, mixer=A2
+    /* LED positions */ {0, 1, 2, 3, 4},
 };
 
 // --- Boardless development -------------------------------------------------
@@ -49,6 +51,7 @@ const BoardConfig kBoardless = {
     HPN_GPIO_UNASSIGNED,
     {0xFF, 0xFF, 0xFF, 0xFF},
     {0xFF, 0xFF, 0xFF, 0xFF},
+    {0, 1, 2, 3, 4},
 };
 
 template <size_t N>

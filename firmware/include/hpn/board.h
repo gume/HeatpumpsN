@@ -40,6 +40,9 @@ struct BoardConfig {
   uint8_t current_mux_channel[kCurrentChannelCount];  // 0xFF = absent
   // v1.x: ADS1115 single-ended input per logical channel (0-3, 0xFF = absent).
   uint8_t current_ads_channel[kCurrentChannelCount];
+  // Physical position (0-4) of each status LED role: system, boiler, floor,
+  // radiator 1, radiator 2 (plans/controller node/02_hardware_and_l0.md §1.2).
+  uint8_t led_position[5];
 };
 
 // Active carrier profile, selected by HPN_CARRIER_* in platformio.ini.

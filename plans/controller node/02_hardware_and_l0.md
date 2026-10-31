@@ -65,10 +65,12 @@ Using addressable RGB LEDs (WS2812B or SK6812) requires only **one single GPIO p
 | **LED 0** | **System & Comms** | **Green:** Online, MQTT connected, normal.<br>**Yellow (pulsing):** WiFi / MQTT reconnecting.<br>**Red (flashing):** L1 Safety Trip or Critical Alarm.<br>**Blue:** Booting / Web Captive Portal active. |
 | **LED 1** | **Shared Boiler (`heater`)** | **Off:** Standby (`heater_phys == OFF`).<br>**Orange:** Active heating call (`heater_phys == ON`).<br>**Cyan:** Boiler DHW Priority active (`dhw_active == true`).<br>**Purple/Blinking:** Anti-short-cycle delay holding heater off. |
 | **LED 2** | **Floor Circuit (`pump_floor` + mixer)** | **Off:** Circuit idle.<br>**Green:** Pump running, mixer at setpoint.<br>**Cyan (pulsing):** Warm-up flush in progress.<br>**Magenta:** Floor $\Delta T$ collapse pause active.<br>**Red (rapid blink):** Floor over-temperature cutoff. |
-| **LED 3** | **Radiator Circuit 1 (`pump_rad1`)** | **Off:** Pump idle (`pump_rad1_phys == OFF`).<br>**Orange:** Pump running (`pump_rad1_phys == ON`).<br>**Red:** Welded relay or pump dry-run fault. |
-| **LED 4** | **Radiator Circuit 2 (`pump_rad2`)** | **Off:** Pump idle (`pump_rad2_phys == OFF`).<br>**Orange:** Pump running (`pump_rad2_phys == ON`).<br>**Red:** Welded relay or pump dry-run fault. |
+| **LED 3** | **Radiator Circuit 1 (`pump_rad1`)** | **Off:** Pump idle (`pump_rad1_phys == OFF`).<br>**Green:** Pump running (`pump_rad1_phys == ON`).<br>**Red:** Welded relay or pump dry-run fault. |
+| **LED 4** | **Radiator Circuit 2 (`pump_rad2`)** | **Off:** Pump idle (`pump_rad2_phys == OFF`).<br>**Green:** Pump running (`pump_rad2_phys == ON`).<br>**Red:** Welded relay or pump dry-run fault. |
 
 *(Note: If fewer LEDs are preferred, LEDs 3 and 4 can be omitted, leaving 3 LEDs for System, Boiler, and Floor).*
+
+*(The radiator LEDs were orange in the first version; green since the v0.1 bring-up, like the floor pump. The positions on the chain come from the board profile (`BoardConfig::led_position`): v0.1 has radiator 2 on LED 3 and radiator 1 on LED 4.)*
 
 *(L4 implements this table in `hpn::led::tick` (`firmware/src/led_status.cpp`); L0 owns the `set_leds` write. LED 0's blue boot/captive-portal state is reserved until the Wi-Fi manager provides an AP/portal mode. On HomeNet Heating control v0.1 the chain has 5 LEDs but the old firmware mapped them differently — LED 1–3 to the three pumps, LED 4 to the mixer — see [`boards.md`](../../firmware/docs/boards.md) §6. The table above is the implemented semantics for the new carrier.)*
 

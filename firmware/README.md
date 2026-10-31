@@ -315,8 +315,13 @@ LEDs through L0's `set_leds`:
   purple blinking during anti-short-cycle hold-off;
 - **LED 2** floor: green while the floor pump runs, cyan breathing during a
   warm-up flush, magenta on ΔT collapse, red rapid blink on over-temperature;
-- **LEDs 3–4** radiators: orange while the pump runs, red on a welded-relay or
+- **LEDs 3–4** radiators: green while the pump runs, red on a welded-relay or
   dry-run fault.
+
+The board profile places the roles on the chain (`BoardConfig::led_position`):
+HomeNet Heating control v0.1 has radiator 2 (pump 2) on LED 3 and radiator 1
+(pump 1) on LED 4; the other boards use the order above. The dashboard follows
+the same placement.
 
 ### Test Mode and the bench loopback
 

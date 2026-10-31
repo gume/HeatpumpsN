@@ -781,16 +781,21 @@ function dashboardLeds(live) {
   const pumpLed = (on) => pumpFault
     ? { color: 'red', text: 'Fault', note: 'pump fault' }
     : on
-      ? { color: 'orange', text: 'Running', note: 'pump ON' }
+      ? { color: 'green', text: 'Running', note: 'pump ON' }
       : { color: 'off', text: 'Idle', note: 'pump OFF' };
 
-  return [
-    { label: 'LED 0 · System', ...systemLed },
-    { label: 'LED 1 · Heater', ...boilerLed },
-    { label: 'LED 2 · Floor', ...floorLed },
-    { label: 'LED 3 · Loop 1', ...pumpLed(rad1On) },
-    { label: 'LED 4 · Loop 2', ...pumpLed(rad2On) }
+  // Roles in plan order; the board decides where each LED sits.
+  const roles = [
+    { name: 'System', ...systemLed },
+    { name: 'Heater', ...boilerLed },
+    { name: 'Floor', ...floorLed },
+    { name: 'Loop 1', ...pumpLed(rad1On) },
+    { name: 'Loop 2', ...pumpLed(rad2On) }
   ];
+  const positions = Array.isArray(live.ledPositions) && live.ledPositions.length === 5 ? live.ledPositions : [0, 1, 2, 3, 4];
+  return roles
+    .map((role, i) => ({ ...role, position: positions[i], label: `LED ${positions[i]} · ${role.name}` }))
+    .sort((a, b) => a.position - b.position);
 }
 
 function renderDashboard() {
