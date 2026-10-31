@@ -73,11 +73,12 @@ can bind directly. Implemented today:
 * `<mqtt_base_topic>/state/heating_loop_1`, `heating_loop_2`, `floor_heating` (effective circuit demand)
 * `<mqtt_base_topic>/state/pump_1_physical`, `pump_2_physical`, `floor_pump_physical`, `heater_physical` (physical relay state)
 * `<mqtt_base_topic>/state/power_floor`, `power_rad1`, `power_rad2`, `power_mixer` (W)
-* `<mqtt_base_topic>/state/mixer_state` (`idle`, `opening`, `closing`)
+* `<mqtt_base_topic>/state/mixer_position` (% open, dead-reckoned)
 * `<mqtt_base_topic>/state/temp_boiler`, `temp_return`, `temp_mix` ($^{\circ}\text{C}$ or `unknown`)
 * `<mqtt_base_topic>/state/floor_setpoint` ($^{\circ}\text{C}$)
 * `<mqtt_base_topic>/state/system_error_code` ($0 = \text{normal}$)
 * `<mqtt_base_topic>/state/system_error_text` (human-readable diagnostic text)
+* `<mqtt_base_topic>/state/wifi_ip`, `wifi_rssi` (dBm), `wifi_ssid` (diagnostics)
 
 Optional telemetry log streams (enabled by `mqtt_log_enabled`, JSON lines):
 * `<mqtt_base_topic>/log/slow` (periodic telemetry log stream; override with `mqtt_log_slow_topic`)

@@ -160,13 +160,16 @@ derived from the Wi-Fi MAC address.
 | `sensor` | Radiator 1 pump power | `state/power_rad1` | — |
 | `sensor` | Radiator 2 pump power | `state/power_rad2` | — |
 | `sensor` | Mixer motor power | `state/power_mixer` | — |
-| `sensor` | Mixer state (`idle`/`opening`/`closing`) | `state/mixer_state` | — |
+| `sensor` | Mixer position (% open, dead-reckoned) | `state/mixer_position` | — |
 | `sensor` | Boiler supply temperature | `state/temp_boiler` | — |
 | `sensor` | Floor return temperature | `state/temp_return` | — |
 | `sensor` | Mixer forward temperature | `state/temp_mix` | — |
 | `number` | Floor setpoint | `state/floor_setpoint` | `cmd/floor_setpoint` |
 | `sensor` | System error code (`0` = no error) | `state/system_error_code` | — |
 | `sensor` | System error text | `state/system_error_text` | — |
+| `sensor` | Wi-Fi IP address (diagnostic) | `state/wifi_ip` | — |
+| `sensor` | Wi-Fi signal, dBm (diagnostic) | `state/wifi_rssi` | — |
+| `sensor` | Wi-Fi network / SSID (diagnostic) | `state/wifi_ssid` | — |
 
 The three switches are the only HA command path for heating. Their state
 topics carry the **effective per-circuit demand** after the keep-alive check;

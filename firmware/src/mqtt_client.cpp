@@ -82,7 +82,11 @@ struct StateCache {
   bool have_power_mixer = false;
   float power_mixer = 0.0f;
 
-  char mixer_state[16] = {};
+  char mixer_position[8] = {};
+
+  char wifi_ip[16] = {};
+  char wifi_rssi[8] = {};
+  char wifi_ssid[33] = {};
 
   char temp_boiler[16] = {};
   char temp_return[16] = {};
@@ -314,20 +318,24 @@ void publish_states() {
   publish_float("state/power_mixer", st.mixer_power_w, g_cache.have_power_mixer,
                 g_cache.power_mixer);
 
-#if defined(HPN_IO_EMULATION)
-  // The bench page can drive the mixer directly, bypassing L1. Reflect the
-  // emulated carrier output rather than only the L1 pulse state.
-  const sim::Snapshot sim_state = sim::snapshot();
-  const bool mixer_motion = sim_state.mixer_motion;
-  const bool mixer_open = sim_state.mixer_open;
-#else
-  const bool mixer_motion = st.mix_motion;
-  const bool mixer_open = st.mix_dir > 0;
-#endif
-  const char* mixer_state =
-      !mixer_motion ? "idle" : (mixer_open ? "opening" : "closing");
-  publish_text("state/mixer_state", mixer_state, g_cache.mixer_state,
-               sizeof(g_cache.mixer_state));
+  // Mixer opening in whole percent of the dead-reckoned position: one
+  // message per percent while it moves, none while it rests.
+  if (isfinite(st.pos_est_dr)) {
+    char position[8];
+    snprintf(position, sizeof(position), "%d", static_cast<int>(lroundf(constrain(st.pos_est_dr, 0.0f, 1.0f) * 100.0f)));
+    publish_text("state/mixer_position", position, g_cache.mixer_position,
+                 sizeof(g_cache.mixer_position));
+  }
+
+  // Wi-Fi diagnostics. The RSSI is refreshed by the Wi-Fi client once a
+  // minute, so it is published at most that often.
+  char text[40];
+  snprintf(text, sizeof(text), "%s", WiFi.localIP().toString().c_str());
+  publish_text("state/wifi_ip", text, g_cache.wifi_ip, sizeof(g_cache.wifi_ip));
+  snprintf(text, sizeof(text), "%d", static_cast<int>(wifi::status().rssi));
+  publish_text("state/wifi_rssi", text, g_cache.wifi_rssi, sizeof(g_cache.wifi_rssi));
+  snprintf(text, sizeof(text), "%s", WiFi.SSID().c_str());
+  publish_text("state/wifi_ssid", text, g_cache.wifi_ssid, sizeof(g_cache.wifi_ssid));
 
   char temp_payload[16];
   format_temperature(st.T_boiler, temp_payload, sizeof(temp_payload));
@@ -457,15 +465,45 @@ void publish_temperature_sensor(const char* object_id, const char* name,
 void publish_mixer_sensor() {
   JsonDocument doc;
   JsonObject entity = doc.to<JsonObject>();
-  add_entity(entity, "Mixer state", "mixer_state");
-  entity["state_topic"] = String(g_base_topic) + "/state/mixer_state";
-  entity["device_class"] = "enum";
-  JsonArray options = entity["options"].to<JsonArray>();
-  options.add("idle");
-  options.add("opening");
-  options.add("closing");
+  add_entity(entity, "Mixer position", "mixer_position");
+  entity["state_topic"] = String(g_base_topic) + "/state/mixer_position";
+  entity["unit_of_measurement"] = "%";
+  entity["state_class"] = "measurement";
+  entity["suggested_display_precision"] = 0;
   entity["icon"] = "mdi:valve";
-  publish_config("sensor", "mixer_state", doc);
+  publish_config("sensor", "mixer_position", doc);
+}
+
+void publish_wifi_sensors() {
+  {
+    JsonDocument doc;
+    JsonObject entity = doc.to<JsonObject>();
+    add_entity(entity, "Wi-Fi IP address", "wifi_ip");
+    entity["state_topic"] = String(g_base_topic) + "/state/wifi_ip";
+    entity["icon"] = "mdi:ip-network";
+    entity["entity_category"] = "diagnostic";
+    publish_config("sensor", "wifi_ip", doc);
+  }
+  {
+    JsonDocument doc;
+    JsonObject entity = doc.to<JsonObject>();
+    add_entity(entity, "Wi-Fi signal", "wifi_rssi");
+    entity["state_topic"] = String(g_base_topic) + "/state/wifi_rssi";
+    entity["device_class"] = "signal_strength";
+    entity["unit_of_measurement"] = "dBm";
+    entity["state_class"] = "measurement";
+    entity["entity_category"] = "diagnostic";
+    publish_config("sensor", "wifi_rssi", doc);
+  }
+  {
+    JsonDocument doc;
+    JsonObject entity = doc.to<JsonObject>();
+    add_entity(entity, "Wi-Fi network", "wifi_ssid");
+    entity["state_topic"] = String(g_base_topic) + "/state/wifi_ssid";
+    entity["icon"] = "mdi:wifi";
+    entity["entity_category"] = "diagnostic";
+    publish_config("sensor", "wifi_ssid", doc);
+  }
 }
 
 void publish_setpoint_number() {
@@ -517,6 +555,12 @@ void publish_discovery() {
   remove_discovery("binary_sensor", "pump_floor_physical");
   remove_discovery("binary_sensor", "pump_rad1_physical");
   remove_discovery("binary_sensor", "pump_rad2_physical");
+  remove_discovery("sensor", "mixer_state");   // replaced by mixer_position
+  {
+    char topic[96];
+    make_topic(topic, sizeof(topic), "state/mixer_state");
+    g_client.publish(topic, "", true);   // clear its retained state as well
+  }
 
   publish_switch("heating_loop_1", "Heating loop 1", "state/heating_loop_1",
                  "cmd/heating_loop_1", "mdi:radiator");
@@ -547,6 +591,7 @@ void publish_discovery() {
 
   publish_setpoint_number();
   publish_error_sensors();
+  publish_wifi_sensors();
 
   web::log_event(0, 1806, "MQTT Home Assistant discovery published");
 }

@@ -88,13 +88,16 @@ Discovery topics follow the format: `homeassistant/<component>/<node_id>/<object
 | `sensor` | `power_rad1` | Radiator 1 pump power | `<base>/state/power_rad1` | — | `device_class: power`, unit: `W`, precision: 1. |
 | `sensor` | `power_rad2` | Radiator 2 pump power | `<base>/state/power_rad2` | — | `device_class: power`, unit: `W`, precision: 1. |
 | `sensor` | `power_mixer` | Mixer motor power | `<base>/state/power_mixer` | — | `device_class: power`, unit: `W`, precision: 1. |
-| `sensor` | `mixer_state` | Mixer state | `<base>/state/mixer_state` | — | `device_class: enum`, options: `["idle", "opening", "closing"]`. |
+| `sensor` | `mixer_position` | Mixer position | `<base>/state/mixer_position` | — | Unit: `%`, `state_class: measurement`, precision: 0. Dead-reckoned opening (`pos_est_dr`). Replaces the former `mixer_state` enum (idle/opening/closing), whose discovery entry is deleted. |
 | `sensor` | `temp_boiler` | Boiler supply temperature | `<base>/state/temp_boiler` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `sensor` | `temp_return` | Floor return temperature | `<base>/state/temp_return` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `sensor` | `temp_mix` | Mixer forward temperature | `<base>/state/temp_mix` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `number` | `floor_setpoint` | Floor setpoint | `<base>/state/floor_setpoint` | `<base>/cmd/floor_setpoint`| Range: 5.0–80.0 °C, step: 0.5 °C, mode: `box`, unit: `°C`. |
 | `sensor` | `system_error_code` | System error code | `<base>/state/system_error_code` | — | Diagnostic text sensor. Numeric standardized code; `0` means no error. Published only when the diagnostic posture changes. |
 | `sensor` | `system_error_text` | System error text | `<base>/state/system_error_text` | — | Diagnostic text sensor. Human-readable code name plus active warning/alarm flags; `No error` when healthy. |
+| `sensor` | `wifi_ip` | Wi-Fi IP address | `<base>/state/wifi_ip` | — | Diagnostic text sensor. |
+| `sensor` | `wifi_rssi` | Wi-Fi signal | `<base>/state/wifi_rssi` | — | Diagnostic. `device_class: signal_strength`, unit: `dBm`. |
+| `sensor` | `wifi_ssid` | Wi-Fi network | `<base>/state/wifi_ssid` | — | Diagnostic text sensor: the connected SSID. |
 
 #### Retirement of old entities
 
@@ -172,7 +175,10 @@ Publishing occurs during `mqtt::tick()` (1000 ms cadence) and executes only when
 | `<base>/state/power_rad1` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$. |
 | `<base>/state/power_rad2` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$. |
 | `<base>/state/power_mixer` | Float string: `"%.2f"` (W) | Change $\ge 0.05\ \text{W}$. |
-| `<base>/state/mixer_state` | `"idle"`, `"opening"`, `"closing"` | On direction or motion transition. |
+| `<base>/state/mixer_position` | Integer string `"0"`–`"100"` (% open) | Change of at least one percent. |
+| `<base>/state/wifi_ip` | IPv4 string | On change. |
+| `<base>/state/wifi_rssi` | Integer string (dBm) | On change; the value is refreshed once a minute. |
+| `<base>/state/wifi_ssid` | SSID string | On change. |
 | `<base>/state/temp_boiler` | Float string: `"%.2f"` or `"unknown"` | Change $\ge 0.05\ \text{K}$ or validity transition. |
 | `<base>/state/temp_return` | Float string: `"%.2f"` or `"unknown"` | Change $\ge 0.05\ \text{K}$ or validity transition. |
 | `<base>/state/temp_mix` | Float string: `"%.2f"` or `"unknown"` | Change $\ge 0.05\ \text{K}$ or validity transition. |
