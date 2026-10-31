@@ -15,8 +15,9 @@
 // stash sector.
 //
 // After an OTA the bootloader starts the new image in PENDING_VERIFY. It is
-// marked valid only after 2 minutes with Wi-Fi up or an admin login; if
-// neither happens within 10 minutes the previous image is restored.
+// marked valid only after 2 minutes with Wi-Fi up or an admin login, or at
+// once before an admin-requested reboot; if none of that happens within 10
+// minutes the previous image is restored.
 namespace hpn {
 namespace layout {
 
@@ -28,6 +29,10 @@ void restore_stash();
 // Call about once a second (any task): OTA image validation.
 void tick(bool wifi_connected);
 void note_admin_login();
+// Confirms a pending image at once, e.g. before a reboot an admin asked for:
+// an image that serves signed admin requests works, and rebooting it
+// unconfirmed would make the bootloader roll it back.
+void confirm_now(const char* reason);
 
 // Layout, running slot and image state; `with_tables` adds both tables as hex.
 void status_json(JsonObject out, bool with_tables);

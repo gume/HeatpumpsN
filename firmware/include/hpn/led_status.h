@@ -17,5 +17,10 @@ namespace led {
 // published state snapshot rather than the live struct.
 void tick(const Config& config, const SystemState& state);
 
+// LED test (Test Mode only, see web_portal): while on, all LEDs step together
+// through every colour, 1 s each, in place of the status display.
+void set_test(bool on);
+bool test_active();
+
 }  // namespace led
 }  // namespace hpn

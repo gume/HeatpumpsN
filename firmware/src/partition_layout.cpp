@@ -337,6 +337,15 @@ void restore_stash() {
 
 void note_admin_login() { g_admin_seen = true; }
 
+void confirm_now(const char* reason) {
+  if (g_resolved || running_state() != ESP_OTA_IMG_PENDING_VERIFY) return;
+  esp_ota_mark_app_valid_cancel_rollback();
+  char detail[96];
+  snprintf(detail, sizeof(detail), "Firmware image confirmed (%s)", reason);
+  web::log_event(0, 1720, detail);
+  g_resolved = true;
+}
+
 void tick(bool wifi_connected) {
   if (g_resolved) return;
   if (running_state() != ESP_OTA_IMG_PENDING_VERIFY) {

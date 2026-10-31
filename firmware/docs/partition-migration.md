@@ -130,14 +130,18 @@ as `pending_verify`, and the firmware (not the Arduino start-up code:
 
 * marked **valid** after 2 minutes of running, as soon as Wi-Fi is connected
   or an admin has logged in (event 1720);
+* marked **valid** at once before a reboot an admin asked for (portal reboot,
+  factory reset, the restart after an upload). Without this, uploading the
+  portal files right after a firmware update rebooted the unconfirmed image
+  and the bootloader rolled it back (seen on the S2);
 * **rolled back** to the previous image if neither happens within 10 minutes
   (event 1721). A crash loop before that also ends in the previous image,
   because the bootloader never boots a `pending_verify` image twice.
 
 The bootloader is never updated over the air. A board that came from ESPHome
-keeps ESPHome's bootloader; if that one was built without rollback support,
-new images stay in state `new` and are never rolled back. The migration treats
-`new` as confirmed.
+keeps ESPHome's bootloader. The LOLIN S2 mini's ESPHome bootloader supports
+rollback. One built without it leaves new images in state `new` and never
+rolls back; the migration treats `new` as confirmed.
 
 ## 4. Wi-Fi fallback AP
 

@@ -28,6 +28,7 @@
 #include "hpn/config_store.h"
 #include "hpn/crc32.h"
 #include "hpn/l0_io.h"
+#include "hpn/led_status.h"
 #include "hpn/logger.h"
 #include "hpn/maintenance_assets.h"
 #include "hpn/mpc.h"
@@ -582,6 +583,7 @@ void build_state_json(const Snapshot& s, JsonDocument& doc) {
   test["active"] = g_test_active;
   test["remaining"] = st.test_mode_rem_s;
   test["sequence"] = sequence_name();
+  test["leds"] = led::test_active();
 
   JsonObject system = doc["system"].to<JsonObject>();
   system["freeHeap"] = ESP.getFreeHeap();
@@ -1688,6 +1690,7 @@ void deactivate_test(const char* reason) {
   }
   g_test_active = false;
   g_test_end_ms = 0;
+  led::set_test(false);
   g_sequence = Sequence::None;
   g_sequence_step = 0;
   g_sequence_next_ms = 0;
@@ -2567,6 +2570,20 @@ void handle_test_command(AsyncWebServerRequest* request, JsonVariant& json) {
   const char* note = "arbitration_pending";
 #endif
 
+  // LED test: all status LEDs cycle through every colour until switched off
+  // or Test Mode ends (deactivate_test). It hides the status display, which
+  // is why it exists only inside Test Mode.
+  if (in["leds"].is<bool>()) {
+    const bool on = in["leds"].as<bool>();
+    led::set_test(on);
+    log_event(0, 1105, on ? "Test command: LED colour test started" : "Test command: LED colour test stopped");
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["leds"] = on;
+    send_json(request, 200, doc);
+    return;
+  }
+
   if (output[0] != '\0') {
     bool on = in["on"] | false;
     bool* target = nullptr;
@@ -3346,6 +3363,7 @@ void handle_status(AsyncWebServerRequest* request) {
   test["active"] = g_test_active;
   test["remaining"] = test_remaining_s();
   test["sequence"] = sequence_name();
+  test["leds"] = led::test_active();
 
   JsonObject portal = doc["portal"].to<JsonObject>();
   portal["accessLogSize"] = kAccessLogSize;
@@ -4054,6 +4072,7 @@ void begin(const Config& config, SystemState& state) {
   g_last_wifi_connected = wifi::status().connected;
   g_test_active = false;
   g_test_end_ms = 0;
+  led::set_test(false);
   g_sequence = Sequence::None;
   g_sequence_step = 0;
   g_sequence_next_ms = 0;
@@ -4164,6 +4183,9 @@ void tick(const Config& config, SystemState& state) {
   }
 
   if (g_reboot_requested && static_cast<int32_t>(now - g_reboot_at_ms) >= 0) {
+    // Every reboot requested here comes from an admin (reboot, factory reset,
+    // after an upload), so this image demonstrably works.
+    layout::confirm_now("admin-requested reboot");
     Serial.println("[web] rebooting now");
     Serial.flush();
     ESP.restart();

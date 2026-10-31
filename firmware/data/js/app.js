@@ -1435,6 +1435,11 @@ function renderTest() {
           <button class="btn btn-sm" type="button" data-action="test-sequence" data-sequence="endstop-home">Run sequence</button>
         </div>
         <div class="sequence-card">
+          <h4>Status LEDs</h4>
+          <p>All LEDs step together through red, green, blue, white, yellow, cyan, magenta, orange and purple, 1 s each, until stopped or Test Mode ends. The status display is hidden meanwhile.</p>
+          <button class="btn btn-sm ${test.leds ? 'btn-danger' : ''}" type="button" data-action="test-leds" data-on="${test.leds ? 'false' : 'true'}">${test.leds ? 'Stop LED test' : 'Start LED test'}</button>
+        </div>
+        <div class="sequence-card">
           <h4>Heater + pump</h4>
           <p>Verifies the heater/pump interlock. Not implemented as a scripted sequence.</p>
           <button class="btn btn-sm" type="button" disabled>Pending</button>
@@ -2644,6 +2649,17 @@ async function testToggle(button) {
   await refreshState();
 }
 
+async function testLeds(on) {
+  try {
+    await apiPost('/api/test/command', { leds: on });
+    toast(on ? 'LED test running: all LEDs cycle through the colours.' : 'LED test stopped; status display restored.', 'ok');
+  } catch (err) {
+    toast(err.message, 'err', 6000);
+  }
+  await delay(300);
+  await refreshState();
+}
+
 async function testMixer(mixer) {
   try {
     const result = await apiPost('/api/test/command', { mixer });
@@ -2925,6 +2941,9 @@ async function handleViewClick(event) {
       break;
     case 'test-toggle':
       await testToggle(button);
+      break;
+    case 'test-leds':
+      await testLeds(button.dataset.on === 'true');
       break;
     case 'test-mixer':
       await testMixer(button.dataset.mixer);

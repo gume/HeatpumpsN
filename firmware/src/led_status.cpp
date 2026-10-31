@@ -26,6 +26,15 @@ constexpr Color kCyan{0, 150, 150};
 constexpr Color kMagenta{160, 0, 160};
 constexpr Color kPurple{110, 0, 190};
 
+// The test palette: every status colour plus blue and white, so each LED's
+// red, green and blue channels are seen alone and together.
+constexpr Color kBlue{0, 0, 220};
+constexpr Color kWhite{180, 180, 180};
+constexpr Color kTestPalette[] = {kRed, kGreen, kBlue, kWhite, kYellow, kCyan, kMagenta, kOrange, kPurple};
+constexpr size_t kTestColors = sizeof(kTestPalette) / sizeof(kTestPalette[0]);
+constexpr uint32_t kTestStepMs = 1000;
+volatile bool g_test = false;
+
 uint8_t g_frame[kMaxLeds * 3] = {};
 bool g_have_frame = false;
 uint32_t g_last_tick_ms = 0;
@@ -53,17 +62,8 @@ bool blink(uint32_t now, uint32_t period) {
   return period < 2 || (now % period) < period / 2;
 }
 
-}  // namespace
-
-void tick(const Config& config, const SystemState& state) {
-  const uint32_t now = millis();
-  if (now - g_last_tick_ms < 50 && g_have_frame) {
-    return;
-  }
-  g_last_tick_ms = now;
-
-  uint8_t frame[kMaxLeds * 3] = {};
-
+// The status display (plans/controller node/02_hardware_and_l0.md §1.2).
+void status_frame(uint8_t* frame, const SystemState& state, uint32_t now) {
   const bool critical = (state.active_alarms &
                          (ALARM_OVERTEMP_HARD | ALARM_SENSOR_FAULT_MIX |
                           ALARM_WELDED_RELAY)) != 0;
@@ -116,6 +116,30 @@ void tick(const Config& config, const SystemState& state) {
     } else if (rad_on[i]) {
       put(frame, index, kOrange, 255);
     }
+  }
+}
+
+}  // namespace
+
+void set_test(bool on) { g_test = on; }
+bool test_active() { return g_test; }
+
+void tick(const Config& config, const SystemState& state) {
+  const uint32_t now = millis();
+  if (now - g_last_tick_ms < 50 && g_have_frame) {
+    return;
+  }
+  g_last_tick_ms = now;
+
+  uint8_t frame[kMaxLeds * 3] = {};
+
+  if (g_test) {
+    const Color color = kTestPalette[(now / kTestStepMs) % kTestColors];
+    for (uint8_t i = 0; i < kMaxLeds; ++i) {
+      put(frame, i, color, 255);
+    }
+  } else {
+    status_frame(frame, state, now);
   }
 
   uint16_t count = config.num_leds;
