@@ -1,5 +1,7 @@
 # Partition layout and migration from ESPHome
 
+Step-by-step checklist for the live board: [esphome-upgrade.md](esphome-upgrade.md).
+
 The controller replaces an ESPHome installation over the air, in two stages
 and without a separate loader image. Code: `src/partition_layout.cpp`,
 `src/maintenance.html`, `src/wifi_client.cpp` (fallback AP).
