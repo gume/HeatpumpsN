@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "hpn/board.h"
+#include "hpn/credentials.h"
 #include "hpn/state.h"
 
 namespace {
@@ -23,13 +24,12 @@ Config config_defaults() {
   Config c{};
 
   // --- Provisioning ---------------------------------------------------------
-  // Temporary bench credentials. These belong in NVS once the Wi-Fi manager /
-  // provisioning portal exists; Config is already the intended source.
-  // Note: the bench AP SSID is case-sensitive ("Testing", not "testing").
-  copy_str(c.wifi_ssid, "Testing");
-  copy_str(c.wifi_password, "testing123");
-  copy_str(c.ap_ssid, "HeatpumpsN-Setup");
-  copy_str(c.ap_password, "heatpumps-setup");
+  // Factory network credentials, set at build time (credentials.h); the
+  // portal changes them in NVS.
+  copy_str(c.wifi_ssid, HPN_WIFI_SSID);
+  copy_str(c.wifi_password, HPN_WIFI_PASSWORD);
+  copy_str(c.ap_ssid, HPN_AP_SSID);
+  copy_str(c.ap_password, HPN_AP_PASSWORD);
   copy_str(c.mqtt_host, "");
   c.mqtt_port = 1883;
   copy_str(c.mqtt_user, "");

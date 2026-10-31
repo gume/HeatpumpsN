@@ -2271,6 +2271,7 @@ function showLogin(message = '') {
   el.id = 'login-overlay';
   el.className = 'login-overlay';
   el.innerHTML = `<form class="card login-card" id="login-form">
+      <div class="login-logo" role="img" aria-label="HomeNET"></div>
       <h2>HeatpumpsN controller</h2>
       <div class="field"><label for="login-user">User</label>
         <select id="login-user"><option value="monitor">monitor (read-only)</option><option value="admin">admin</option></select></div>

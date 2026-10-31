@@ -15,6 +15,7 @@
 #include <new>
 
 #include "hpn/crc32.h"
+#include "hpn/credentials.h"
 #include "hpn/web_portal.h"
 
 namespace hpn {
@@ -38,7 +39,8 @@ constexpr size_t kSecretMax = 64;
 const char* const kUserNames[kUsers] = {"admin", "monitor"};
 const Role kUserRoles[kUsers] = {ROLE_ADMIN, ROLE_MONITOR};
 
-// Factory credentials admin/admin and monitor/monitor, precomputed with
+// Factory credentials (admin/admin and monitor/monitor unless set at build
+// time, see credentials.h), precomputed by the build like
 // tools/hpn_auth.derive_keys (salt = SHA-256("hpn-default-salt-<user>")[:16]),
 // so the device never has to run PBKDF2.
 struct DefaultUser {
@@ -46,12 +48,7 @@ struct DefaultUser {
   const char* k_auth;
   const char* k_enc;
 };
-const DefaultUser kDefaults[kUsers] = {
-    {"c323a66e86b8d3ae7330b21bb173d78e", "9254689812b22f73907625c509ac736a4c9e821fa1774c0bea21a7936c0028ad",
-     "554bb0f505779f2a8fb654df360b96808c64714451f467ae1a77fe98ed011e70"},
-    {"8ffabaf5db7cf90e080c7adc18e52707", "00303a8b77d78ab080f3cce9243ab4da46cca0eb9ea0c6c3ec4e7d3cbdada577",
-     "581631677ea461cde8997239b8d873440b2b7a9a5540808cbf2c2c7bc09b4fdf"},
-};
+const DefaultUser kDefaults[kUsers] = HPN_DEFAULT_KEYS;
 
 struct UserKeys {
   uint8_t salt[16];

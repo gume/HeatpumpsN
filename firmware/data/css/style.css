@@ -20,6 +20,7 @@
   --err-soft: rgba(255, 92, 108, .13);
   --safety: #ff8a3d;
   --safety-soft: rgba(255, 138, 61, .14);
+  --brand: #f2c14e;           /* HomeNET logo, toned to sit beside --warn */
   --radius: 14px;
   --radius-sm: 9px;
   --shadow: 0 12px 34px rgba(0, 0, 0, .22);
@@ -48,6 +49,7 @@ html[data-theme="light"] {
   --err-soft: rgba(198, 47, 62, .1);
   --safety: #b64a0a;
   --safety-soft: rgba(182, 74, 10, .11);
+  --brand: #b88600;           /* ~3:1 on white */
   --shadow: 0 10px 26px rgba(22, 40, 65, .08);
 }
 
@@ -106,16 +108,20 @@ h1, h2, h3, h4, p { margin: 0; }
   gap: 11px;
   padding: 4px 8px 12px;
 }
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  color: #06111f;
-  background: linear-gradient(135deg, #75b9ff, var(--accent));
-  box-shadow: 0 8px 18px rgba(78, 161, 255, .22);
-  font-size: 13px;
+/* The logo files are single-colour shapes used as masks, so they take the
+   theme's --brand colour. */
+.brand-mark, .login-logo {
+  flex: none;
+  background: var(--brand);
+  -webkit-mask: url(../favicon.svg) center / contain no-repeat;
+  mask: url(../favicon.svg) center / contain no-repeat;
+}
+.brand-mark { width: 36px; height: 36px; }
+.login-logo {
+  height: 72px;
+  margin: 2px 0 4px;
+  -webkit-mask-image: url(../img/logo.svg);
+  mask-image: url(../img/logo.svg);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
 .brand-text strong { letter-spacing: .01em; font-size: 15px; }

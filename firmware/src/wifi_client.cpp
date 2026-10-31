@@ -8,6 +8,7 @@
 #include <new>
 #include <time.h>
 
+#include "hpn/credentials.h"
 #include "hpn/logger.h"
 
 namespace hpn {
@@ -20,7 +21,7 @@ constexpr uint32_t kApAfterBootMs = 120000;      // never connected since boot
 constexpr uint32_t kApAfterLossMs = 300000;      // link down this long
 constexpr uint32_t kApIdleCloseMs = 60000;       // station up and AP unused this long
 constexpr uint32_t kRetryWithApClientMs = 120000;  // a station retry hops channels
-constexpr const char* kApFallbackPassword = "heatpumps-setup";
+constexpr const char* kApFallbackPassword = HPN_AP_PASSWORD;
 
 Status g_status{};
 // Captive DNS on the fallback AP: every name resolves to the controller, so a
@@ -183,7 +184,7 @@ void start_ap(const Config& config) {
   if (g_status.ap_active) {
     return;
   }
-  const char* ssid = config.ap_ssid[0] != '\0' ? config.ap_ssid : "HeatpumpsN-Setup";
+  const char* ssid = config.ap_ssid[0] != '\0' ? config.ap_ssid : HPN_AP_SSID;
   // WPA2 needs at least 8 characters; never fall back to an open network.
   const char* pass = strlen(config.ap_password) >= 8 ? config.ap_password : kApFallbackPassword;
   WiFi.mode(WIFI_AP_STA);

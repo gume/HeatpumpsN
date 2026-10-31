@@ -251,6 +251,22 @@ python firmware/tools/sign_command.py params '{"set":"rad2","delay_s":45}' --pub
 Python clients use `tools/hpn_auth.py` (standard library only); the HIL
 simulator takes `--controller-user` and `--controller-password`.
 
+### Factory credentials at build time
+
+The factory passwords (admin/admin, monitor/monitor) and the default Wi-Fi and
+fallback-AP credentials are set at build time. Copy
+`include/hpn/credentials_local.h.example` to `include/hpn/credentials_local.h`
+(git-ignored) and set them there, or pass them as flags, e.g. in
+`platformio.ini`: `-DHPN_ADMIN_PASSWORD=\"…\"`.
+
+The two portal passwords never reach the image: the pre-build script derives
+the PBKDF2 keys (same salt and iterations as before) into
+`hpn_default_keys.h` in the build directory, and the firmware only holds
+those. The Wi-Fi and AP passwords are stored in plain text, as the radio needs
+them. The factory passwords apply to a fresh device, a factory reset and the
+password recovery build; a device keeps the passwords set on it across
+updates. Tools that log in take `HPN_PORTAL_USER` / `HPN_PORTAL_PASSWORD`.
+
 ### Forgotten password
 
 There is no network recovery path on purpose: anything that resets a password
@@ -261,7 +277,8 @@ pio run -e esp32s2_password_reset -t upload --upload-port /dev/ttyACM0   # bench
 ```
 
 This is the normal firmware with `HPN_PASSWORD_RESET`. On the first boot of
-that image it restores admin/admin and monitor/monitor and removes the MQTT
+that image it restores the factory passwords (admin/admin and monitor/monitor
+unless set at build time) and removes the MQTT
 command secret (event 1613); configuration, MPC parameters and Wi-Fi are kept.
 It remembers the image hash (NVS `hpnrst/image`), so later reboots of the same
 image do not reset again. Log in, set new passwords and the command secret,
