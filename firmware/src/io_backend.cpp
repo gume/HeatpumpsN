@@ -121,7 +121,10 @@ namespace hpn {
 namespace io {
 namespace {
 
-Adafruit_NeoPixel g_leds;
+// The (count, pin, type) constructor matters: on IDF 5 it also creates the
+// library's show mutex (espInit), and without it every show() silently does
+// nothing. Pin and length are set in leds_begin().
+Adafruit_NeoPixel g_leds(0, -1, NEO_GRB + NEO_KHZ800);
 bool g_leds_ready = false;
 uint16_t g_led_count = 0;
 uint8_t g_onewire_pin = HPN_GPIO_UNASSIGNED;
