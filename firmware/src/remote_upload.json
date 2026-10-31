@@ -112,7 +112,18 @@ def _maintenance_page():
         env.Execute('"$PYTHONEXE" "{}"'.format(gen))
 
 
+# --- pre: silence one library's own warnings ---------------------------------
+# OneWire 2.3.8 has "#undef noInterrupts() {...}" (text after the macro name;
+# the #undef still works). No warning option covers it, so that file alone is
+# built with -w.
+def _quiet_onewire(node):
+    if os.path.basename(node.get_path()) == "OneWire.cpp":
+        return env.Object(node, CCFLAGS=env["CCFLAGS"] + ["-w"])
+    return node
+
+
 if not env.get("HPN_REMOTE_UPLOAD_POST"):
+    env.AddBuildMiddleware(_quiet_onewire)
     _portal_assets()
     _maintenance_page()
     build_dir = env.subst("$BUILD_DIR")
