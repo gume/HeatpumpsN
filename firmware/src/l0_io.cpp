@@ -1,5 +1,7 @@
 #include "hpn/l0_io.h"
 
+#include "hpn/build_target.h"
+
 #include <Arduino.h>
 #include <math.h>
 #include <time.h>
@@ -437,10 +439,25 @@ void tick(const Config& config, const BoardConfig& board, SystemState& state) {
   // Optional pump-power feedback, at the same cadence as the temperatures.
   if (now - g_last_power_poll_ms >= config.temp_poll_interval_ms) {
     g_last_power_poll_ms = now;
+#if HPN_HAS_DUAL_CORE
     state.pump_power_w[0] = read_power_w(config, CurrentChannel::PumpFloor);
     state.pump_power_w[1] = read_power_w(config, CurrentChannel::PumpRad1);
     state.pump_power_w[2] = read_power_w(config, CurrentChannel::PumpRad2);
     state.mixer_power_w = read_power_w(config, CurrentChannel::Mixer);
+#else
+    // Single core: each reading busy-samples two mains cycles (40 ms) at T_io
+    // priority, above lwIP. One channel per poll keeps that to 40 ms; each
+    // channel still refreshes every 4 polls, well inside the 10 s the dry-run
+    // and welded-relay checks need to act.
+    static uint8_t next = 0;
+    switch (next) {
+      case 0: state.pump_power_w[0] = read_power_w(config, CurrentChannel::PumpFloor); break;
+      case 1: state.pump_power_w[1] = read_power_w(config, CurrentChannel::PumpRad1); break;
+      case 2: state.pump_power_w[2] = read_power_w(config, CurrentChannel::PumpRad2); break;
+      default: state.mixer_power_w = read_power_w(config, CurrentChannel::Mixer); break;
+    }
+    next = static_cast<uint8_t>((next + 1) % 4);
+#endif
   }
 
   // The v1.x relay board reports a software-interlock failure (open and close

@@ -35,6 +35,7 @@
 #include "hpn/security.h"
 #include "hpn/mqtt_client.h"
 #include "hpn/sensor_roles.h"
+#include "hpn/build_target.h"
 #include "hpn/tasks.h"
 #include "hpn/wifi_client.h"
 
@@ -50,9 +51,18 @@ namespace {
 // Constants and small data structures
 // ---------------------------------------------------------------------------
 
+#if HPN_HAS_DUAL_CORE
 constexpr uint32_t kBroadcastIntervalMs = 250;
-// Largest free heap block required before a state frame is broadcast.
+#else
+// Single core without FPU (ESP32-S2): formatting a ~5 KB state frame is real
+// work; once a second keeps the portal live without crowding Wi-Fi.
+constexpr uint32_t kBroadcastIntervalMs = 1000;
+#endif
+// Largest free block required before a state frame is broadcast: in PSRAM
+// when the board has it (the frame is built there), else in internal RAM.
+// With PSRAM, internal RAM must still leave room for lwIP and Wi-Fi.
 constexpr uint32_t kBroadcastMinBlock = 24u * 1024u;
+constexpr uint32_t kBroadcastMinInternal = 8u * 1024u;
 constexpr size_t kAccessLogSize = 64;
 
 struct AccessEntry {
@@ -3705,17 +3715,52 @@ void HpnAuthMiddleware::run(AsyncWebServerRequest* request, ArMiddlewareNext nex
   }
 }
 
+// Large, short-lived buffers (state frames) go to PSRAM when the board has
+// it and fall back to internal RAM otherwise (the ESP32 bench has none).
+void* big_alloc(size_t n) {
+  return heap_caps_malloc_prefer(n, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+struct BigAllocator : ArduinoJson::Allocator {
+  void* allocate(size_t n) override { return big_alloc(n); }
+  void deallocate(void* p) override { heap_caps_free(p); }
+  void* reallocate(void* p, size_t n) override {
+    return heap_caps_realloc_prefer(p, n, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  }
+};
+BigAllocator g_big_alloc;
+
+bool room_for_state_frame() {
+  if (psramFound()) {
+    return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= kBroadcastMinBlock &&
+           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >= kBroadcastMinInternal;
+  }
+  return ESP.getMaxAllocHeap() >= kBroadcastMinBlock;
+}
+
+// One state frame to one client, or to all when client is null.
+void send_state_frame(AsyncWebSocketClient* client) {
+  Snapshot snapshot;
+  get_snapshot(snapshot);
+  JsonDocument doc(&g_big_alloc);
+  build_state_json(snapshot, doc);
+  const size_t len = measureJson(doc);
+  char* buf = static_cast<char*>(big_alloc(len + 1));
+  if (buf == nullptr) return;
+  serializeJson(doc, buf, len + 1);
+  if (client != nullptr) {
+    client->text(buf, len);
+  } else {
+    g_ws.textAll(buf, len);
+  }
+  heap_caps_free(buf);
+}
+
 void send_snapshot_to(AsyncWebSocketClient* client) {
   if (client == nullptr) {
     return;
   }
-  Snapshot snapshot;
-  get_snapshot(snapshot);
-  JsonDocument doc;
-  build_state_json(snapshot, doc);
-  String json;
-  serializeJson(doc, json);
-  client->text(json);
+  send_state_frame(client);
 }
 
 void remember_ws_client_ip(uint32_t id, const char* ip) {
@@ -3824,7 +3869,7 @@ void register_routes() {
   g_server.on(AsyncURIMatcher::exact("/api/state"), HTTP_GET, [](AsyncWebServerRequest* request) {
     Snapshot snapshot;
     get_snapshot(snapshot);
-    JsonDocument doc;
+    JsonDocument doc(&g_big_alloc);
     build_state_json(snapshot, doc);
     send_json(request, 200, doc);
   });
@@ -4108,15 +4153,9 @@ void tick(const Config& config, SystemState& state) {
   // (bad_alloc in makeSharedBuffer, T_comms). Drop the frame while any client
   // is backed up or the heap is short; the next one carries the full state.
   if (g_ws.count() > 0 && now - g_last_broadcast_ms >= kBroadcastIntervalMs &&
-      g_ws.availableForWriteAll() && ESP.getMaxAllocHeap() >= kBroadcastMinBlock) {
+      g_ws.availableForWriteAll() && room_for_state_frame()) {
     g_last_broadcast_ms = now;
-    Snapshot snapshot;
-    get_snapshot(snapshot);
-    JsonDocument doc;
-    build_state_json(snapshot, doc);
-    String json;
-    serializeJson(doc, json);
-    g_ws.textAll(json);
+    send_state_frame(nullptr);
   }
 
   if (now - g_last_cleanup_ms >= 5000u) {

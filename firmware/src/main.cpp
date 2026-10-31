@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -53,6 +54,12 @@ const char* reset_reason_name(esp_reset_reason_t reason) {
 void setup() {
   Serial.begin(115200);
   delay(100);
+  // Boards with PSRAM (LOLIN S2 mini): ordinary allocations from 512 bytes go
+  // there first. Internal RAM is the ESP32-S2's scarce resource, and JSON
+  // documents and response buffers otherwise drain it in bursts until Wi-Fi
+  // cannot get buffers. Allocations that need internal RAM (Wi-Fi DMA, task
+  // stacks, flash-write buffers) ask for it explicitly.
+  if (psramFound()) heap_caps_malloc_extmem_enable(512);
   const esp_reset_reason_t reset_reason = esp_reset_reason();
   Serial.printf("[boot] reset reason: %s\n", reset_reason_name(reset_reason));
 
