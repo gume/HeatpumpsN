@@ -1,0 +1,44 @@
+# Copy to config.yaml (git-ignored) and adjust. Secrets come from environment
+# variables, never from this file.
+
+mqtt:
+  host: localhost
+  port: 31883            # development broker; at home: mqtt.home / 1883
+  topic_prefix: "mirror/"  # the development mirror; empty at home
+  subscribe: ["mirror/#"]  # at home: ["#"]
+  # username: observer
+  # password_env: OBSERVER_MQTT_PASSWORD
+
+statestream_base: ha_state  # HA MQTT Statestream base topic
+
+influx:
+  url: http://localhost:38086
+  org: heatpumpsn
+  bucket: observer
+  token_env: INFLUX_TOKEN
+
+paths:
+  catalog: data/catalog.json
+  registry: registry.yaml
+  proposals: data/proposals.yaml
+
+# Optional: any OpenAI-compatible endpoint (LiteLLM, local server, hosted API).
+llm:
+  base_url: ""            # e.g. http://litellm.home:4000/v1
+  model: ""               # e.g. a model name LiteLLM routes
+  api_key_env: OBSERVER_LLM_KEY
+  timeout_s: 120
+
+# What the LLM (and later the reports) know about the house.
+context: |
+  Three-storey house: TF top floor, MF middle floor, BF bottom floor, plus an attic.
+  Gas condensing boiler (Buderus/Bosch EMS bus, read by EMS-ESP) with a DHW buffer tank.
+  Heating distribution controller (HeatpumpsN, ESP32): three circuits fed by the boiler.
+    - Radiator circuit 1 = MF (middle floor), pump 1, unmixed, boiler supply temperature.
+    - Radiator circuit 2 = TF (top floor), pump 2, unmixed, boiler supply temperature.
+    - Floor heating = BF (bottom floor), pump 3 / floor pump, 3-way motorised mixer.
+  The controller derives the boiler heat call from the three circuit demands from Home Assistant.
+  MixerMeter: a BMI160 rotary encoder on the floor mixer valve (independent position).
+  EMS-ESP DS18B20 sensors measure forward (fwd) and return (back) of each circuit.
+  Room temperature/humidity sensors (BLE, via Home Assistant Statestream) in the rooms.
+  Zigbee2MQTT devices: mostly lights, switches, buttons, motion sensors, plugs.

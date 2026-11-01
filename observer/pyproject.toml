@@ -1,0 +1,27 @@
+[project]
+name = "observer"
+version = "0.1.0"
+description = "HeatpumpsN observer: ingests the heating system's MQTT data, stores it raw in InfluxDB, supervises and optimises"
+requires-python = ">=3.10"
+dependencies = [
+    "paho-mqtt>=2.0",
+    "influxdb-client>=1.40",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+observer = "observer.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["observer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
