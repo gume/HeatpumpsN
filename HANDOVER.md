@@ -106,9 +106,11 @@ Facts about this board:
 8. **Mixer encoder** (`POS_SRC_I2C`) and other reserved I2C peripherals: not
    implemented; an external encoder over MQTT is used for warnings and resync
    only.
-9. **Watchdog entries in the S2's log** (reported 2026-11-01): to be
-   investigated next; `lastWatchdog` in `/api/status` and events 1900/1901
-   name the late task.
+9. ~~Watchdog entries in the S2's log~~ (fixed 2026-11-01): two events 1901
+   with "safety 4294967295ms" in 22 h were a race in the health check, not a
+   late task (`now` read before the critical section; T_safety checked in at
+   now + 1). No reset resulted. `lastWatchdog` keeps the last record across
+   resets, so it still shows that one until a new withhold overwrites it.
 10. **EMS-ESP:** loses its MQTT connection when the broker restarts and does
     not reconnect until EMS-ESP itself is restarted (3.8.4); its bus reports
     `txerror` (can receive, cannot transmit: check the Tx mode), so it only

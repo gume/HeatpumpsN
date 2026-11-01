@@ -102,19 +102,29 @@ void mark(TaskId id) {
   taskEXIT_CRITICAL(&g_seen_mux);
 }
 
+// Ticks since `seen`; 0 if `seen` is not before `now`.
+uint32_t age_ms(TickType_t now, TickType_t seen) {
+  const TickType_t elapsed = now - seen;
+  return static_cast<int32_t>(elapsed) > 0 ? pdTICKS_TO_MS(elapsed) : 0;
+}
+
 HealthAges read_health_ages() {
   HealthAges ages = {0, 0, 0, false};
-  const TickType_t now = xTaskGetTickCount();
   const uint8_t required = static_cast<uint8_t>((1u << static_cast<size_t>(TaskId::Safety)) |
                                                 (1u << static_cast<size_t>(TaskId::Io)) |
                                                 (1u << static_cast<size_t>(TaskId::Control)));
 
   taskENTER_CRITICAL(&g_seen_mux);
+  // `now` is read inside the critical section: read before it, a higher-
+  // priority task (T_safety) could check in at now + 1 in between, and the
+  // unsigned difference would read as ~49 days late (seen on the S2 as
+  // "safety 4294967295ms" in event 1901).
+  const TickType_t now = xTaskGetTickCount();
   if ((g_seen_mask & required) == required) {
     ages.started = true;
-    ages.safety_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Safety)]);
-    ages.io_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Io)]);
-    ages.control_ms = pdTICKS_TO_MS(now - g_last_seen[static_cast<size_t>(TaskId::Control)]);
+    ages.safety_ms = age_ms(now, g_last_seen[static_cast<size_t>(TaskId::Safety)]);
+    ages.io_ms = age_ms(now, g_last_seen[static_cast<size_t>(TaskId::Io)]);
+    ages.control_ms = age_ms(now, g_last_seen[static_cast<size_t>(TaskId::Control)]);
   }
   taskEXIT_CRITICAL(&g_seen_mux);
 
