@@ -177,8 +177,8 @@ uv venv && uv pip install -e ".[dev]"
 .venv/bin/observer catalog --unregistered   # what is not described yet
 .venv/bin/observer serve --dry-run            # full ingest without a database
 
-# with InfluxDB: disposable, rebuilt empty at any time
-scripts/influx-reset.sh --yes-delete-all-data   # DELETES all recorded data, then recreates org, bucket, token
+# with InfluxDB (holds recorded data: reset only with the owner's agreement)
+# scripts/influx-reset.sh --yes-delete-all-data   # DELETES all recorded data, then recreates org, bucket, token
 .venv/bin/observer serve
 ```
 

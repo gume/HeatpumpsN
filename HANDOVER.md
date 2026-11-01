@@ -1,9 +1,33 @@
 # HeatpumpsN — project handover
 
-The single entry point for picking the project up: what the system is, where it
-stands, how to work on it and what to keep in mind. Updated 2026-11-01. The
-data-analysis workstream has its own handover in
+The single entry point for picking the project up in a new session: what the
+system is, where it stands, the working agreements, how to work on it and
+what to keep in mind. Updated 2026-11-01 (end of a long development session).
+The data-analysis workstream has its own handover in
 [`analysis/handover.md`](analysis/handover.md).
+
+## 0. Working agreements (read first)
+
+These are the owner's standing instructions. They override defaults.
+
+1. **No firmware or filesystem upload to the live S2 without an explicit
+   "go"** from the owner for that specific upload. Build, test (host tests,
+   simulator), report, then wait. A previous "go" does not carry over.
+2. **The bench ESP32 (`localhost:30080`) is switched off** and stays off unless
+   really necessary. If an update is risky (boot path, partitions, OTA, memory
+   layout, anything that could stop the S2 from booting or answering), say so
+   and ask for the bench instead of only asking for "go".
+3. **Never clear the observer's InfluxDB** (reset script, `docker compose down
+   -v`, deleting the volume, dropping data) without prior agreement: it holds
+   recorded house data. The reset script refuses without
+   `--yes-delete-all-data`.
+4. **Operational data never goes into git.** Code, docs and generic defaults
+   do; anything of the running installation (observer registry, house
+   description and notes, catalog, settings, configs, secrets) lives in the
+   observer's data directory (§2.2). No credentials in the repository,
+   including the ESPHome OTA password.
+5. Commit with the attribution line; **do not push** unless asked.
+6. Never run a serial monitor unbounded (`AGENTS.md`).
 
 ## 1. What the system is
 
@@ -12,119 +36,151 @@ one shared boiler/heater call:
 
 | Circuit | Actuators | Temperature |
 | --- | --- | --- |
-| Radiator 1 (unmixed) | `pump_rad1` | boiler supply |
-| Radiator 2 (unmixed) | `pump_rad2` | boiler supply |
-| Floor (mixed) | `pump_floor` + 3-point motorised mixer | blended floor supply |
+| Radiator 1 (unmixed) = MF, middle floor | `pump_rad1` (pump 1) | boiler supply |
+| Radiator 2 (unmixed) = TF, top floor | `pump_rad2` (pump 2) | boiler supply |
+| Floor (mixed) = BF, bottom floor | `pump_floor` (pump 3) + 3-point motorised mixer | blended floor supply |
 
 The ESP32 owns the real-time and safety-critical part: it arbitrates heater and
 pump requests, derives the shared heater call from the three circuit demands,
 drives the mixer, owns the per-circuit pump after-run and supervises limits.
-Home Assistant owns comfort logic and sends three per-circuit heating-switch
-demands, repeating each active `ON` as a keep-alive; there is no heater switch.
-The mixer has **no absolute position sensor**: position is dead-reckoned from
-travel time.
+Home Assistant owns comfort logic and the floor setpoint, and sends three
+per-circuit heating-switch demands, repeating each active `ON` as a keep-alive;
+there is no heater switch. The mixer has **no absolute position sensor**:
+position is dead-reckoned from travel time; a MixerMeter (BMI160 encoder) on
+the valve reports over MQTT and is cross-checked.
+
+Around it: a gas condensing boiler read by **EMS-ESP**, room sensors in Home
+Assistant, Zigbee2MQTT devices, and the **observer** (§2.2), which records and
+analyses everything but never commands the plant.
 
 ## 2. Where things stand
 
 | Area | State | Details |
 |---|---|---|
-| Controller firmware 0.4 (`firmware/`) | Working on the bench (ESP32, emulated board) and on the live LOLIN S2 mini (HomeNet v0.1) | `firmware/README.md` |
-| Predictive mixer control (MPC) | Implemented with supervised fallback to the legacy PI and homing; tuned against the simulator | `firmware/docs/predictive-mixer.md` |
+| Controller firmware 0.4 (`firmware/`) | Running on the live LOLIN S2 mini (HomeNet v0.1) | `firmware/README.md` |
+| Predictive mixer control (MPC) | Running; supervised fallback to the legacy PI and homing; 0.3–0.8 s per plan on the S2 | `firmware/docs/predictive-mixer.md` |
 | Security (HPN1) | Challenge-response request signing, users `admin`/`monitor`, signed uploads, sealed secrets, signed MQTT commands | `firmware/docs/security.md` |
-| Partition layout / ESPHome migration | Done on the bench and on the live S2 | `firmware/docs/partition-migration.md` |
-| HIL floor simulator (`floor_simulator/`) | Plant, boiler, REST/MQTT bridges, dashboard, offline tuning tools | `floor_simulator/README.md` |
+| Partition layout / ESPHome migration | Done on the live S2 | `firmware/docs/partition-migration.md` |
+| HIL floor simulator (`floor_simulator/`) | Plant, boiler, bridges, dashboard, tuning tools; runs the firmware MPC and L2 code on the host in its tests | `floor_simulator/README.md` |
+| Observer (`observer/`) | Running on the development machine: ingest, registry, raw InfluxDB storage, portal, LLM-assisted descriptions, reviewed house description, per-task model settings | `observer/README.md` |
+| Observer roadmap (agents, tools, sandbox) | Plan written | `plans/observer_agentic_plan.md` |
+| Home Assistant side | Keep-alive blueprint in the repo, to be installed | `homeassistant/README.md` |
 | HomeNet v1.x board | Firmware profile exists; hardware not built | `firmware/docs/boards.md` |
-| Observer (`observer/`) | Step 1 running on the development machine: MQTT ingest, signal catalog and registry, raw InfluxDB storage, web portal | `observer/README.md` |
 
-### 2.1 Live S2 upgrade (in progress)
+### 2.1 The live S2 (plant controller)
 
-Checklist: `firmware/docs/esphome-upgrade.md`.
+Reached through a forward at `http://localhost:30081` (when the owner has it
+up). Firmware at commit `716bb92` (status JSON fix on top of `83929c1`), portal
+files from `83929c1`.
 
-- [x] 1–4: ESPHome OTA → maintenance page → partition migration → portal files
-- [x] Relays checked in Test Mode
-- [x] Status LEDs: driver fixed, colour test, board order (pump 2 on LED 3, pump 1 on LED 4), radiators green
-- [ ] 5: change the factory passwords (still admin/admin)
-- [ ] 6.2: temperature sensors: they read plausible values (boiler, floor forward, floor return); roles not yet verified while heating
-- [ ] 6.5: settings (floor circuit, setpoint, summer mode). MQTT is connected to `mqtt.home`; the HA entities include Mixer position and the Wi-Fi diagnostics
+On the S2 since 2026-11-01:
+
+* every boot **homes the mixer** (full close stroke, position 0); an encoder
+  that disagrees afterwards is distrusted (never used to resync) until it
+  agrees again;
+* the MixerMeter encoder is received (ESPHome's `stat_t` discovery key);
+* HA's floor setpoint command is **retained** (HA owns it; the broker hands it
+  back after reboots) and saved as the fallback after a minute; the owner
+  should set the setpoint once in HA so a retained command exists;
+* **Diagnostics → MQTT inputs**: last encoder, DHW and setpoint messages;
+* MPC: no opening guards while the floor forward is > 5 K below the setpoint
+  (faster, gentler heating starts); floor ΔT-collapse pause only within 2 K of
+  the setpoint;
+* LED driver fixed, board LED order, radiators green; Test Mode LED test;
+* watchdog health-check race fixed; HA Mixer position (%) and Wi-Fi diagnostics.
+
+Upgrade checklist (`firmware/docs/esphome-upgrade.md`):
+
+- [x] 1–4: ESPHome OTA, maintenance page, partition migration, portal files
+- [x] relays and LEDs checked; MQTT connected to `mqtt.home`; temperatures plausible; heating runs
+- [ ] 5: change the factory passwords (still admin/admin; tools below assume them)
+- [ ] 6.2: verify the sensor roles while heating
 - [ ] 7: relay counter preset (`esp32s2_counter_preset`, ESPHome values 1:1)
-- [ ] 8: normal firmware, configuration export, mains on, first heating run watched
+- [ ] 8: configuration export as backup
 
 Facts about this board:
 
 - It keeps **ESPHome's bootloader**, which supports rollback. A new image is
   confirmed after 2 min with Wi-Fi, or at once before an admin-requested
-  reboot; otherwise the next reboot rolls it back.
-- Wi-Fi `Korona-IoT`, IP 192.168.2.74. The fallback AP `HeatpumpsN-Setup` opens
-  after 2 min without a connection (captive portal at 192.168.4.1).
-- The S2 has no FPU and one core; internal RAM is the limit. PSRAM (2 MB) takes
+  reboot (so firmware and portal-file uploads can follow each other directly).
+- Wi-Fi `Korona-IoT`, IP 192.168.2.74; fallback AP `HeatpumpsN-Setup` after
+  2 min without a connection (captive portal at 192.168.4.1).
+- The S2 has no FPU and one core; internal RAM is the limit. PSRAM takes
   ordinary allocations from 512 B, the logs and the state frames. Watch
-  `freeHeap`, `minFreeHeap` and `largestFreeBlock` in `/api/status`
-  (last seen: ~40 KB free, low-water mark ~28–34 KB).
+  `freeHeap`, `minFreeHeap`, `largestFreeBlock` in `/api/status`
+  (last seen: ~41 KB free, low-water mark ~35 KB).
+- Controller log streaming to MQTT is on, so the observer records its events.
 
-### 2.2 Observer (step 1 done)
+### 2.2 The observer
 
-- **Data path in development:** the home broker (Mosquitto 1.6 container on
-  the Jetson) bridges `heatpumpsn/#`, `ems-esp/#`, `mixermeter/#`,
-  `zigbee2mqtt/#`, `homeassistant/#` and `ha_state/#` (HA MQTT Statestream)
-  outward under `mirror/` to the development broker `localhost:31883`. The
-  bridge runs through the systemd service `mqtt-mirror-tunnel` on the Jetson
-  (autossh, own key `/var/lib/mqtt-mirror/id_ed25519`, restricted on this
-  machine to the broker port). Direction `out` only: nothing flows back home.
-- **Running here:** `observer serve` (portal `http://127.0.0.1:8090/`),
-  storing into the disposable InfluxDB `observer-influx-dev`
-  (`observer/scripts/influx-reset.sh` rebuilds it empty).
-- **Registry:** the EMS-ESP circuit sensors (BF/MF/TF fwd/back), the 13 rooms,
-  OpenWeatherMap outdoor, boiler and DHW values, controller, MixerMeter; Zigbee
-  devices are catalogued but not selected yet.
-- **Next:** LLM endpoint in `observer/.env` (Ollama first); anomaly rules and
-  alerts to HA (first rule: EMS-ESP offline / heartbeat missing); then
-  identification and parameter proposals; the old HA InfluxDB year should be
-  copied in once (read-only token) before HA's InfluxDB integration is removed.
+* **Code** in `observer/` (git). **Operational data** in the data directory
+  `OBSERVER_HOME`, default `~/.local/share/heatpumpsn-observer` (never in git):
+  `config.yaml`, `.env` (secrets: InfluxDB token, LLM endpoints and keys),
+  `registry.yaml` (this house's sensor selection and descriptions),
+  `house/` (description, model, review notes, archive), `data/` (catalog,
+  settings, proposals, log). `observer init` creates a data directory from
+  `observer/defaults/`.
+* **Running:** `observer serve` (portal `http://127.0.0.1:8090/`, no login yet),
+  started with `setsid nohup ~/Work/HeatpumpsN/observer/.venv/bin/observer serve
+  > ~/.local/share/heatpumpsn-observer/data/serve.log 2>&1 &`. Stop it with
+  `kill $(pgrep -x observer)` (not `pkill -f`, which matches its own shell).
+* **Database:** InfluxDB 2.7 container `observer-influx-dev`
+  (`observer/docker-compose.dev.yml`, volume `observer-influx-dev`, port 38086,
+  org `heatpumpsn`, bucket `observer`). Holds recorded house data: see §0.3.
+* **Data path in development:** the home broker (Mosquitto 1.6 container on
+  the Jetson, `/home/jetson/services/homeassistant`) bridges `heatpumpsn/#`,
+  `ems-esp/#`, `mixermeter/#`, `zigbee2mqtt/#`, `homeassistant/#` and
+  `ha_state/#` (HA MQTT Statestream, `mqtt_statestream.yaml` included from
+  HA's configuration) outward under `mirror/` to `localhost:31883` here,
+  through the systemd service `mqtt-mirror-tunnel` on the Jetson (autossh,
+  key `/var/lib/mqtt-mirror/id_ed25519`, restricted in `~gume/.ssh/authorized_keys`
+  to the broker port). Direction `out` only.
+* **LLM:** provider slot 1 "Gemini proxy" (`http://localhost:38080/v1`, in the
+  data directory's `.env`); all three tasks on `gemini-3.5-flash-lite`. The
+  house description is thin with that model: switch the *house* task to a
+  stronger model (the proxy lists `gemini-2.5-pro`) in Settings.
+* **House description:** a proposal is waiting in the House tab; nothing has
+  been accepted or archived yet. The owner reviews it, writes notes, accepts.
+* **Next (plan phases):** C deterministic supervision from the audited model's
+  checks with alerts to HA (first rule: EMS-ESP offline / heartbeat missing);
+  then the tool layer, sandbox and agents (`plans/observer_agentic_plan.md`).
+  Copy the old HA InfluxDB year in once (read-only token) before HA's InfluxDB
+  integration is removed.
 
 ## 3. Open issues
 
-1. ~~MPC compute time on the S2~~: measured at the first heating start
-   (2026-11-01): 0.3–0.8 s per plan, well inside the 6 s limit.
-2. **Network latency on the S2**: pings of 0.2–5 s before the memory fixes; not
-   re-measured since.
-3. **One unexplained interrupt-watchdog reset** on the bench, on the first boot
-   of one image; the same image ran cleanly afterwards. No coredump.
-4. **Home Assistant keep-alive**: the three heating switches must repeat their
-   `ON` faster than `demand_timeout_s` (600 s); a missed refresh raises `301`
-   and drops the demand by design. The blueprint
-   `homeassistant/blueprints/automation/heatpumpsn/heating_keepalive.yaml` does
-   this (one automation per switch, e.g. 120 s); install it in HA.
-5. **Per-circuit pump after-run**: the firmware keeps separate timers, the
-   configuration still exposes one `pump_stop_after_heating_s` for all three.
-   Decide whether per-circuit values are needed.
-6. **LED 0 blue for the AP / captive portal** (plan §1.2) is not implemented,
-   although the fallback AP exists.
-7. **v1.x hardware**: schematic open items (ESP32-S3 pin map, TLV9064 bias,
-   mains protection), then PCF8574, ADS1115 and the interlock fault line on real
-   hardware, and the current calibration against a clamp meter.
-8. **Mixer encoder** (`POS_SRC_I2C`) and other reserved I2C peripherals: not
-   implemented; an external encoder over MQTT is used for warnings and resync
-   only.
-9. ~~Watchdog entries in the S2's log~~ (fixed 2026-11-01): two events 1901
-   with "safety 4294967295ms" in 22 h were a race in the health check, not a
-   late task (`now` read before the critical section; T_safety checked in at
-   now + 1). No reset resulted. `lastWatchdog` keeps the last record across
-   resets, so it still shows that one until a new withhold overwrites it.
-10. **EMS-ESP:** loses its MQTT connection when the broker restarts and does
-    not reconnect until EMS-ESP itself is restarted (3.8.4); its bus reports
-    `txerror` (can receive, cannot transmit: check the Tx mode), so it only
-    sees what the boiler broadcasts.
-12. **Boot homing and encoder discovery** (2026-11-01, built and tested on the
-    host harness, **not yet on the S2**): every boot homes the mixer; a stuck
-    encoder is distrusted. The controller never received the MixerMeter
-    encoder because ESPHome's discovery uses `stat_t` (fixed).
-13. **Floor setpoint ownership and MQTT input diagnostics** (2026-11-01,
-    built, **not yet on the S2**): HA's setpoint command is retained and saved
-    as the fallback; Diagnostics shows the last encoder, DHW and setpoint
-    messages. After the update, set the setpoint once in HA so a retained
-    command exists.
-11. **Observer portal has no login.** It listens on `127.0.0.1` only; it needs
-    authentication before it may push controller parameters.
+1. **Network latency on the S2**: pings of 0.2–5 s before the memory fixes;
+   not re-measured since.
+2. **One unexplained interrupt-watchdog reset** on the bench (first boot of one
+   image; the same image ran cleanly afterwards; no coredump).
+3. **Home Assistant keep-alive**: install the blueprint
+   `homeassistant/blueprints/automation/heatpumpsn/heating_keepalive.yaml`, one
+   automation per switch (e.g. 120 s; the controller's timeout is 600 s).
+4. **Per-circuit pump after-run**: separate timers exist, the configuration
+   still has one `pump_stop_after_heating_s`. Decide.
+5. **Mixer position shows negative during the boot homing stroke** (cosmetic;
+   the position is set to 0 when the stroke ends, HA gets 0–100 %). Clamp at 0
+   in a later firmware.
+6. **LED 0 blue for the AP / captive portal** (plan §1.2) not implemented.
+7. **v1.x hardware**: schematic open items, then PCF8574, ADS1115 and the
+   interlock fault line on real hardware, current calibration.
+8. **Mixer encoder over I2C** (`POS_SRC_I2C`) not implemented; the MQTT encoder
+   is used for cross-checks and resync only.
+9. **EMS-ESP**: does not reconnect after a broker restart until restarted
+   (3.8.4); bus `txerror` (receives, cannot transmit: check the Tx mode), so
+   it only sees what the boiler broadcasts.
+10. **Observer portal has no login**; it listens on `127.0.0.1`. Needed before
+    it may approve parameter pushes.
+11. **Git history** still contains the observer `registry.yaml` with this
+    house's sensor ids and room names (before the data directory existed).
+    Not secret; removing it would need a history rewrite.
+12. `lastWatchdog` in `/api/status` keeps the last withhold across resets (the
+    old false alarm until a new one replaces it).
+
+Resolved this session (details in git log): MPC compute time on the S2,
+watchdog race, ΔT-collapse at heating starts, MPC warm-up stall, boot homing
+and stuck encoder, encoder discovery (`stat_t`), setpoint ownership, status
+JSON corruption, observer registry comments, operational data out of git.
 
 ## 4. Repository map
 
@@ -133,18 +189,19 @@ Facts about this board:
 | `HANDOVER.md` | this file |
 | `README.md` | short project overview |
 | `AGENTS.md` | rules for agents: remote agent, bounded serial monitor |
-| `firmware/` | PlatformIO project: controller firmware, portal assets (`data/`), tools (`tools/`) |
+| `firmware/` | PlatformIO project: controller firmware, portal assets (`data/`), tools (`tools/`), host test harness (`test/host/`) |
 | `firmware/docs/` | boards, I/O emulation, predictive mixer, security, partition migration, ESPHome upgrade checklist |
 | `firmware/test/live/` | live checks against a running controller (HPN1 security) |
-| `floor_simulator/` | HIL simulator: plant, boiler, bridges, dashboard, tuning tools, tests |
-| `tests/` | older runtime integration checks against a live controller |
-| `observer/` | the observer: ingest, catalog, registry, InfluxDB storage, web portal, tests |
+| `floor_simulator/` | HIL simulator: plant, boiler, bridges, dashboard, tuning tools, tests (incl. firmware MPC and L2 on the host) |
+| `observer/` | observer code, defaults, tests; **no operational data** |
 | `homeassistant/` | Home Assistant files: heating keep-alive blueprint |
-| `plans/` | system architecture, controller-node layer specs, observer and MQTT designs, schematics |
+| `plans/` | system architecture, controller-node layer specs, observer plans, MQTT design, schematics |
+| `tests/` | older runtime integration checks against a live controller |
 | `analysis/` | old-system telemetry analysis (DuckDB), reports, its own handover |
 
 Not tracked on purpose: `analysis/heatpumps.duckdb`, `analysis/db/`, `others/`,
-`.pio/`, `firmware/include/hpn/credentials_local.h`, secrets.
+`.pio/`, `firmware/include/hpn/credentials_local.h`, the observer data
+directory, secrets.
 
 ## 5. Working on it
 
@@ -152,41 +209,50 @@ Not tracked on purpose: `analysis/heatpumps.duckdb`, `analysis/db/`, `others/`,
 
 | What | Where |
 |---|---|
-| Bench controller (ESP32, `esp32dev_sim_ota`) | `http://localhost:30080` |
-| Live S2 (when forwarded) | `http://localhost:30081` |
+| Live S2 (when the owner forwards it) | `http://localhost:30081` (admin/admin until the passwords are changed) |
+| Bench controller | `http://localhost:30080` (switched off, see §0.2) |
 | MQTT broker (development; home data under `mirror/`) | `localhost:31883` |
 | Observer portal | `http://127.0.0.1:8090/` |
-| Observer InfluxDB (disposable) | `http://localhost:38086`, org `heatpumpsn`, bucket `observer` |
+| Observer InfluxDB | `http://localhost:38086`, org `heatpumpsn`, bucket `observer` (token in the data directory's `.env`) |
+| LLM proxy | `http://localhost:38080/v1` |
 | Serial, flashing over USB | `pio remote …` with an agent running at the board |
 
 `pio remote device monitor` needs a terminal; from a script use
 `timeout 30s script -qfc "pio remote device monitor -b 115200" log.txt`.
 Never run it unbounded. Opening the monitor resets the board.
 
-### 5.2 Builds (`firmware/`)
+### 5.2 Builds and tests
 
 | Environment | Use |
 |---|---|
-| `esp32dev_sim_ota` | Bench: emulated v0.1 board, uploads over HTTP |
 | `esp32s2` | Live board (LOLIN S2 mini, v0.1) |
 | `esp32s2_counter_preset` | One-shot relay counter preset |
 | `esp32s2_password_reset`, `esp32dev_sim_password_reset` | One-shot factory passwords (flash over USB) |
+| `esp32dev_sim_ota` | Bench: emulated v0.1 board, uploads over HTTP |
 | `esp32c3_hhn1x`, `esp32s3_hhn1x`, `esp32dev_hhn1x_sim` | v1.x board |
 | `esp32dev`, `esp32dev_sim` | Boardless / emulated, USB (`esp32dev_sim` is the default) |
 
 ```bash
-pio run -e esp32dev_sim_ota -t upload          # HPN_PORTAL_PASSWORD=<admin password>
-pio run -e esp32dev_sim_ota -t uploadfs
-python3 tools/http_ota.py .pio/build/esp32s2/firmware.bin localhost:30081   # any build, any host
-python3 tools/partition_check.py               # before a migration
-python3 test/live/security_check.py            # needs factory passwords
+cd firmware
+pio run -e esp32s2                                    # build; all environments build without warnings
+pio run -e esp32s2 -t buildfs                         # portal files image
+# upload to the S2 only after the owner's "go":
+HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/firmware.bin localhost:30081
+HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/littlefs.bin localhost:30081
+
+cd ../floor_simulator && .venv/bin/python -m pytest -q     # incl. firmware MPC + L2 on the host
+cd ../observer && .venv/bin/python -m pytest -q
 ```
 
-All environments build without warnings; keep it that way (`-Wall -Wextra` on
-project sources). Factory credentials are set at build time in the git-ignored
-`include/hpn/credentials_local.h` (see the `.example`). After editing
-`data/`, regenerate the `.gz` copies (`gzip -9 -n -k -f <file>`): the
-filesystem image carries only those.
+Firmware changes to L2 or the MPC core are checked on the host:
+`firmware/test/host/l2_harness.cpp` (via `floor_simulator/tests/test_fw_l2.py`)
+and the simulator's closed loop with the firmware MPC (`test_fw_mpc.py`,
+`floor_simulator/tools/mixer_tuning_sim.py`, preset `cold_slab_start` for heating
+starts). Factory credentials are set at build time in the git-ignored
+`include/hpn/credentials_local.h`. After editing `firmware/data/`, regenerate
+the `.gz` copies (`gzip -9 -n -k -f <file>`): the filesystem image carries
+only those. Observations of the plant are best checked against the observer's
+InfluxDB (it recorded the heating start that revealed the MPC warm-up stall).
 
 ## 6. Architecture in ten minutes
 

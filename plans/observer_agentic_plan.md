@@ -47,11 +47,12 @@ audited description, and data summaries (value ranges, update rates).
 
 1. The owner reads the proposed description, edits it directly if needed, and
    writes **review notes** (corrections, missing facts, answers to the
-   questions). The notes are always open and kept in git (`observer/house/notes.md`).
+   questions). The notes are always open and kept with the house's operational data
+   (`<OBSERVER_HOME>/house/notes.md`, outside git).
 2. Regenerating uses the notes and the previous audited version, so knowledge
    accumulates instead of being lost.
 3. **Accepting** makes the proposal the audited version and archives it
-   (`observer/house/archive/<timestamp>/`, with the notes at that moment).
+   (`<OBSERVER_HOME>/house/archive/<timestamp>/`, with the notes at that moment).
    Analysis and agents always read the latest audited version.
 
 ## 3. Tools
@@ -123,8 +124,8 @@ optimisation.
   can be **shared between houses**; each house maps them through its own
   audited model.
 * Repository layout (planned): `observer/skills/<name>/` (recipe, tools,
-  tests), `observer/house/` (house-specific description, model, notes,
-  archive).
+  tests) in git; house-specific description, model, notes and archive in
+  `<OBSERVER_HOME>/house/`, never in git.
 
 ## 7. Phases
 
