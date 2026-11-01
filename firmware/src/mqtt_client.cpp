@@ -542,9 +542,9 @@ void publish_setpoint_number() {
   add_entity(entity, "Floor setpoint", "floor_setpoint");
   entity["state_topic"] = String(g_base_topic) + "/state/floor_setpoint";
   entity["command_topic"] = String(g_base_topic) + "/cmd/floor_setpoint";
-  entity["min"] = 5.0f;
-  entity["max"] = 80.0f;
-  entity["step"] = 0.5f;
+  entity["min"] = kFloorSetpointMinC;
+  entity["max"] = kFloorSetpointMaxC;
+  entity["step"] = kFloorSetpointStepC;
   entity["unit_of_measurement"] = "°C";
   entity["mode"] = "box";
   entity["icon"] = "mdi:thermostat";
@@ -834,12 +834,14 @@ void handle_command(const char* topic, const char* value) {
 
   if (strcmp(suffix, "cmd/floor_setpoint") == 0) {
     char* end = nullptr;
-    const float value_c = strtof(value, &end);
-    if (end == value || *end != '\0' || !isfinite(value_c) || value_c < 5.0f ||
-        value_c > 80.0f) {
+    const float raw_c = strtof(value, &end);
+    if (end == value || *end != '\0' || !isfinite(raw_c) || raw_c < kFloorSetpointMinC ||
+        raw_c > kFloorSetpointMaxC) {
       web::log_event(1, 1804, "MQTT setpoint rejected: out of range");
       return;
     }
+    // Snap to the 0.5 K grid HA offers.
+    const float value_c = roundf(raw_c / kFloorSetpointStepC) * kFloorSetpointStepC;
     note_input(g_in_setpoint, value);
     if (config_mutable().floor_setpoint_shadow != value_c) {
       config_mutable().floor_setpoint_shadow = value_c;

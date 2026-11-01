@@ -30,6 +30,11 @@ enum CurrentSense : uint8_t {
   CURRENT_SENSE_ADS1115 = 2,
 };
 
+// Floor setpoint range accepted from HA, the portal and the saved fallback.
+constexpr float kFloorSetpointMinC = 15.0f;
+constexpr float kFloorSetpointMaxC = 50.0f;
+constexpr float kFloorSetpointStepC = 0.5f;
+
 // Canonical configuration contract.
 //
 // Source of truth: plans/controller node/01_config_and_contracts.md (§1).

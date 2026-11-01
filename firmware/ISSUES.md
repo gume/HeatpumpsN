@@ -7,36 +7,13 @@ the owner's "go", bench off.
 
 ## To do
 
-### F1. Floor setpoint input: 15–50 °C in 0.5 steps
+Nothing open in this group. Done, awaiting upload to the S2:
 
-HA shows the floor setpoint number with min 5, max 80, step 0.5. Restrict it
-to **15–50 °C, step 0.5**.
-
-* HA discovery: `publish_setpoint_number()` in `src/mqtt_client.cpp`
-  (`min`, `max`; `step` is already 0.5).
-* The command check for `cmd/floor_setpoint` in the same file accepts
-  5–80 °C (event 1804 on rejection): use the same limits, ideally from one
-  constant, and decide whether a value off the 0.5 grid is rounded or rejected.
-* Check the portal/config for the fallback (`floor_setpoint_shadow`,
-  `setpoint_default` in `src/config.cpp`) so a saved value outside the range
-  cannot be used (clamp on load).
-* HA keeps the retained command: a value outside the new range already on the
-  broker is then rejected after the upgrade; mention it when deploying.
-
-### F2. Mixer relays show 0 h runtime in Diagnostics → Relays
-
-The open/close relays of the mixer always show 0 h, while the pumps and the
-heater accumulate runtime. Cause found in the code: `update_counters()` in
-`src/web_portal.cpp` adds runtime only for the heater and the three pumps;
-`update_mixer_counters_locked()` counts only cycles (from
-`l0::mixer_relay_ops()`), never on-time.
-
-* Mixer pulses are often shorter than a second, so the pumps' whole-second
-  accounting on a sampled state would miss them: accumulate milliseconds of
-  motor-on time per direction, best in L0 next to the relay operation counter
-  (it sees every edge), and add whole seconds to `runtime_s`.
-* Check that the UI shows hours with enough precision (or minutes) for the
-  mixer, and that the NVS counter blob format does not change (no migration).
+* F1 floor setpoint 15–50 °C, 0.5 K grid (HA discovery, MQTT command snapped
+  to 0.5, portal default, saved values clamped on load);
+* F2 mixer relay runtime (energized time from L0, the running segment
+  included; on v0.1 the direction relay stays on after an open move, so its
+  runtime is the coil's energized time, not only motor time).
 
 ## Known issues and later work
 

@@ -1949,7 +1949,7 @@ function renderSettingsControl() {
         <div class="form-section">
           <h3>Mixer and control constants</h3>
           <div class="form-grid">
-            ${fieldRange('setpoint_default', 'Default setpoint', cfg.setpoint_default, 5, 80, 0.5, '°C', 'Fallback setpoint before HA supplies one.')}
+            ${fieldRange('setpoint_default', 'Default setpoint', cfg.setpoint_default, 15, 50, 0.5, '°C', 'Fallback setpoint before HA supplies one.')}
             ${fieldRange('deadband_pos', 'Position deadband', cfg.deadband_pos, 0, 0.2, 0.005, '0–1', 'Mixer position deadband.')}
             ${fieldRange('deadband_temp', 'Temperature deadband', cfg.deadband_temp, 0.1, 5, 0.1, 'K', 'Temperature deadband around the setpoint.')}
             ${fieldRange('recalc_threshold', 'Recalculation threshold', cfg.recalc_threshold, 0.01, 1, 0.01, 'K', 'Minimum temperature change before recalculating.')}

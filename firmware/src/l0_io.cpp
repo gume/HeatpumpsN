@@ -335,18 +335,39 @@ void begin(const Config& config, const BoardConfig& board) {
 // Written by T_safety only (set_mixer_motor, apply_safe_state); read by the portal.
 volatile bool g_mix_relay_on[2] = {false, false};
 volatile uint32_t g_mix_relay_ops[2] = {0, 0};
+// On-time: finished segments plus the start of the running one (millis).
+uint64_t g_mix_relay_on_ms[2] = {0, 0};
+uint32_t g_mix_relay_since_ms[2] = {0, 0};
+portMUX_TYPE g_mix_relay_mux = portMUX_INITIALIZER_UNLOCKED;
 
 void note_mixer_relays(bool first, bool second) {
   const bool on[2] = {first, second};
+  taskENTER_CRITICAL(&g_mix_relay_mux);
+  const uint32_t now = millis();
   for (int i = 0; i < 2; ++i) {
-    if (on[i] && !g_mix_relay_on[i]) g_mix_relay_ops[i] = g_mix_relay_ops[i] + 1;
+    if (on[i] && !g_mix_relay_on[i]) {
+      g_mix_relay_ops[i] = g_mix_relay_ops[i] + 1;
+      g_mix_relay_since_ms[i] = now;
+    } else if (!on[i] && g_mix_relay_on[i]) {
+      g_mix_relay_on_ms[i] += now - g_mix_relay_since_ms[i];
+    }
     g_mix_relay_on[i] = on[i];
   }
+  taskEXIT_CRITICAL(&g_mix_relay_mux);
 }
 
 void mixer_relay_ops(uint32_t ops[2]) {
   ops[0] = g_mix_relay_ops[0];
   ops[1] = g_mix_relay_ops[1];
+}
+
+void mixer_relay_on_ms(uint64_t on_ms[2]) {
+  taskENTER_CRITICAL(&g_mix_relay_mux);
+  const uint32_t now = millis();
+  for (int i = 0; i < 2; ++i) {
+    on_ms[i] = g_mix_relay_on_ms[i] + (g_mix_relay_on[i] ? now - g_mix_relay_since_ms[i] : 0);
+  }
+  taskEXIT_CRITICAL(&g_mix_relay_mux);
 }
 
 void apply_safe_state() {

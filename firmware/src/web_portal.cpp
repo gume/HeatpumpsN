@@ -1116,7 +1116,7 @@ bool apply_safety(JsonObject in, Config& c, String& err) {
 }
 
 bool apply_hardware(JsonObject in, Config& c, String& err) {
-  if (!json_float(in, "setpoint_default", c.setpoint_default, 5.0f, 80.0f, err)) return false;
+  if (!json_float(in, "setpoint_default", c.setpoint_default, kFloorSetpointMinC, kFloorSetpointMaxC, err)) return false;
   if (!json_float(in, "deadband_pos", c.deadband_pos, 0.0f, 0.2f, err)) return false;
   if (!json_float(in, "deadband_temp", c.deadband_temp, 0.1f, 5.0f, err)) return false;
   if (!json_uint(in, "travel_time_ms", c.travel_time_ms, 1000, 600000, err)) return false;
@@ -1618,17 +1618,33 @@ void update_counter_locked(CounterId id, bool on, uint32_t now_ms) {
 }
 
 // Mixer relays: operations counted by L0 at the output (see mixer_relay_ops).
+// Runtime from L0's energized time; sub-second pulses carry over in ms.
 uint32_t g_mix_ops_seen[2] = {0, 0};
+uint64_t g_mix_on_ms_seen[2] = {0, 0};
+uint32_t g_mix_on_ms_rest[2] = {0, 0};
 bool g_mix_ops_primed = false;
 
 void update_mixer_counters_locked(uint32_t now_ms) {
   uint32_t ops[2];
+  uint64_t on_ms[2];
   l0::mixer_relay_ops(ops);
+  l0::mixer_relay_on_ms(on_ms);
   if (!g_mix_ops_primed) {
-    g_mix_ops_seen[0] = ops[0];
-    g_mix_ops_seen[1] = ops[1];
+    for (int i = 0; i < 2; ++i) {
+      g_mix_ops_seen[i] = ops[i];
+      g_mix_on_ms_seen[i] = on_ms[i];
+    }
     g_mix_ops_primed = true;
     return;
+  }
+  for (int i = 0; i < 2; ++i) {
+    g_mix_on_ms_rest[i] += static_cast<uint32_t>(on_ms[i] - g_mix_on_ms_seen[i]);
+    g_mix_on_ms_seen[i] = on_ms[i];
+    if (g_mix_on_ms_rest[i] >= 1000) {
+      g_counters[CTR_MIX_OPEN + i].runtime_s += g_mix_on_ms_rest[i] / 1000;
+      g_mix_on_ms_rest[i] %= 1000;
+      g_counters_dirty = true;
+    }
   }
   for (int i = 0; i < 2; ++i) {
     const uint32_t delta = ops[i] - g_mix_ops_seen[i];

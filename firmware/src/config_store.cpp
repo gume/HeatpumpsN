@@ -68,7 +68,16 @@ void sanitize_optional_output_bit(uint8_t& bit) {
   if (bit != HPN_GPIO_UNASSIGNED && bit > 7) bit = HPN_GPIO_UNASSIGNED;
 }
 
+float clamp_setpoint(float value_c) {
+  if (!isfinite(value_c)) return 35.0f;
+  if (value_c < kFloorSetpointMinC) return kFloorSetpointMinC;
+  if (value_c > kFloorSetpointMaxC) return kFloorSetpointMaxC;
+  return value_c;
+}
+
 void sanitize_config(Config& config) {
+  config.setpoint_default = clamp_setpoint(config.setpoint_default);
+  config.floor_setpoint_shadow = clamp_setpoint(config.floor_setpoint_shadow);
   if (config.mix_max_open_pct < 10 || config.mix_max_open_pct > 100) {
     config.mix_max_open_pct = 85;
   }

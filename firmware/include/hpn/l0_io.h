@@ -28,6 +28,9 @@ void set_mixer_motor(bool enabled, bool open_direction);
 // Switch-ons of the two mixer relays since boot (open/close on v1.x,
 // direction/motion on v0.1). Any task.
 void mixer_relay_ops(uint32_t ops[2]);
+// Energized time of the two mixer relays since boot in ms, the running
+// segment included. Any task.
+void mixer_relay_on_ms(uint64_t on_ms[2]);
 
 // Addressable LED chain. rgb is count * 3 bytes in logical RGB order.
 void set_leds(const uint8_t* rgb, uint16_t count);
