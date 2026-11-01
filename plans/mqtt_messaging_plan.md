@@ -92,7 +92,7 @@ Discovery topics follow the format: `homeassistant/<component>/<node_id>/<object
 | `sensor` | `temp_boiler` | Boiler supply temperature | `<base>/state/temp_boiler` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `sensor` | `temp_return` | Floor return temperature | `<base>/state/temp_return` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
 | `sensor` | `temp_mix` | Mixer forward temperature | `<base>/state/temp_mix` | — | `device_class: temperature`, unit: `°C`, precision: 1. |
-| `number` | `floor_setpoint` | Floor setpoint | `<base>/state/floor_setpoint` | `<base>/cmd/floor_setpoint`| Range: 5.0–80.0 °C, step: 0.5 °C, mode: `box`, unit: `°C`. |
+| `number` | `floor_setpoint` | Floor setpoint | `<base>/state/floor_setpoint` | `<base>/cmd/floor_setpoint`| Range: 5.0–80.0 °C, step: 0.5 °C, mode: `box`, unit: `°C`, `retain: true` (HA publishes the command retained, so the controller gets HA's value after every reconnect; HA owns the setpoint). |
 | `sensor` | `system_error_code` | System error code | `<base>/state/system_error_code` | — | Diagnostic text sensor. Numeric standardized code; `0` means no error. Published only when the diagnostic posture changes. |
 | `sensor` | `system_error_text` | System error text | `<base>/state/system_error_text` | — | Diagnostic text sensor. Human-readable code name plus active warning/alarm flags; `No error` when healthy. |
 | `sensor` | `wifi_ip` | Wi-Fi IP address | `<base>/state/wifi_ip` | — | Diagnostic text sensor. |

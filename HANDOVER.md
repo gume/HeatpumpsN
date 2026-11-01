@@ -118,6 +118,11 @@ Facts about this board:
     host harness, **not yet on the S2**): every boot homes the mixer; a stuck
     encoder is distrusted. The controller never received the MixerMeter
     encoder because ESPHome's discovery uses `stat_t` (fixed).
+13. **Floor setpoint ownership and MQTT input diagnostics** (2026-11-01,
+    built, **not yet on the S2**): HA's setpoint command is retained and saved
+    as the fallback; Diagnostics shows the last encoder, DHW and setpoint
+    messages. After the update, set the setpoint once in HA so a retained
+    command exists.
 11. **Observer portal has no login.** It listens on `127.0.0.1` only; it needs
     authentication before it may push controller parameters.
 

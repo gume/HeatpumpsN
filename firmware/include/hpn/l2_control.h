@@ -11,5 +11,9 @@ namespace l2 {
 void begin(const Config& config, SystemState& state);
 void tick(const Config& config, SystemState& state);
 
+// False while the encoder contradicted the last homing (see the boot homing);
+// it is then never used to resync the mixer position.
+bool encoder_trusted();
+
 }  // namespace l2
 }  // namespace hpn

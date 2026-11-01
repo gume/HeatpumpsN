@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ArduinoJson.h>
+
 #include <stdint.h>
 
 #include "hpn/config.h"
@@ -42,6 +44,10 @@ const Status& status();
 // Queue a test publication. The next MQTT tick publishes it (or it is sent as
 // soon as the broker becomes reachable).
 void request_test();
+
+// The last encoder, DHW meter and floor-setpoint messages (topic, payload,
+// age, count) for the diagnostics page. Any task.
+void inputs_json(JsonObject out);
 
 }  // namespace mqtt
 }  // namespace hpn

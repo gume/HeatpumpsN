@@ -10,6 +10,8 @@
 
 #include "hpn/board.h"
 #include "hpn/build_target.h"
+#include "hpn/config_store.h"
+#include "hpn/l2_control.h"
 #include "hpn/logger.h"
 #include "hpn/mpc.h"
 #include "hpn/state.h"
@@ -42,6 +44,33 @@ char g_mixer_config_topic[128] = {};
 char g_mixer_state_topic[96] = {};
 char g_dhw_config_topic[128] = {};
 char g_dhw_state_topic[96] = {};
+
+// What arrived last on the MQTT inputs, for the diagnostics page. Written by
+// T_comms, read by the web task under the mux.
+struct InputSeen {
+  uint32_t last_ms;
+  uint32_t count;
+  char payload[40];
+};
+portMUX_TYPE g_inputs_mux = portMUX_INITIALIZER_UNLOCKED;
+InputSeen g_in_encoder{};
+InputSeen g_in_dhw{};
+InputSeen g_in_setpoint{};
+
+void note_input(InputSeen& in, const char* payload) {
+  taskENTER_CRITICAL(&g_inputs_mux);
+  in.last_ms = millis();
+  in.count++;
+  snprintf(in.payload, sizeof(in.payload), "%s", payload);
+  taskEXIT_CRITICAL(&g_inputs_mux);
+}
+
+// HA owns the floor setpoint; the controller keeps a saved copy as the
+// fallback. A new value is saved once it has been stable for a minute, so a
+// chatty automation cannot wear the flash.
+constexpr uint32_t kSetpointSaveDelayMs = 60000u;
+bool g_setpoint_save_pending = false;
+uint32_t g_setpoint_changed_ms = 0;
 char g_meter_signature[512] = {};
 char g_mqtt_payload[kMqttBufferSize] = {};
 char g_mac_hex[16] = "000000000000";
@@ -518,6 +547,9 @@ void publish_setpoint_number() {
   entity["unit_of_measurement"] = "°C";
   entity["mode"] = "box";
   entity["icon"] = "mdi:thermostat";
+  // HA publishes the setpoint retained, so the broker hands HA's last value
+  // to the controller after every reconnect or reboot: HA stays the owner.
+  entity["retain"] = true;
   publish_config("number", "floor_setpoint", doc);
 }
 
@@ -807,7 +839,12 @@ void handle_command(const char* topic, const char* value) {
       web::log_event(1, 1804, "MQTT setpoint rejected: out of range");
       return;
     }
-    config_mutable().floor_setpoint_shadow = value_c;
+    note_input(g_in_setpoint, value);
+    if (config_mutable().floor_setpoint_shadow != value_c) {
+      config_mutable().floor_setpoint_shadow = value_c;
+      g_setpoint_save_pending = true;
+      g_setpoint_changed_ms = millis();
+    }
     char detail[80];
     snprintf(detail, sizeof(detail), "MQTT floor setpoint = %.1f C",
              static_cast<double>(value_c));
@@ -954,6 +991,7 @@ void handle_meter_message(const char* topic, const char* payload) {
   }
 
   if (g_mixer_state_topic[0] != '\0' && strcmp(topic, g_mixer_state_topic) == 0) {
+    note_input(g_in_encoder, payload);
     float value = 0.0f;
     if (!parse_float_payload(payload, value)) {
       return;
@@ -970,6 +1008,7 @@ void handle_meter_message(const char* topic, const char* payload) {
   }
 
   if (g_dhw_state_topic[0] != '\0' && strcmp(topic, g_dhw_state_topic) == 0) {
+    note_input(g_in_dhw, payload);
     bool active = false;
     char value[32];
     if (extract_payload_field(payload, g_config->dhw_meter_field, value, sizeof(value))) {
@@ -1256,6 +1295,13 @@ void tick(const Config& config, SystemState& state) {
   g_config = &config;
   g_state = &state;
 
+  if (g_setpoint_save_pending && millis() - g_setpoint_changed_ms >= kSetpointSaveDelayMs) {
+    g_setpoint_save_pending = false;
+    if (config_save(config_mutable())) {
+      web::log_event(0, 1809, "Floor setpoint from HA saved as the fallback");
+    }
+  }
+
   g_status.enabled = config.mqtt_host[0] != '\0';
   refresh_broker_config(config);
   refresh_meter_config(config);
@@ -1319,6 +1365,50 @@ void tick(const Config& config, SystemState& state) {
 const Status& status() { return g_status; }
 
 void request_test() { g_test_requested = true; }
+
+}  // namespace mqtt
+}  // namespace hpn
+
+namespace hpn {
+namespace mqtt {
+
+void inputs_json(JsonObject out) {
+  struct Row {
+    const char* key;
+    const char* topic;
+    InputSeen seen;
+  };
+  Row rows[3] = {{"encoder", g_mixer_state_topic, {}}, {"dhw", g_dhw_state_topic, {}},
+                 {"setpoint", nullptr, {}}};
+  taskENTER_CRITICAL(&g_inputs_mux);
+  rows[0].seen = g_in_encoder;
+  rows[1].seen = g_in_dhw;
+  rows[2].seen = g_in_setpoint;
+  taskEXIT_CRITICAL(&g_inputs_mux);
+  const uint32_t now = millis();
+  char setpoint_topic[96];
+  make_topic(setpoint_topic, sizeof(setpoint_topic), "cmd/floor_setpoint");
+  rows[2].topic = setpoint_topic;
+  for (const Row& row : rows) {
+    JsonObject o = out[row.key].to<JsonObject>();
+    o["topic"] = row.topic[0] != '\0' ? row.topic : "(not resolved)";
+    o["count"] = row.seen.count;
+    if (row.seen.count > 0) {
+      o["payload"] = row.seen.payload;
+      o["ageS"] = (now - row.seen.last_ms) / 1000u;
+    }
+  }
+  if (g_state != nullptr) {
+    out["encoder"]["position"] = g_state->pos_encoder * 100.0f;
+    out["encoder"]["valid"] = g_state->pos_encoder_valid;
+  }
+  out["encoder"]["trusted"] = l2::encoder_trusted();
+  if (g_state != nullptr) out["dhw"]["active"] = g_state->dhw_meter_active;
+  if (g_config != nullptr) {
+    out["setpoint"]["value"] = g_config->floor_setpoint_shadow;
+    out["setpoint"]["savePending"] = g_setpoint_save_pending;
+  }
+}
 
 }  // namespace mqtt
 }  // namespace hpn

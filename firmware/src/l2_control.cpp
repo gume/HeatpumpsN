@@ -389,6 +389,12 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   state.mix_target_pos = clampf(target, 0.0f, ceiling);
 }
 
+}  // namespace
+
+bool encoder_trusted() { return !g_encoder_distrusted; }
+
+namespace {
+
 // True while the boot homing owns the valve.
 bool service_boot_sync(const Config& config, SystemState& state, uint32_t now_ms) {
   switch (g_boot_sync) {

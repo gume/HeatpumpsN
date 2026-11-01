@@ -3309,6 +3309,7 @@ void handle_status(AsyncWebServerRequest* request) {
   doc["cpuTotalDelta"] = g_cpu_total_delta;
   doc["cpuIdleDelta"] = g_cpu_idle_delta;
   doc["resetReason"] = reset_reason_name();
+  mqtt::inputs_json(doc["mqttInputs"].to<JsonObject>());
   tasks::WatchdogInfo wd{};
   if (tasks::last_watchdog(&wd)) {
     JsonObject w = doc["lastWatchdog"].to<JsonObject>();

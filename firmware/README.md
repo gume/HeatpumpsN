@@ -171,6 +171,19 @@ derived from the Wi-Fi MAC address.
 | `sensor` | Wi-Fi signal, dBm (diagnostic) | `state/wifi_rssi` | — |
 | `sensor` | Wi-Fi network / SSID (diagnostic) | `state/wifi_ssid` | — |
 
+**Floor setpoint ownership.** Home Assistant owns the floor setpoint. The
+discovery config asks HA to publish `cmd/floor_setpoint` **retained**, so the
+broker hands HA's last value to the controller after every reconnect or
+reboot. The controller also saves the received value as its fallback once it
+has been stable for a minute (event 1809), for a boot without MQTT. Before
+this, the value lived only in RAM and every reboot fell back to the stored
+35 °C, which HA then showed as if the controller had overwritten it.
+
+**Diagnostics → MQTT inputs** shows, for the mixer encoder, the DHW meter and
+the floor setpoint, the resolved topic, the last payload, when it arrived and
+how many messages came; the encoder row also shows whether the encoder is
+trusted.
+
 The three switches are the only HA command path for heating. Their state
 topics carry the **effective per-circuit demand** after the keep-alive check;
 the four binary sensors carry the true L1/L0 physical output state. There are

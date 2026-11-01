@@ -1067,9 +1067,38 @@ function renderPowerMeters() {
   </section>`;
 }
 
+function renderMqttInputs() {
+  const inputs = state.status?.mqttInputs;
+  if (!inputs) return '';
+  const row = (label, x, extra) => `<tr>
+      <td>${esc(label)}</td>
+      <td class="mono">${esc(x.topic || '')}</td>
+      <td class="mono">${x.count ? esc(x.payload ?? '') : '—'}</td>
+      <td class="${x.count && x.ageS > 900 ? 'warn' : ''}">${x.count ? esc(fmtAge(x.ageS)) : 'never'}</td>
+      <td class="num">${esc(x.count ?? 0)}</td>
+      <td>${extra}</td></tr>`;
+  const enc = inputs.encoder || {}, dhw = inputs.dhw || {}, sp = inputs.setpoint || {};
+  const encNote = enc.valid
+    ? `${fmtNum(enc.position, 1)} % · ${enc.trusted ? '<span class="ok">trusted</span>' : '<span class="warn">not trusted (disagreed after homing)</span>'}`
+    : '<span class="faint">no valid value</span>';
+  const dhwNote = dhw.count ? (dhw.active ? 'DHW active' : 'DHW off') : '';
+  const spNote = `${fmtNum(sp.value, 1)} °C in use${sp.savePending ? ' · saving in ≤1 min' : ''}`;
+  return `<section class="card">
+      <div class="card-head"><div><h2>MQTT inputs</h2><p>Last message received on each input, for checking that the HA side works</p></div></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Input</th><th>Topic</th><th>Last payload</th><th>Received</th><th class="num">Count</th><th></th></tr></thead>
+        <tbody>
+          ${row('Mixer encoder', enc, encNote)}
+          ${row('DHW meter', dhw, dhwNote)}
+          ${row('Floor setpoint (HA)', sp, spNote)}
+        </tbody></table></div>
+    </section>`;
+}
+
 function renderDiagnostics() {
   return `<div class="stack">
     ${renderConnectivity()}
+    ${renderMqttInputs()}
     ${renderControllerInfo()}
     ${renderSensors()}
     ${renderPowerMeters()}
