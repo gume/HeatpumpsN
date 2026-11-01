@@ -8,15 +8,17 @@ The design is documented in [`plans/`](plans/). Start with
 [`plans/controller node/00_index_and_architecture.md`](plans/controller%20node/00_index_and_architecture.md)
 for the firmware layers.
 
-> **Continuing the project?** Read [`HANDOVER.md`](HANDOVER.md) first: system
-> overview, current state and open issues, access and workflow, a ten-minute
-> architecture briefing and the gotchas.
+> **Continuing the project?** Each part has its own handover and issue list:
+> the controller in [`firmware/HANDOVER.md`](firmware/HANDOVER.md) and
+> [`firmware/ISSUES.md`](firmware/ISSUES.md) (with the simulator and the Home
+> Assistant side), the observer in [`observer/HANDOVER.md`](observer/HANDOVER.md)
+> and [`observer/ISSUES.md`](observer/ISSUES.md), the old-system analysis in
+> [`analysis/handover.md`](analysis/handover.md).
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `HANDOVER.md` | Project handover: state, open issues, access, workflow, architecture |
 | `firmware/` | PlatformIO firmware project (ESP32 family) |
 | `floor_simulator/` | Hardware-in-the-loop floor-heating simulator |
 | `observer/` | Observer: MQTT ingest, signal registry, InfluxDB storage, web portal |

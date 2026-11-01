@@ -1,7 +1,7 @@
 # HeatpumpsN firmware
 
-> **Project handover:** start at [`../HANDOVER.md`](../HANDOVER.md) for current
-> state, open issues, access, workflow and architecture.
+> **Handover:** start at [`HANDOVER.md`](HANDOVER.md) for current state, access,
+> workflow and architecture; open work is in [`ISSUES.md`](ISSUES.md).
 
 PlatformIO project for the ESP32 controller node. It currently implements a
 FreeRTOS task set, the boot-safe **L0** output layer, a board abstraction for
