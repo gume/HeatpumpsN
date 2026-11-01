@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import httpx
 
@@ -46,13 +47,25 @@ class LlmClient:
         key = os.environ.get(cfg.get("api_key_env", ""), "") or None
         return cls(cfg["base_url"], cfg["model"], key, float(cfg.get("timeout_s", 120)))
 
-    def chat(self, system: str, user: str) -> str:
+    RETRY_STATUS = (429, 500, 502, 503, 504)
+
+    def chat(self, system: str, user: str, attempts: int = 3) -> str:
+        """One chat completion; transient errors (overload, rate limit) are retried."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         body = {"model": self.model, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers, timeout=self.timeout_s)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        for attempt in range(attempts):
+            try:
+                r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
+                               timeout=self.timeout_s)
+                if r.status_code not in self.RETRY_STATUS or attempt == attempts - 1:
+                    r.raise_for_status()
+                    return r.json()["choices"][0]["message"]["content"]
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt == attempts - 1:
+                    raise
+            time.sleep(10 * (attempt + 1))
+        raise RuntimeError("unreachable")
 
 
 def build_request(signals: dict[str, dict], context: str, known: dict[str, dict]) -> str:
