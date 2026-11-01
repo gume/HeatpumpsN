@@ -55,31 +55,58 @@ class Ingest:
             self.stored += 1
 
 
-def run_mqtt(ingest: Ingest, host: str, port: int, subscribe: list[str], username: str | None = None,
-             password: str | None = None, duration_s: float | None = None, on_tick=None) -> None:
-    """Connect, subscribe and feed the ingest until duration_s passes (None: forever)."""
-    import paho.mqtt.client as mqtt
+class MqttRunner:
+    """Background MQTT connection feeding `handler(topic, payload, retained)`."""
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"hpn-observer-{int(time.time())}")
-    if username:
-        client.username_pw_set(username, password)
+    def __init__(self, handler, host: str, port: int, subscribe: list[str], username: str | None = None,
+                 password: str | None = None):
+        import paho.mqtt.client as mqtt
 
-    def on_connect(cl, userdata, flags, reason, props):
-        log.info("MQTT connected to %s:%s (%s)", host, port, reason)
-        for pattern in subscribe:
+        self.host, self.port, self.subscribe = host, port, subscribe
+        self.connected = False
+        self.messages = 0
+        self.last_message: float | None = None
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"hpn-observer-{int(time.time())}")
+        if username:
+            self.client.username_pw_set(username, password)
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        self.client.on_message = self._on_message
+        self.client.reconnect_delay_set(min_delay=1, max_delay=60)
+        self._handler = handler
+
+    def _on_connect(self, cl, userdata, flags, reason, props):
+        self.connected = not reason.is_failure
+        log.info("MQTT connected to %s:%s (%s)", self.host, self.port, reason)
+        for pattern in self.subscribe:
             cl.subscribe(pattern, qos=0)
 
-    def on_message(cl, userdata, msg):
+    def _on_disconnect(self, cl, userdata, flags, reason, props):
+        self.connected = False
+        log.warning("MQTT disconnected (%s)", reason)
+
+    def _on_message(self, cl, userdata, msg):
+        self.messages += 1
+        self.last_message = time.time()
         try:
-            ingest.handle(msg.topic, msg.payload, msg.retain)
+            self._handler(msg.topic, msg.payload, msg.retain)
         except Exception:  # one bad message must not stop the ingest
             log.exception("message on %s failed", msg.topic)
 
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.reconnect_delay_set(min_delay=1, max_delay=60)
-    client.connect_async(host, port, keepalive=60)
-    client.loop_start()
+    def start(self) -> None:
+        self.client.connect_async(self.host, self.port, keepalive=60)
+        self.client.loop_start()
+
+    def stop(self) -> None:
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
+def run_mqtt(ingest: Ingest, host: str, port: int, subscribe: list[str], username: str | None = None,
+             password: str | None = None, duration_s: float | None = None, on_tick=None) -> None:
+    """Feed the ingest until duration_s passes (None: forever)."""
+    runner = MqttRunner(ingest.handle, host, port, subscribe, username, password)
+    runner.start()
     started = time.time()
     try:
         while duration_s is None or time.time() - started < duration_s:
@@ -87,5 +114,4 @@ def run_mqtt(ingest: Ingest, host: str, port: int, subscribe: list[str], usernam
             if on_tick:
                 on_tick()
     finally:
-        client.loop_stop()
-        client.disconnect()
+        runner.stop()

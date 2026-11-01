@@ -17,6 +17,10 @@ influx:
   bucket: observer
   token_env: INFLUX_TOKEN
 
+web:
+  host: 127.0.0.1         # 0.0.0.0 to reach the portal from other machines (no login yet)
+  port: 8090
+
 paths:
   catalog: data/catalog.json
   registry: registry.yaml

@@ -1,5 +1,6 @@
 """Command line: observer <command> [--config config.yaml]
 
+  serve    [--dry-run] [--host H] [--port P]   ingest + web portal (http://H:P/), the normal way to run it
   listen   [--seconds N]   collect for N s (default 120): update the catalog, store nothing
   catalog  [--unregistered] [--source PREFIX]   show the inventory and how each signal is handled
   run      [--dry-run]     ingest continuously and store into InfluxDB
@@ -105,6 +106,34 @@ def cmd_run(cfg: dict, args) -> None:
         writer.close()
 
 
+def _writer(cfg: dict, dry_run: bool):
+    if dry_run:
+        return MemoryWriter(), "dry-run"
+    i = cfg.get("influx", {})
+    token = os.environ.get(i.get("token_env", "INFLUX_TOKEN"))
+    if not token:
+        sys.exit(f"InfluxDB token missing: set {i.get('token_env', 'INFLUX_TOKEN')} (or use --dry-run)")
+    return InfluxWriter(i["url"], token, i["org"], i["bucket"]), "influx"
+
+
+def cmd_serve(cfg: dict, args) -> None:
+    import uvicorn
+
+    from .service import Service
+    from .web import create_app
+
+    writer, kind = _writer(cfg, args.dry_run)
+    service = Service(cfg, writer, kind)
+    service.start(_mqtt_args(cfg))
+    web = cfg.get("web", {})
+    host, port = args.host or web.get("host", "127.0.0.1"), args.port or int(web.get("port", 8090))
+    log.info("portal on http://%s:%s/", host, port)
+    try:
+        uvicorn.run(create_app(service), host=host, port=port, log_level="warning")
+    finally:
+        service.stop()
+
+
 def cmd_propose(cfg: dict, args) -> None:
     from .llm import LlmClient, propose
 
@@ -147,6 +176,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", default=os.environ.get("OBSERVER_CONFIG", "config.yaml"))
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("serve")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--host", default=None)
+    p.add_argument("--port", type=int, default=None)
     p = sub.add_parser("listen")
     p.add_argument("--seconds", type=float, default=120)
     p = sub.add_parser("catalog")
@@ -164,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = load_config(args.config)
-    {"listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
+    {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
      "accept": cmd_accept}[args.command](cfg, args)
 
 

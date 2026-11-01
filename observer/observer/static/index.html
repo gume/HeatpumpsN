@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HeatpumpsN Observer</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #141d29; --panel-2: #1a2634; --line: #27374a; --line-soft: #1d2a3a;
+    --text: #e8eef6; --muted: #8fa0b4; --faint: #62748a; --accent: #4ea1ff;
+    --ok: #35d07f; --warn: #f5b84c; --err: #ff5c6c; --brand: #f2c14e;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; --radius: 12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #eef2f7; --panel: #ffffff; --panel-2: #f5f8fc; --line: #d2dce8; --line-soft: #e2e9f1;
+      --text: #152235; --muted: #5d7089; --faint: #8192a6; --accent: #176fd1;
+      --ok: #138a50; --warn: #a66b00; --err: #c62f3e; --brand: #b88600;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+           flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; } header h1 b { color: var(--brand); }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  nav button { background: none; border: 1px solid transparent; color: var(--muted); padding: 6px 12px; border-radius: 8px;
+               cursor: pointer; font: inherit; }
+  nav button.active { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+  #mq { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 12px 14px; }
+  .card .k { color: var(--muted); font-size: 12px; } .card .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  .card .s { color: var(--faint); font-size: 12px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); } .dim { color: var(--faint); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
+                            border-radius: 8px; padding: 6px 9px; }
+  button.btn { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+               padding: 6px 12px; cursor: pointer; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #06111f; }
+  button.btn.danger { color: var(--err); border-color: var(--err); background: none; }
+  button.btn:disabled { opacity: .45; cursor: default; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel-2); }
+  td.mono, .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  td.num { text-align: right; white-space: nowrap; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .pill.store { color: var(--ok); border-color: var(--ok); }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
+           width: min(620px, calc(100vw - 32px)); padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog form { padding: 16px; display: grid; gap: 10px; }
+  dialog h2 { margin: 0; font-size: 15px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  pre { background: var(--panel-2); border-radius: 8px; padding: 8px; font-size: 11px; overflow-x: auto; margin: 0;
+        max-height: 160px; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel-2);
+           border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; display: none; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1><b>●</b> HeatpumpsN Observer</h1>
+  <nav>
+    <button data-view="status" class="active">Status</button>
+    <button data-view="signals">Signals</button>
+    <button data-view="proposals">Proposals</button>
+    <button data-view="rules">Rules</button>
+  </nav>
+  <span id="mq">…</span>
+</header>
+<main>
+  <section id="view-status">
+    <div class="cards" id="cards"></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Source</th><th class="num">Signals</th><th class="num">Stored</th><th class="num">Last message</th></tr></thead>
+      <tbody id="sources"></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-signals" class="hidden">
+    <div class="bar">
+      <select id="f-state">
+        <option value="all">All signals</option><option value="stored">Stored</option>
+        <option value="unstored">Not stored</option><option value="undescribed">Undescribed</option>
+      </select>
+      <select id="f-source"><option value="">All sources</option></select>
+      <input id="f-q" type="search" placeholder="Search id, name, location…" size="28">
+      <span class="dim" id="f-count"></span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>Name</th><th>Signal</th><th class="num">Value</th><th class="num">Age</th>
+        <th>Location · circuit · role</th><th>Described by</th></tr></thead>
+      <tbody id="signals"></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-proposals" class="hidden">
+    <div class="bar">
+      <button class="btn primary" id="ask">Ask the LLM</button>
+      <label style="display:flex;align-items:center;gap:6px">about up to <input id="ask-n" type="number" value="40" min="1" max="200" style="width:70px"> undescribed signals</label>
+      <span class="dim" id="ask-msg"></span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Signal</th><th>Proposed name</th><th>Quantity · unit</th><th>Location · circuit · role</th>
+        <th>Store</th><th class="num">Confidence</th><th></th></tr></thead>
+      <tbody id="proposals"></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-rules" class="hidden">
+    <p class="dim">Rules give whole sensor families their description; edit them in <span class="mono">registry.yaml</span>. A single signal's own entry adds to its rule.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Pattern</th><th>Quantity · unit</th><th>Location · circuit · role</th><th>Store</th><th>Description</th></tr></thead>
+      <tbody id="rules"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<dialog id="edit">
+  <form method="dialog" id="edit-form">
+    <h2 id="e-title">Signal</h2>
+    <div class="mono dim" id="e-id"></div>
+    <div class="grid2">
+      <label>Name<input name="name"></label>
+      <label>Quantity<select name="quantity"></select></label>
+      <label>Unit<input name="unit"></label>
+      <label>Location<input name="location" list="locations" placeholder="TF, MF, BF, attic, room…"></label>
+      <label>Circuit<select name="circuit"><option value=""></option><option>floor</option><option>rad1</option><option>rad2</option></select></label>
+      <label>Role<select name="role"></select></label>
+    </div>
+    <label>Description<textarea name="description" rows="2"></textarea></label>
+    <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="store"> Store this signal in the database</label>
+    <div class="dim" id="e-resolved"></div>
+    <details><summary class="dim">What the message stream says about it</summary><pre id="e-meta"></pre></details>
+    <div class="actions">
+      <button class="btn danger" type="button" id="e-revert">Remove own entry</button>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" type="button" id="e-save">Save</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="locations"><option>TF</option><option>MF</option><option>BF</option><option>attic</option><option>outdoor</option><option>boiler room</option></datalist>
+<div id="toast"></div>
+
+<script>
+'use strict';
+const QUANTITIES = ['', 'temperature', 'humidity', 'power', 'energy', 'state', 'position', 'angle', 'pressure', 'modulation',
+  'counter', 'duration', 'signal_strength', 'battery', 'illuminance', 'motion', 'contact', 'setpoint', 'status', 'text', 'other'];
+const ROLES = ['', 'supply', 'return', 'room', 'outdoor', 'boiler', 'dhw', 'pump', 'valve', 'burner', 'controller',
+  'diagnostic', 'comfort', 'other'];
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const age = (s) => s == null ? '—' : s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`;
+let signals = [], view = 'status', editing = null, llmOn = false;
+
+function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  return data;
+}
+for (const [sel, list] of [['[name=quantity]', QUANTITIES], ['[name=role]', ROLES]]) $(sel).innerHTML = list.map((q) => `<option>${q}</option>`).join('');
+
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
+function show(v) {
+  view = v;
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+  for (const id of ['status', 'signals', 'proposals', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  refresh();
+}
+
+async function loadStatus() {
+  const s = await api('/api/status');
+  llmOn = s.llm;
+  $('#mq').innerHTML = s.mqtt.host ? `MQTT <span class="${s.mqtt.connected ? 'ok' : 'err'}">${s.mqtt.connected ? 'connected' : 'disconnected'}</span> · ${esc(s.mqtt.host)}:${s.mqtt.port}` : 'MQTT off';
+  if (view !== 'status') return;
+  const card = (k, v, sub = '', cls = '') => `<div class="card"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${sub}</div></div>`;
+  $('#cards').innerHTML = [
+    card('MQTT', s.mqtt.connected ? 'connected' : 'disconnected', `${s.mqtt.messages} messages · last ${age(s.mqtt.last_message_age_s)} ago`, s.mqtt.connected ? 'ok' : 'err'),
+    card('Stored samples', s.storage.samples.toLocaleString(), s.storage.kind === 'influx' ? 'InfluxDB' : 'dry run: nothing is written', s.storage.kind === 'influx' ? '' : 'warn'),
+    card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
+    card('LLM', s.llm ? 'configured' : 'off', s.llm ? 'proposals available' : 'set llm.base_url and llm.model', s.llm ? 'ok' : 'dim'),
+    card('Uptime', age(s.uptime_s), ''),
+  ].join('');
+  $('#sources').innerHTML = Object.entries(s.sources).map(([src, x]) =>
+    `<tr><td>${esc(src)}</td><td class="num">${x.signals}</td><td class="num">${x.stored}</td>
+     <td class="num ${x.age_s > 900 ? 'warn' : ''}">${age(x.age_s)} ago</td></tr>`).join('');
+}
+
+async function loadSignals() {
+  signals = await api('/api/signals');
+  const sources = [...new Set(signals.map((s) => s.source))].sort();
+  const sel = $('#f-source'), cur = sel.value;
+  sel.innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  renderSignals();
+}
+function renderSignals() {
+  const state = $('#f-state').value, src = $('#f-source').value, q = $('#f-q').value.trim().toLowerCase();
+  const rows = signals.filter((s) => (!src || s.source === src)
+    && (state === 'all' || (state === 'stored' && s.store) || (state === 'unstored' && !s.store) || (state === 'undescribed' && s.resolved_by === 'none'))
+    && (!q || [s.id, s.info.name, s.meta.name, s.info.location, s.info.description, s.meta.device].join(' ').toLowerCase().includes(q)));
+  $('#f-count').textContent = `${rows.length} of ${signals.length}`;
+  $('#signals').innerHTML = rows.slice(0, 600).map((s) => {
+    const name = s.info.name ? esc(s.info.name) : s.meta.name ? `<span class="dim">${esc(s.meta.name)}</span>` : '';
+    const unit = s.info.unit || s.meta.unit || '';
+    const value = s.value != null ? `${+s.value.toFixed(3)} ${esc(unit)}` : esc((s.text || '').slice(0, 24));
+    const where = [s.info.location, s.info.circuit, s.info.role].filter(Boolean).map(esc).join(' · ');
+    const by = s.resolved_by === 'none' ? '<span class="dim">—</span>' : s.resolved_by === 'signal' ? 'own entry' : `<span class="dim" title="${esc(s.resolved_by)}">rule</span>`;
+    return `<tr data-id="${esc(s.id)}"><td>${s.store ? '<span class="pill store">stored</span>' : ''}</td><td>${name}</td>
+      <td class="mono">${esc(s.id)}</td><td class="num">${value}</td><td class="num ${s.age_s > 3600 ? 'dim' : ''}">${age(s.age_s)}</td>
+      <td>${where}</td><td>${by}</td></tr>`;
+  }).join('');
+}
+['#f-state', '#f-source'].forEach((s) => $(s).addEventListener('change', renderSignals));
+$('#f-q').addEventListener('input', renderSignals);
+$('#signals').addEventListener('click', (e) => { const tr = e.target.closest('tr'); if (tr) openEdit(signals.find((s) => s.id === tr.dataset.id)); });
+
+function openEdit(s, prefill = null, onSave = null) {
+  editing = { s, onSave };
+  const f = $('#edit-form'), src = prefill || { ...s.info, store: s.store };
+  $('#e-title').textContent = s.info.name || s.meta.name || 'Signal';
+  $('#e-id').textContent = s.id;
+  for (const k of ['name', 'quantity', 'unit', 'location', 'circuit', 'role', 'description']) f[k].value = src[k] || (k === 'unit' ? s.meta.unit || '' : k === 'name' && !prefill ? s.meta.name || '' : '');
+  f.store.checked = !!src.store;
+  $('#e-resolved').textContent = s.resolved_by === 'signal' ? 'Has its own registry entry.' : s.resolved_by === 'none' ? 'Not described yet.' : `Described by ${s.resolved_by}.`;
+  $('#e-meta').textContent = JSON.stringify({ ...s.meta, last: s.value ?? s.text, messages: s.count }, null, 1);
+  $('#e-revert').classList.toggle('hidden', !s.entry);
+  $('#edit').showModal();
+}
+$('#e-save').addEventListener('click', async () => {
+  const f = $('#edit-form'), entry = {};
+  for (const k of ['name', 'quantity', 'unit', 'location', 'circuit', 'role', 'description']) entry[k] = f[k].value;
+  entry.store = f.store.checked;
+  try {
+    if (editing.onSave) await editing.onSave(entry);
+    else await api(`/api/signal?id=${encodeURIComponent(editing.s.id)}`, { method: 'PUT', body: JSON.stringify(entry) });
+    $('#edit').close(); toast('Saved to the registry.'); refresh();
+  } catch (err) { toast(err.message, 5000); }
+});
+$('#e-revert').addEventListener('click', async () => {
+  if (!confirm('Remove this signal\'s own entry? A matching rule still applies.')) return;
+  try { await api(`/api/signal?id=${encodeURIComponent(editing.s.id)}`, { method: 'DELETE' }); $('#edit').close(); toast('Entry removed.'); refresh(); }
+  catch (err) { toast(err.message, 5000); }
+});
+
+let proposals = [];
+async function loadProposals() {
+  proposals = await api('/api/proposals');
+  $('#ask').disabled = !llmOn;
+  if (!llmOn) $('#ask-msg').textContent = 'No LLM configured (llm.base_url and llm.model in config.yaml).';
+  $('#proposals').innerHTML = proposals.length ? proposals.map((p, i) => `<tr data-i="${i}">
+    <td class="mono">${esc(p.signal)}</td><td>${esc(p.name)}</td><td>${esc([p.quantity, p.unit].filter(Boolean).join(' · '))}</td>
+    <td>${esc([p.location, p.circuit, p.role].filter(Boolean).join(' · '))}</td><td>${p.store ? 'yes' : 'no'}</td>
+    <td class="num ${p.confidence < 0.5 ? 'dim' : ''}">${Math.round((p.confidence || 0) * 100)} %</td>
+    <td style="white-space:nowrap"><button class="btn" data-act="accept">Accept</button> <button class="btn" data-act="edit">Edit…</button> <button class="btn danger" data-act="reject">Reject</button></td></tr>`).join('')
+    : '<tr><td colspan="7" class="dim">No open proposals.</td></tr>';
+}
+$('#proposals').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  e.stopPropagation();
+  const p = proposals[+b.closest('tr').dataset.i], id = encodeURIComponent(p.signal);
+  try {
+    if (b.dataset.act === 'accept') { await api(`/api/proposal/accept?id=${id}`, { method: 'POST' }); toast('Accepted.'); }
+    if (b.dataset.act === 'reject') { await api(`/api/proposal?id=${id}`, { method: 'DELETE' }); toast('Rejected.'); }
+    if (b.dataset.act === 'edit') {
+      if (!signals.length) signals = await api('/api/signals');
+      const s = signals.find((x) => x.id === p.signal) || { id: p.signal, info: {}, meta: {}, store: false };
+      openEdit(s, p, (entry) => api(`/api/proposal/accept?id=${id}`, { method: 'POST', body: JSON.stringify(entry) }));
+      return;
+    }
+    loadProposals();
+  } catch (err) { toast(err.message, 5000); }
+});
+$('#ask').addEventListener('click', async () => {
+  $('#ask').disabled = true; $('#ask-msg').textContent = 'Asking… this can take a few minutes.';
+  try { const r = await api('/api/proposals/run', { method: 'POST', body: JSON.stringify({ limit: +$('#ask-n').value || 40 }) });
+        $('#ask-msg').textContent = `${r.proposals} new proposals.`; }
+  catch (err) { $('#ask-msg').textContent = err.message; }
+  $('#ask').disabled = false; loadProposals();
+});
+
+async function loadRules() {
+  const rules = await api('/api/rules');
+  $('#rules').innerHTML = rules.map((r) => `<tr><td class="mono">${esc(r.match)}</td><td>${esc([r.quantity, r.unit].filter(Boolean).join(' · '))}</td>
+    <td>${esc([r.location, r.circuit, r.role].filter(Boolean).join(' · '))}</td><td>${r.store === false ? 'no' : 'yes'}</td><td>${esc(r.description)}</td></tr>`).join('');
+}
+
+async function refresh() {
+  try {
+    await loadStatus();
+    if (view === 'signals' && !$('#edit').open) await loadSignals();
+    if (view === 'proposals') await loadProposals();
+    if (view === 'rules') await loadRules();
+  } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+}
+refresh();
+setInterval(() => { if (view === 'status') refresh(); else loadStatus().catch(() => {}); }, 5000);
+</script>
+</body>
+</html>

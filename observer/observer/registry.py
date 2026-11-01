@@ -70,6 +70,10 @@ class Registry:
     def add(self, signal: str, entry: dict) -> None:
         self.signals[signal] = {k: v for k, v in entry.items() if k in FIELDS + ("store",)}
 
+    def remove(self, signal: str) -> bool:
+        """Drop an exact entry; the signal falls back to its rule (if any)."""
+        return self.signals.pop(signal, None) is not None
+
     def save(self) -> None:
         if not self.path:
             raise ValueError("registry has no path")

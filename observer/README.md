@@ -70,6 +70,27 @@ already described signals as examples to an OpenAI-compatible endpoint
 `observer accept --all --min-confidence 0.8` copies them into the registry.
 Nothing changes without that step, and everything works without an LLM.
 
+## Web portal
+
+`observer serve` runs the ingest and the portal in one process
+(default `http://127.0.0.1:8090/`):
+
+* **Status:** MQTT connection, stored samples, signals per source and how
+  fresh each source is.
+* **Signals:** the whole catalog with filters (stored, not stored,
+  undescribed, by source, search). Click a signal to describe it and choose
+  whether it is stored; the change is saved to `registry.yaml` and applies to
+  the next message, without a restart. "Remove own entry" falls back to the
+  family rule.
+* **Proposals:** ask the LLM about undescribed signals, then accept, edit and
+  accept, or reject each proposal.
+* **Rules:** the family rules from `registry.yaml` (edited in the file).
+
+The API is at `/api/...` (interactive documentation at `/api/docs`). The
+portal has **no login yet**: keep it on `127.0.0.1` or behind your reverse
+proxy until it has one, which it will need before it can push controller
+parameters.
+
 ## Development
 
 ```bash
@@ -78,15 +99,16 @@ uv venv && uv pip install -e ".[dev]"
 cp config.example.yaml config.yaml          # adjust; config.yaml is git-ignored
 .venv/bin/python -m pytest
 
+.venv/bin/observer serve --dry-run          # portal on http://127.0.0.1:8090/, nothing written
 .venv/bin/observer listen --seconds 120     # build the catalog, store nothing
 .venv/bin/observer catalog                  # inventory: STORE / - , name, last value, rule
 .venv/bin/observer catalog --unregistered   # what is not described yet
-.venv/bin/observer run --dry-run            # full ingest without a database
+.venv/bin/observer serve --dry-run            # full ingest without a database
 
 # with InfluxDB (docker-compose.dev.yml)
 docker compose -f docker-compose.dev.yml up -d
 export INFLUX_TOKEN=observer-dev-token
-.venv/bin/observer run
+.venv/bin/observer serve
 ```
 
 In development the data comes from the home broker's bridge (topics under
@@ -105,7 +127,8 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
 
 ## Roadmap
 
-1. **Ingest and storage** (this step): catalog, registry, raw InfluxDB storage.
+1. **Ingest and storage** (this step): catalog, registry, raw InfluxDB storage,
+   web portal for status, signals and proposals.
 2. **Anomalies and alerts:** rules on the stored data (staleness, stuck values,
    plausibility between redundant sensors, short-cycling, heat not delivered),
    alerts as HA entities over MQTT.
@@ -113,3 +136,7 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
    coupling from the data; parameter proposals backtested against the recorded
    data and the simulator plant model (`floor_simulator/`).
 4. **Docker:** the observer and InfluxDB as one compose stack at home.
+
+The portal grows with each step: charts of the stored data, the alert list
+and its rules, identification results and parameter proposals with their
+backtests.
