@@ -14,6 +14,21 @@ It never commands the plant: no relays, no setpoints. The only thing it may
 send later is a validated controller parameter set (plan:
 `plans/master_plan.md` §1, §5.3). Its absence changes nothing.
 
+## Where things live
+
+| In the repository (git) | In the data directory (never in git) |
+| --- | --- |
+| code, tests, docs | `config.yaml`, `.env` (secrets) |
+| `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
+| `docker-compose.dev.yml`, scripts | `house/`: description, model, review notes, archive |
+| | `data/`: catalog, settings, proposals, log |
+| | InfluxDB: the Docker volume `observer-influx-dev` |
+
+The data directory is `OBSERVER_HOME`, default
+`~/.local/share/heatpumpsn-observer`; in Docker it will be a volume.
+`observer init` creates it from the defaults and never overwrites existing
+files.
+
 ## Architecture
 
 ```
@@ -23,7 +38,7 @@ MQTT (home broker; in development the mirror under mirror/)
  payload.py   messages → signals (id = topic or topic#json.path), values normalised
  metadata.py  HA discovery, Zigbee2MQTT device list, Statestream → signal metadata
  catalog.py   every signal ever seen (automatic): first/last seen, count, last value, metadata
- registry.py  your selection and descriptions (registry.yaml): store or not, name,
+ registry.py  your selection and descriptions (registry.yaml in the data directory): store or not, name,
               quantity, unit, location, circuit, role; rules for whole families
  store.py     raw InfluxDB writes: one point per sample, arrival time in ns, no aggregation
  llm.py       optional: proposes descriptions for undescribed signals (OpenAI-compatible)
@@ -56,7 +71,8 @@ registry, `quantity`, `location`, `circuit`, `role`; field `value` (float) or
 
 ### Registry
 
-`registry.yaml` (in git): `rules` give families defaults (all
+`registry.yaml` (in the data directory; the generic starting version is
+`observer/defaults/registry.yaml`): `rules` give families defaults (all
 `temperature_humidity_sensor_*_temperature` are room temperatures in °C);
 `signals` describe single signals and add to their rule (a room needs only a
 name and a floor). `store_unregistered: false` keeps unknown signals out of the
@@ -105,7 +121,7 @@ signals, and says what it changed; you review and save.
 ## House description (reviewed)
 
 The observer's understanding of the house, written for the owner to check and
-extend. Files in `house/` (in git):
+extend. Files in `house/` in the data directory:
 
 * `description.md`: the audited description (overview, boiler and DHW, each
   circuit, rooms, outdoor, controller and devices, how the parts interact,
@@ -143,7 +159,7 @@ The **Settings** page names each slot and assigns a provider and model to each
 task: *describe* (polish one signal's description), *propose* (bulk
 proposals), *house* (the house description). It can list the models a
 provider offers. These choices are not secrets and live in
-`data/settings.yaml`. Transient provider errors (rate limits, overload) are
+`data/settings.yaml` in the data directory. Transient provider errors (rate limits, overload) are
 retried; an answer that is not valid JSON gets one repair round.
 
 ## Development
@@ -151,7 +167,8 @@ retried; an answer that is not valid JSON gets one repair round.
 ```bash
 cd observer
 uv venv && uv pip install -e ".[dev]"
-cp config.example.yaml config.yaml          # adjust; config.yaml is git-ignored
+.venv/bin/observer init                     # creates ~/.local/share/heatpumpsn-observer (or $OBSERVER_HOME)
+# edit config.yaml and .env there
 .venv/bin/python -m pytest
 
 .venv/bin/observer serve --dry-run          # portal on http://127.0.0.1:8090/, nothing written
@@ -162,7 +179,6 @@ cp config.example.yaml config.yaml          # adjust; config.yaml is git-ignored
 
 # with InfluxDB: disposable, rebuilt empty at any time
 scripts/influx-reset.sh --yes-delete-all-data   # DELETES all recorded data, then recreates org, bucket, token
-cp .env.example .env                        # INFLUX_TOKEN, LLM endpoint (git-ignored)
 .venv/bin/observer serve
 ```
 

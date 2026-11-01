@@ -1,4 +1,11 @@
-"""Command line: observer <command> [--config config.yaml]
+"""Command line: observer <command> [--config PATH]
+
+All operational data lives outside the repository, in the data directory
+OBSERVER_HOME (default ~/.local/share/heatpumpsn-observer): config.yaml, .env,
+registry.yaml, house/ (description, model, notes, archive) and data/ (catalog,
+settings, proposals). The repository holds only code, docs and defaults.
+
+  init     [--home PATH]   create the data directory from the defaults
 
   serve    [--dry-run] [--host H] [--port P]   ingest + web portal (http://H:P/), the normal way to run it
   listen   [--seconds N]   collect for N s (default 120): update the catalog, store nothing
@@ -25,6 +32,36 @@ from .store import InfluxWriter, MemoryWriter
 log = logging.getLogger("observer")
 
 
+DEFAULTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defaults")
+
+
+def observer_home() -> str:
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("OBSERVER_HOME") or "~/.local/share/heatpumpsn-observer"))
+
+
+def cmd_init(home: str) -> None:
+    """Create the data directory; files that already exist are left alone."""
+    import shutil
+
+    os.makedirs(os.path.join(home, "data"), exist_ok=True)
+    os.makedirs(os.path.join(home, "house", "archive"), exist_ok=True)
+    created = []
+    for src, dst in (("config.example.yaml", "config.yaml"), ("env.example", ".env"),
+                     ("registry.yaml", "registry.yaml")):
+        target = os.path.join(home, dst)
+        if not os.path.exists(target):
+            shutil.copyfile(os.path.join(DEFAULTS, src), target)
+            created.append(dst)
+    notes = os.path.join(home, "house", "notes.md")
+    if not os.path.exists(notes):
+        open(notes, "w").close()
+        created.append("house/notes.md")
+    os.chmod(os.path.join(home, ".env"), 0o600)
+    print(f"data directory {home}: " + (", ".join(created) + " created" if created else "already complete"))
+    print("next: edit config.yaml and .env there, then run `observer serve`")
+
+
 def load_env(path: str) -> None:
     """KEY=VALUE lines from a .env file into the environment (existing variables win)."""
     if not os.path.exists(path):
@@ -39,6 +76,8 @@ def load_env(path: str) -> None:
 
 
 def load_config(path: str) -> dict:
+    if not os.path.exists(path):
+        sys.exit(f"no configuration at {path}: run `observer init` (data directory: OBSERVER_HOME)")
     base = os.path.dirname(os.path.abspath(path))
     load_env(os.path.join(base, ".env"))
     with open(path, encoding="utf-8") as fp:
@@ -191,9 +230,12 @@ def cmd_accept(cfg: dict, args) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="observer", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", default=os.environ.get("OBSERVER_CONFIG", "config.yaml"))
+    parser.add_argument("--config", default=os.environ.get("OBSERVER_CONFIG")
+                        or os.path.join(observer_home(), "config.yaml"))
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("init")
+    p.add_argument("--home", default=None)
     p = sub.add_parser("serve")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--host", default=None)
@@ -214,6 +256,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.command == "init":
+        cmd_init(os.path.abspath(os.path.expanduser(args.home)) if args.home else observer_home())
+        return
     cfg = load_config(args.config)
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
      "accept": cmd_accept}[args.command](cfg, args)
