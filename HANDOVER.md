@@ -1,7 +1,7 @@
 # HeatpumpsN — project handover
 
 The single entry point for picking the project up: what the system is, where it
-stands, how to work on it and what to keep in mind. Updated 2026-10-31. The
+stands, how to work on it and what to keep in mind. Updated 2026-11-01. The
 data-analysis workstream has its own handover in
 [`analysis/handover.md`](analysis/handover.md).
 
@@ -34,6 +34,7 @@ travel time.
 | Partition layout / ESPHome migration | Done on the bench and on the live S2 | `firmware/docs/partition-migration.md` |
 | HIL floor simulator (`floor_simulator/`) | Plant, boiler, REST/MQTT bridges, dashboard, offline tuning tools | `floor_simulator/README.md` |
 | HomeNet v1.x board | Firmware profile exists; hardware not built | `firmware/docs/boards.md` |
+| Observer (`observer/`) | Step 1 running on the development machine: MQTT ingest, signal catalog and registry, raw InfluxDB storage, web portal | `observer/README.md` |
 
 ### 2.1 Live S2 upgrade (in progress)
 
@@ -43,8 +44,8 @@ Checklist: `firmware/docs/esphome-upgrade.md`.
 - [x] Relays checked in Test Mode
 - [x] Status LEDs: driver fixed, colour test, board order (pump 2 on LED 3, pump 1 on LED 4), radiators green
 - [ ] 5: change the factory passwords (still admin/admin)
-- [ ] 6.2: temperature sensors: discover, assign roles, verify
-- [ ] 6.5: settings (floor circuit, setpoint, summer mode, MQTT)
+- [ ] 6.2: temperature sensors: they read plausible values (boiler, floor forward, floor return); roles not yet verified while heating
+- [ ] 6.5: settings (floor circuit, setpoint, summer mode). MQTT is connected to `mqtt.home`; the HA entities include Mixer position and the Wi-Fi diagnostics
 - [ ] 7: relay counter preset (`esp32s2_counter_preset`, ESPHome values 1:1)
 - [ ] 8: normal firmware, configuration export, mains on, first heating run watched
 
@@ -59,6 +60,26 @@ Facts about this board:
   ordinary allocations from 512 B, the logs and the state frames. Watch
   `freeHeap`, `minFreeHeap` and `largestFreeBlock` in `/api/status`
   (last seen: ~40 KB free, low-water mark ~28–34 KB).
+
+### 2.2 Observer (step 1 done)
+
+- **Data path in development:** the home broker (Mosquitto 1.6 container on
+  the Jetson) bridges `heatpumpsn/#`, `ems-esp/#`, `mixermeter/#`,
+  `zigbee2mqtt/#`, `homeassistant/#` and `ha_state/#` (HA MQTT Statestream)
+  outward under `mirror/` to the development broker `localhost:31883`. The
+  bridge runs through the systemd service `mqtt-mirror-tunnel` on the Jetson
+  (autossh, own key `/var/lib/mqtt-mirror/id_ed25519`, restricted on this
+  machine to the broker port). Direction `out` only: nothing flows back home.
+- **Running here:** `observer serve` (portal `http://127.0.0.1:8090/`),
+  storing into the disposable InfluxDB `observer-influx-dev`
+  (`observer/scripts/influx-reset.sh` rebuilds it empty).
+- **Registry:** the EMS-ESP circuit sensors (BF/MF/TF fwd/back), the 13 rooms,
+  OpenWeatherMap outdoor, boiler and DHW values, controller, MixerMeter; Zigbee
+  devices are catalogued but not selected yet.
+- **Next:** LLM endpoint in `observer/.env` (Ollama first); anomaly rules and
+  alerts to HA (first rule: EMS-ESP offline / heartbeat missing); then
+  identification and parameter proposals; the old HA InfluxDB year should be
+  copied in once (read-only token) before HA's InfluxDB integration is removed.
 
 ## 3. Open issues
 
@@ -85,6 +106,15 @@ Facts about this board:
 8. **Mixer encoder** (`POS_SRC_I2C`) and other reserved I2C peripherals: not
    implemented; an external encoder over MQTT is used for warnings and resync
    only.
+9. **Watchdog entries in the S2's log** (reported 2026-11-01): to be
+   investigated next; `lastWatchdog` in `/api/status` and events 1900/1901
+   name the late task.
+10. **EMS-ESP:** loses its MQTT connection when the broker restarts and does
+    not reconnect until EMS-ESP itself is restarted (3.8.4); its bus reports
+    `txerror` (can receive, cannot transmit: check the Tx mode), so it only
+    sees what the boiler broadcasts.
+11. **Observer portal has no login.** It listens on `127.0.0.1` only; it needs
+    authentication before it may push controller parameters.
 
 ## 4. Repository map
 
@@ -98,6 +128,7 @@ Facts about this board:
 | `firmware/test/live/` | live checks against a running controller (HPN1 security) |
 | `floor_simulator/` | HIL simulator: plant, boiler, bridges, dashboard, tuning tools, tests |
 | `tests/` | older runtime integration checks against a live controller |
+| `observer/` | the observer: ingest, catalog, registry, InfluxDB storage, web portal, tests |
 | `plans/` | system architecture, controller-node layer specs, observer and MQTT designs, schematics |
 | `analysis/` | old-system telemetry analysis (DuckDB), reports, its own handover |
 
@@ -112,7 +143,9 @@ Not tracked on purpose: `analysis/heatpumps.duckdb`, `analysis/db/`, `others/`,
 |---|---|
 | Bench controller (ESP32, `esp32dev_sim_ota`) | `http://localhost:30080` |
 | Live S2 (when forwarded) | `http://localhost:30081` |
-| MQTT broker | `localhost:31883` |
+| MQTT broker (development; home data under `mirror/`) | `localhost:31883` |
+| Observer portal | `http://127.0.0.1:8090/` |
+| Observer InfluxDB (disposable) | `http://localhost:38086`, org `heatpumpsn`, bucket `observer` |
 | Serial, flashing over USB | `pio remote …` with an agent running at the board |
 
 `pio remote device monitor` needs a terminal; from a script use
@@ -271,7 +304,8 @@ DHW: `dhw_active = meter || inferred`; the meter wins.
 10. **Live checks change settings** (passwords, secret) and restore them; they
     expect factory passwords.
 11. **No credentials in the repository**, including the ESPHome OTA password.
-12. `floor_simulator/`: use its `.venv` (uv); tests in `floor_simulator/tests`.
+12. `floor_simulator/` and `observer/`: each uses its own `.venv` (uv) and has
+    its own tests.
 
 ## 8. Where to read more
 
@@ -285,6 +319,7 @@ DHW: `dhw_active = meter || inferred`; the meter wins.
 | Partition layout, migration, rollback, fallback AP | `firmware/docs/partition-migration.md` |
 | ESPHome upgrade checklist | `firmware/docs/esphome-upgrade.md` |
 | Simulator | `floor_simulator/README.md`, `floor_simulator/specification.md` |
+| Observer | `observer/README.md` |
 | System architecture | `plans/master_plan.md` |
 | Layer model, contracts, L0–L2, modes, interfaces, portal | `plans/controller node/` |
 | Old-system data and analysis | `analysis/handover.md` |
