@@ -114,6 +114,10 @@ Facts about this board:
     not reconnect until EMS-ESP itself is restarted (3.8.4); its bus reports
     `txerror` (can receive, cannot transmit: check the Tx mode), so it only
     sees what the boiler broadcasts.
+12. **Boot homing and encoder discovery** (2026-11-01, built and tested on the
+    host harness, **not yet on the S2**): every boot homes the mixer; a stuck
+    encoder is distrusted. The controller never received the MixerMeter
+    encoder because ESPHome's discovery uses `stat_t` (fixed).
 11. **Observer portal has no login.** It listens on `127.0.0.1` only; it needs
     authentication before it may push controller parameters.
 

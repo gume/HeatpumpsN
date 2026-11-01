@@ -995,13 +995,34 @@ void handle_meter_message(const char* topic, const char* payload) {
   }
 }
 
+// State topic of an HA discovery config. Discovery allows abbreviated keys
+// (ESPHome publishes "stat_t") and a "~" base topic that a leading or
+// trailing "~" in other topics stands for; HA accepts both, so must we.
+bool discovery_state_topic(JsonDocument& doc, char* out, size_t out_size) {
+  const char* topic = doc["state_topic"].as<const char*>();
+  if (topic == nullptr || topic[0] == '\0') {
+    topic = doc["stat_t"].as<const char*>();
+  }
+  if (topic == nullptr || topic[0] == '\0') {
+    return false;
+  }
+  const char* base = doc["~"] | "";
+  const size_t len = strlen(topic);
+  if (base[0] != '\0' && topic[0] == '~') {
+    snprintf(out, out_size, "%s%s", base, topic + 1);
+  } else if (base[0] != '\0' && topic[len - 1] == '~') {
+    snprintf(out, out_size, "%.*s%s", static_cast<int>(len - 1), topic, base);
+  } else {
+    copy_string(out, out_size, topic);
+  }
+  return true;
+}
+
 bool handle_discovery_config(const char* topic, const char* payload) {
   if (g_mixer_config_topic[0] != '\0' && strcmp(topic, g_mixer_config_topic) == 0) {
     JsonDocument doc;
     if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-      const char* state_topic = doc["state_topic"];
-      if (state_topic != nullptr && state_topic[0] != '\0') {
-        copy_string(g_mixer_state_topic, sizeof(g_mixer_state_topic), state_topic);
+      if (discovery_state_topic(doc, g_mixer_state_topic, sizeof(g_mixer_state_topic))) {
         if (g_client.connected()) {
           g_client.subscribe(g_mixer_state_topic, 0);
         }
@@ -1012,9 +1033,7 @@ bool handle_discovery_config(const char* topic, const char* payload) {
   if (g_dhw_config_topic[0] != '\0' && strcmp(topic, g_dhw_config_topic) == 0) {
     JsonDocument doc;
     if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-      const char* state_topic = doc["state_topic"];
-      if (state_topic != nullptr && state_topic[0] != '\0') {
-        copy_string(g_dhw_state_topic, sizeof(g_dhw_state_topic), state_topic);
+      if (discovery_state_topic(doc, g_dhw_state_topic, sizeof(g_dhw_state_topic))) {
         if (g_client.connected()) {
           g_client.subscribe(g_dhw_state_topic, 0);
         }

@@ -305,6 +305,22 @@ counter or anti-seize damage visible instead of hiding it behind a config save.
 The access log records every portal request plus WebSocket connect/disconnect
 events.
 
+### Mixer position after a boot
+
+The mixer has no absolute position sensor, so the dead-reckoned position
+restarts at 0 % on every boot while the valve stays where it was. L2 therefore
+**homes the mixer at every boot**, whatever the encoder reports: a full close
+stroke (`travel_time_ms` + 10 s), then position 0 (events 1203, 1204). The
+encoder is then checked against the known position: if it reads more than
+`recalc_threshold` away from 0 %, it is distrusted (event 1205,
+`WARN_ENCODER_DIVERGED`) and never used to resync until it agrees with the
+dead-reckoned position again (event 1206). A stuck encoder therefore cannot
+corrupt the position.
+
+The encoder arrives through HA discovery (`mixer_meter_device` /
+`mixer_meter_field`). Abbreviated discovery keys (`stat_t`, as ESPHome
+publishes them) and the `~` base topic are accepted.
+
 ### Status LEDs
 
 L4's `hpn::led::tick` (`src/led_status.cpp`) animates the five addressable

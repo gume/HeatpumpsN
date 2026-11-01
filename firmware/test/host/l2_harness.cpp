@@ -91,5 +91,38 @@ int main() {
   std::printf("restart flush=%d req=%d\n", s.flush_state == FLUSH_ACTIVE, s.pump_floor_requested);
   tick(40);
   std::printf("end flush=%d req=%d\n", s.flush_state == FLUSH_ACTIVE, s.pump_floor_requested);
+
+  // --- Boot sync of the mixer position ------------------------------------
+  c.travel_time_ms = 100000;
+  c.recalc_threshold = 0.12f;                        // the shipped default
+  auto boot_tick = [&](SystemState& b, int seconds) {
+    for (int i = 0; i < seconds; i += 2) {
+      g_ms += 2000;
+      hpn::l2::tick(c, b);
+    }
+  };
+  // Every boot homes, whatever the encoder says; a stuck encoder is then
+  // distrusted (no resync) until it agrees with the position again.
+  SystemState h{};
+  h.mode = MODE_HEAT;
+  h.mix_ceiling = 0.85f;
+  h.pos_est_dr = 0.3f;                               // stand-in for an unknown start
+  h.pos_encoder = 0.477f;                            // stuck encoder
+  h.pos_encoder_valid = true;
+  hpn::l2::begin(c, h);
+  boot_tick(h, 2);
+  std::printf("boothome free=%d pos=%.2f\n", h.mix_free_run_dir, h.pos_est_dr);
+  boot_tick(h, 108);
+  h.pos_encoder_ms = g_ms;
+  std::printf("bootmid free=%d\n", h.mix_free_run_dir);
+  boot_tick(h, 6);
+  h.pos_encoder_ms = g_ms;
+  std::printf("bootdone free=%d pos=%.2f\n", h.mix_free_run_dir, h.pos_est_dr);
+  boot_tick(h, 20);
+  h.pos_encoder_ms = g_ms;
+  std::printf("stuckenc pos=%.2f diverged=%d\n", h.pos_est_dr, (h.active_alarms & WARN_ENCODER_DIVERGED) != 0);
+  h.pos_encoder = 0.02f;                             // the encoder recovers
+  boot_tick(h, 2);
+  std::printf("encok pos=%.2f diverged=%d\n", h.pos_est_dr, (h.active_alarms & WARN_ENCODER_DIVERGED) != 0);
   return 0;
 }

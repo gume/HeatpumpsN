@@ -37,6 +37,17 @@ uint32_t g_dhw_infer_start_ms = 0;
 uint32_t g_dhw_peak_ms = 0;
 float g_dhw_peak_c = NAN;
 
+// Boot homing of the mixer. After a reboot the dead-reckoned position
+// restarts at 0 while the valve stays where it was, and the encoder cannot be
+// relied on to fix that (it may be stuck). So every boot drives a full close
+// stroke and zeroes the position; then the encoder is checked against the
+// known position, and distrusted until it agrees.
+enum BootSync : uint8_t { BOOT_HOME_PENDING, BOOT_HOMING, BOOT_DONE };
+constexpr uint32_t kBootHomeExtraMs = 10000u;   // stroke margin, as the portal's endstop home
+BootSync g_boot_sync = BOOT_HOME_PENDING;
+uint32_t g_boot_home_until_ms = 0;
+bool g_encoder_distrusted = false;
+
 // Update one circuit's demand age and return whether the repeated ON command
 // has gone stale. The raw intent stays set so a fresh ON can re-arm it.
 bool update_demand_age(const Config& config, SystemState& state, CircuitIndex index,
@@ -378,9 +389,51 @@ void service_mixer_control(const Config& config, SystemState& state, bool floor_
   state.mix_target_pos = clampf(target, 0.0f, ceiling);
 }
 
+// True while the boot homing owns the valve.
+bool service_boot_sync(const Config& config, SystemState& state, uint32_t now_ms) {
+  switch (g_boot_sync) {
+    case BOOT_DONE:
+      return false;
+    case BOOT_HOME_PENDING: {
+      if (state.mix_free_run_dir != 0) {
+        return true;                               // a portal sequence owns the valve: wait for it
+      }
+      const uint32_t travel_ms = config.travel_time_ms > 0 ? config.travel_time_ms : 120000u;
+      state.mix_free_run_until_ms = now_ms + travel_ms + kBootHomeExtraMs;
+      state.mix_free_run_dir = -1;
+      state.mix_target_pos = 0.0f;
+      g_boot_home_until_ms = now_ms + travel_ms + kBootHomeExtraMs + 1000u;
+      g_boot_sync = BOOT_HOMING;
+      web::log_event(1, 1203, "Boot: homing the mixer (full close stroke)");
+      return true;
+    }
+    case BOOT_HOMING:
+      if (static_cast<int32_t>(now_ms - g_boot_home_until_ms) < 0) {
+        return true;
+      }
+      state.mix_free_run_dir = 0;
+      state.mix_free_run_until_ms = 0;
+      state.pos_est_dr = 0.0f;
+      state.mix_target_pos = 0.0f;
+      g_boot_sync = BOOT_DONE;
+      web::log_event(0, 1204, "Mixer homed after boot: position 0%");
+      // The valve is known to be closed now: an encoder that disagrees is wrong.
+      if (state.pos_encoder_valid && state.pos_encoder > config.recalc_threshold) {
+        g_encoder_distrusted = true;
+        state.active_alarms |= WARN_ENCODER_DIVERGED;
+        char detail[96];
+        snprintf(detail, sizeof(detail), "Encoder reads %.0f%% after homing to 0%%: not trusted until it agrees",
+                 static_cast<double>(state.pos_encoder * 100.0f));
+        web::log_event(1, 1205, detail);
+      }
+      return false;
+  }
+  return false;
+}
+
 void service_position_tracking(const Config& config, SystemState& state, uint32_t now_ms) {
-  if (!state.pos_encoder_valid) {
-    return;
+  if (!state.pos_encoder_valid || g_boot_sync != BOOT_DONE) {
+    return;                                        // the boot homing defines the position first
   }
   const uint32_t staleness_ms = config.encoder_staleness_s * 1000u;
   if (staleness_ms > 0 && now_ms - state.pos_encoder_ms > staleness_ms) {
@@ -389,7 +442,20 @@ void service_position_tracking(const Config& config, SystemState& state, uint32_
     return;
   }
   state.active_alarms &= ~WARN_ENCODER_STALE;
-  if (fabsf(state.pos_est_dr - state.pos_encoder) > config.recalc_threshold) {
+  const bool agrees = fabsf(state.pos_est_dr - state.pos_encoder) <= config.recalc_threshold;
+  if (g_encoder_distrusted) {
+    // Never resync from an encoder that contradicted the homing; trust it
+    // again once it agrees with the dead-reckoned position.
+    if (agrees) {
+      g_encoder_distrusted = false;
+      state.active_alarms &= ~WARN_ENCODER_DIVERGED;
+      web::log_event(0, 1206, "Encoder agrees with the mixer position again: trusted");
+    } else {
+      state.active_alarms |= WARN_ENCODER_DIVERGED;
+    }
+    return;
+  }
+  if (!agrees) {
     state.pos_est_dr = state.pos_encoder;
     state.active_alarms |= WARN_ENCODER_DIVERGED;
     web::log_event(0, 1201, "Mixer position resynced from MQTT meter");
@@ -419,6 +485,9 @@ void begin(const Config& config, SystemState& state) {
   g_dhw_infer_start_ms = 0;
   g_dhw_peak_ms = 0;
   g_dhw_peak_c = NAN;
+  g_boot_sync = BOOT_HOME_PENDING;
+  g_boot_home_until_ms = 0;
+  g_encoder_distrusted = false;
 }
 
 void tick(const Config& config, SystemState& state) {
@@ -607,8 +676,8 @@ void tick(const Config& config, SystemState& state) {
   state.heater_requested = req_heater;
 
   // --- Mixer position loop ------------------------------------------------
-  // A fallback homing stroke owns the valve until it completes.
-  if (!mpc::service_homing(config, state)) {
+  // The boot sync, then a fallback homing stroke, own the valve until done.
+  if (!service_boot_sync(config, state, now) && !mpc::service_homing(config, state)) {
     service_mixer_control(config, state, req_floor, state.dhw_active, g_floor_flush_active);
   }
   service_position_tracking(config, state, now);

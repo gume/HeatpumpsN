@@ -26,3 +26,9 @@ def test_flush_and_delta_t_pause(tmp_path):
     assert "paused=1 req=0 phys=0" in lines["mid"]          # held for the whole pause, no after-run
     assert "flush=1 req=1" in lines["restart"]               # restart goes through a flush
     assert "flush=0 req=1" in lines["end"]
+    # Every boot homes; a stuck encoder is distrusted afterwards, never resynced from.
+    assert "free=-1 pos=0.30" in lines["boothome"]                # close stroke right away
+    assert "free=-1" in lines["bootmid"]
+    assert "free=0 pos=0.00" in lines["bootdone"]                  # homed: position 0
+    assert "pos=0.00 diverged=1" in lines["stuckenc"]              # encoder 48% ignored, warned
+    assert "pos=0.00 diverged=0" in lines["encok"]                 # agrees again: trusted

@@ -177,9 +177,9 @@ These are known design questions, deliberately not answered here. Each must be r
 | # | Open point | Resolve in | Phase |
 | --- | --- | --- | --- |
 | 9.1 | ~~After-heating pump timeout: global or per-pump?~~ Resolved: per-circuit, board-owned (`pump_stop_after_heating_s`). | Controller Node Plan | P3 |
-| 9.2 | Timing and trigger conditions for idle mixer closing / end-stop zero-homing | Controller Node Plan | P3 |
+| 9.2 | Timing and trigger conditions for idle mixer closing / end-stop zero-homing. *Partly resolved: every boot homes the mixer (full close stroke, position 0) whatever the encoder says; homing on idle is still open.* | Controller Node Plan | P3 |
 | 9.3 | Heater demand for an unsatisfiable floor zone (mixer closed / heat sink unavailable) — HA rule or controller-side coordination posture? | HA Integration Plan + Controller Node Plan | P3 |
-| 9.4 | Encoder staleness handling (timestamps, trust policy vs. dead reckoning) | Controller Node Plan | P3 |
+| 9.4 | Encoder staleness handling (timestamps, trust policy vs. dead reckoning). *Partly resolved: an encoder that disagrees with the position after the boot homing is distrusted (no resync, warning) until it agrees again.* | Controller Node Plan | P3 |
 | 9.5 | Anti-short-cycle parameter: ownership category and bounds | Controller Node Plan | P1 |
 | 9.6 | Effect of shared supply/return sensor failure on radiator circuit operation (if any; floor posture is defined) | Controller Node Plan | P1 |
 | 9.7 | ~~Behavior on test-mode expiry mid-heating with HA down~~ Resolved: per-circuit demands go stale after `demand_timeout_s`, the heater drops and the board after-run stops the pumps. | Controller Node Plan | P1 |
