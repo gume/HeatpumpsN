@@ -61,8 +61,8 @@ analyses everything but never commands the plant.
 ### 2.1 The live S2 (plant controller)
 
 Reached through a forward at `http://localhost:30081` (when the owner has it
-up). Firmware at commit `716bb92` (status JSON fix on top of `83929c1`), portal
-files from `83929c1`.
+up). Firmware and portal files at commit `9fcb58c` (setpoint 15–50 °C,
+mixer relay runtime).
 
 On the S2 since 2026-11-01:
 
@@ -77,6 +77,7 @@ On the S2 since 2026-11-01:
 * MPC: no opening guards while the floor forward is > 5 K below the setpoint
   (faster, gentler heating starts); floor ΔT-collapse pause only within 2 K of
   the setpoint;
+* floor setpoint limited to 15–50 °C in 0.5 steps; mixer relays count runtime;
 * LED driver fixed, board LED order, radiators green; Test Mode LED test;
 * watchdog health-check race fixed; HA Mixer position (%) and Wi-Fi diagnostics.
 

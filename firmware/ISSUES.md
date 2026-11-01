@@ -7,7 +7,7 @@ the owner's "go", bench off.
 
 ## To do
 
-Nothing open in this group. Done, awaiting upload to the S2:
+Nothing open in this group. Done and on the S2 since 2026-11-01 (commit 9fcb58c):
 
 * F1 floor setpoint 15–50 °C, 0.5 K grid (HA discovery, MQTT command snapped
   to 0.5, portal default, saved values clamped on load);
