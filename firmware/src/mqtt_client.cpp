@@ -61,6 +61,7 @@ void note_input(InputSeen& in, const char* payload) {
   taskENTER_CRITICAL(&g_inputs_mux);
   in.last_ms = millis();
   in.count++;
+  memset(in.payload, 0, sizeof(in.payload));
   snprintf(in.payload, sizeof(in.payload), "%s", payload);
   taskEXIT_CRITICAL(&g_inputs_mux);
 }
@@ -1394,7 +1395,10 @@ void inputs_json(JsonObject out) {
     o["topic"] = row.topic[0] != '\0' ? row.topic : "(not resolved)";
     o["count"] = row.seen.count;
     if (row.seen.count > 0) {
-      o["payload"] = row.seen.payload;
+      // As const char*, not the array: ArduinoJson takes a const char[N]
+      // for a literal and would serialise all N - 1 bytes, NULs and stale
+      // bytes included (invalid JSON in /api/status).
+      o["payload"] = static_cast<const char*>(row.seen.payload);
       o["ageS"] = (now - row.seen.last_ms) / 1000u;
     }
   }
