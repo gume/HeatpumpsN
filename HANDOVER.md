@@ -83,11 +83,8 @@ Facts about this board:
 
 ## 3. Open issues
 
-1. **MPC compute time on the S2** is unmeasured: no plan has run there yet. The
-   control task runs below lwIP on single-core chips, but a step longer than
-   3 periods (6 s) trips the watchdog. Check `computeMs` in `/api/mpc` during
-   the first heating run; `lastWatchdog` in `/api/status` names the late task
-   after a watchdog reset.
+1. ~~MPC compute time on the S2~~: measured at the first heating start
+   (2026-11-01): 0.3–0.8 s per plan, well inside the 6 s limit.
 2. **Network latency on the S2**: pings of 0.2–5 s before the memory fixes; not
    re-measured since.
 3. **One unexplained interrupt-watchdog reset** on the bench, on the first boot

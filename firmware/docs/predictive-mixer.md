@@ -71,6 +71,15 @@ plan may close but never open. The boiler-role sensor lags the water by about
 and after DHW the boiler water is hotter than any recent value. Offline this
 removed every DHW-related fallback.
 
+Both guards apply only while the floor forward is within 5 K of the setpoint
+(`kWarmupBandK`). Further below, at a heating start, they only stalled it: the
+hot water reaches the mixer only through the mixer, so a nearly closed mixer
+kept the supply cold while the boiler heated itself up with no load and
+stopped (seen on the S2: about 5 minutes at the flush position). In the
+simulator's cold start (`cold_slab_start`, setpoint 35 °C) the setpoint is now
+reached in 6.9 min instead of 11.0 min, with a lower early peak (37.9 instead of
+38.4 °C) and no anomalies; the hot-slug case after DHW is unchanged.
+
 During the warm-up flush the controller holds `flush_max_pos` and does not run
 its model; it starts from real return-water measurements after the flush.
 

@@ -73,13 +73,20 @@ int main() {
   std::printf("start flush=%d req=%d\n", s.flush_state == FLUSH_ACTIVE, s.pump_floor_requested);
   tick(40);
   std::printf("after40 flush=%d\n", s.flush_state == FLUSH_ACTIVE);
-  reading(s.T_mix_out, 31.0f);                       // delta-T 1 K < 2 K
+  // A cold loop has forward = return too, but well below the setpoint it is
+  // warming up, not saturated: no pause, however long it lasts.
+  reading(s.T_mix_out, 20.0f);
+  reading(s.T_return_floor, 19.5f);
+  tick(180);
+  std::printf("coldstart paused=%d req=%d\n", s.flush_state == FLUSH_PAUSED_DELTA_T, s.pump_floor_requested);
+  reading(s.T_mix_out, 35.0f);                       // at the setpoint ...
+  reading(s.T_return_floor, 34.0f);                  // ... delta-T 1 K < 2 K: saturated
   tick(70);
   std::printf("collapse paused=%d req=%d\n", s.flush_state == FLUSH_PAUSED_DELTA_T, s.pump_floor_requested);
   tick(600);
   std::printf("mid paused=%d req=%d phys=%d\n", s.flush_state == FLUSH_PAUSED_DELTA_T,
               s.pump_floor_requested, s.pump_floor_phys);
-  reading(s.T_mix_out, 35.0f);
+  reading(s.T_return_floor, 30.0f);                  // useful delta-T again
   tick(320);                                         // pause (900 s) ends
   std::printf("restart flush=%d req=%d\n", s.flush_state == FLUSH_ACTIVE, s.pump_floor_requested);
   tick(40);

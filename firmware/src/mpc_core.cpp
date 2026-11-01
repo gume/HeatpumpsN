@@ -18,6 +18,11 @@ constexpr float kHotDecayKPerS = 5.0f / 1800.0f;
 // model error is a timing error, not an offset, and learning it would shift
 // every prediction the wrong way once the transient is over.
 constexpr float kBiasFreezeSlopeKPerS = 0.05f;
+// The opening guards (cold or rising supply) protect against overshoot near
+// the setpoint. Further below it they only stall a heating start: the hot
+// water reaches the mixer only through the mixer, so holding it nearly closed
+// keeps the supply cold while the boiler heats itself up with no load.
+constexpr float kWarmupBandK = 5.0f;
 
 // Supervisor limits. Deliberately compiled in: they guard against a bad
 // parameter set, so an observer update must not be able to relax them.
@@ -403,8 +408,11 @@ Command Controller::plan(const Inputs& in, bool triggered) {
   // open. The boiler-role sensor lags the water by ~75 s, so during a rise
   // (burner restart, end of DHW, when the boiler water sits at its DHW
   // temperature) every opening is computed from a supply that is too cold.
+  // Not while the floor forward is more than kWarmupBandK below the setpoint
+  // (a heating start): there is nothing to overshoot yet.
   const bool rising = slope_ > kBiasFreezeSlopeKPerS;
-  const float first = (paused || rising) ? fminf(st_.plan_moves[0], 0.0f) : st_.plan_moves[0];
+  const bool warming_up = in.fwd_valid && in.t_fwd < in.setpoint - kWarmupBandK;
+  const float first = ((paused || rising) && !warming_up) ? fminf(st_.plan_moves[0], 0.0f) : st_.plan_moves[0];
   st_.plan_moves[0] = first;
   st_.traj_dt_s = n * kModelDt / kTrajPoints;
   for (int i = 0; i < kTrajPoints; ++i) {

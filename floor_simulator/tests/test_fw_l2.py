@@ -21,6 +21,7 @@ def test_flush_and_delta_t_pause(tmp_path):
     lines = {ln.split()[0]: ln for ln in out.splitlines() if not ln.startswith("event")}
     assert "flush=1 req=1" in lines["start"]
     assert "flush=0" in lines["after40"]
+    assert "paused=0 req=1" in lines["coldstart"]         # small delta-T far below the setpoint: warming up
     assert "paused=1 req=0" in lines["collapse"]
     assert "paused=1 req=0 phys=0" in lines["mid"]          # held for the whole pause, no after-run
     assert "flush=1 req=1" in lines["restart"]               # restart goes through a flush
