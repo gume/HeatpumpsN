@@ -35,12 +35,24 @@ class Resolved:
     source: str     # "signal", "rule:<pattern>" or "none"
 
 
+def _yaml():
+    from ruamel.yaml import YAML
+
+    y = YAML()                      # round-trip: keeps comments, order and quoting
+    y.width = 4096                  # never re-wrap existing lines
+    y.indent(mapping=2, sequence=4, offset=2)
+    y.preserve_quotes = True
+    return y
+
+
 class Registry:
     def __init__(self, path: str | None = None, data: dict | None = None):
         self.path = path
+        self._doc = None            # the file as loaded, with its comments
         if data is None and path and os.path.exists(path):
             with open(path, encoding="utf-8") as fp:
-                data = yaml.safe_load(fp) or {}
+                self._doc = _yaml().load(fp)
+            data = self._doc or {}
         data = data or {}
         self.signals: dict[str, dict] = data.get("signals") or {}
         self.rules: list[dict] = data.get("rules") or []
@@ -75,9 +87,25 @@ class Registry:
         return self.signals.pop(signal, None) is not None
 
     def save(self) -> None:
+        """Write back, keeping the file's comments and layout; only changed entries differ."""
         if not self.path:
             raise ValueError("registry has no path")
-        with open(self.path, "w", encoding="utf-8") as fp:
-            yaml.safe_dump({"store_unregistered": self.store_unregistered, "rules": self.rules,
-                            "signals": dict(sorted(self.signals.items()))},
-                           fp, sort_keys=False, allow_unicode=True, width=100)
+        from ruamel.yaml.comments import CommentedMap
+
+        doc = self._doc if self._doc is not None else CommentedMap()
+        doc["store_unregistered"] = self.store_unregistered
+        if "rules" not in doc:
+            doc["rules"] = self.rules
+        signals = doc.get("signals")
+        if signals is None:
+            signals = doc["signals"] = CommentedMap()
+        for sig in [k for k in signals if k not in self.signals]:
+            del signals[sig]
+        for sig, entry in self.signals.items():
+            if sig not in signals or dict(signals[sig]) != entry:
+                signals[sig] = entry
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fp:
+            _yaml().dump(doc, fp)
+        os.replace(tmp, self.path)
+        self._doc = doc
