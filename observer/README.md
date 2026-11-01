@@ -92,6 +92,36 @@ Nothing changes without that step, and everything works without an LLM.
 * **Proposals:** ask the LLM about undescribed signals, then accept, edit and
   accept, or reject each proposal.
 * **Rules:** the family rules from `registry.yaml` (edited in the file).
+* **House model:** see below.
+
+Signals can be filtered by source, unit (including "no unit"), quantity,
+device and description state, and the shown rows selected for bulk changes
+(store / don't store, location, circuit, role, quantity). In the edit dialog,
+write a draft description in your own words and press **Polish with LLM**: the
+model rewrites it using the signal's metadata, unit, rule and neighbouring
+signals, and says what it changed; you review and save.
+
+## House model
+
+`house_model.yaml` (in git) is the shared understanding of the house that
+analysis and anomaly detection build on:
+
+* **systems:** boiler, DHW, each circuit, the mixer, rooms per floor, outdoor,
+  the controller, and which signals belong to each;
+* **points:** what each heating-relevant signal measures and what it is used for;
+* **relations:** `redundant` (two sensors of the same quantity should agree),
+  `order` (supply above return while the pump runs), `causal` (a change here
+  follows a change there after a delay), `balance` (derived quantities), each
+  with its condition and expectation;
+* **checks:** anomaly checks that follow from the relations and from single
+  signals, with a severity;
+* **gaps:** what is missing for a good analysis.
+
+The LLM proposes it (**Generate a proposal**) from the described, stored,
+non-diagnostic signals and the house context; unknown signal ids are dropped.
+You review, accept, and edit the YAML when needed. The better the signal
+descriptions, the better the model: describe the important signals first.
+
 
 The API is at `/api/...` (interactive documentation at `/api/docs`). The
 portal has **no login yet**: keep it on `127.0.0.1` or behind your reverse

@@ -50,7 +50,8 @@ def load_config(path: str) -> dict:
     llm["model"] = os.environ.get("OBSERVER_LLM_MODEL") or llm.get("model", "")
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
-                         ("proposals", "data/proposals.yaml")):
+                         ("proposals", "data/proposals.yaml"), ("house_model", "house_model.yaml"),
+                         ("house_model_proposal", "data/house_model_proposal.yaml")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)

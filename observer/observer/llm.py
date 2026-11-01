@@ -102,3 +102,120 @@ def propose(client: LlmClient, signals: dict[str, dict], context: str, known: di
         answer = client.chat(SYSTEM, build_request(chunk, context, known))
         proposals.extend(parse_answer(answer, set(chunk)))
     return proposals
+
+
+# --- Polishing one description -------------------------------------------------
+
+POLISH_SYSTEM = """You polish the description of one sensor signal in a home heating
+supervisor's registry. You get the user's draft (it may be terse, in any
+language, or partly empty), the signal's id, its metadata from the message
+stream, its recent value, the matching rule's defaults, related signals and the
+house context. Keep everything the user stated; correct obvious mistakes only
+when the evidence is clear. Write the description in English, one or two
+sentences: what is measured, where, and what it is useful for. Answer only with
+JSON: {"name", "quantity", "unit", "location", "circuit", "role", "description",
+"store" (bool), "notes" (what you changed and why, short)}.
+quantity is one of: %s.
+role is one of: %s.
+circuit is one of: floor, rad1, rad2, or empty.""" % (", ".join(QUANTITIES), ", ".join(ROLES))
+
+
+def polish(client: LlmClient, signal: str, draft: dict, facts: dict, context: str, related: dict) -> dict:
+    """A polished registry entry for `signal`, from the user's draft (validated, not saved)."""
+    user = json.dumps({"house_context": context.strip(), "signal": signal, "user_draft": draft,
+                       "facts": facts, "related_signals": related}, ensure_ascii=False, indent=1)
+    text = client.chat(POLISH_SYSTEM, user)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("the model gave no JSON answer")
+    data = json.loads(text[start:end + 1])
+    out = {k: data[k].strip() for k in FIELDS if isinstance(data.get(k), str) and data[k].strip()}
+    if out.get("quantity") not in QUANTITIES:
+        out.pop("quantity", None)
+    if out.get("role") not in ROLES:
+        out.pop("role", None)
+    if out.get("circuit") not in ("floor", "rad1", "rad2"):
+        out.pop("circuit", None)
+    out["store"] = bool(data.get("store", draft.get("store", True)))
+    if isinstance(data.get("notes"), str):
+        out["notes"] = data["notes"].strip()
+    return out
+
+
+# --- The house model -------------------------------------------------------------
+
+MODEL_SYSTEM = """You build the sensor model of a house heated by a gas boiler with three
+heating circuits, for a supervisor that later analyses the data and detects
+anomalies. You get the house context and the list of described signals (id,
+name, quantity, unit, location, circuit, role, description). Produce:
+
+1. systems: the physical parts (boiler, DHW, each heating circuit, the floor
+   mixer, rooms per floor, outdoor, the controller, the measurement devices),
+   each with a short description and the ids of the signals that belong to it.
+2. points: for every signal that matters for heating, what it measures
+   physically and what it is used for in analysis.
+3. relations between signals, each with type one of
+     redundant (two signals measure the same quantity; they should agree within a tolerance),
+     order (one should be above/below another under a condition),
+     causal (a change in one should be followed by a change in another, with a typical delay),
+     balance (a quantity is derived from others),
+   the signal ids, the condition when it holds, the expectation (with numbers
+   where you can estimate them) and why.
+4. checks: anomaly checks that follow from the relations and from single
+   signals (staleness, stuck values, out-of-range, short-cycling), each with
+   the signal ids, the condition and a severity (info, warning, alarm).
+
+Use only signal ids from the list. Be concrete and physically plausible;
+leave out what you cannot justify. Answer only with JSON:
+{"systems": [{"name", "description", "signals": []}],
+ "points": [{"signal", "measures", "use"}],
+ "relations": [{"type", "signals": [], "condition", "expectation", "why"}],
+ "checks": [{"name", "signals": [], "condition", "severity"}],
+ "gaps": ["what is missing for a good analysis (sensors, descriptions)"]}"""
+
+RELATION_TYPES = ("redundant", "order", "causal", "balance")
+SEVERITIES = ("info", "warning", "alarm")
+
+
+def build_house_model(client: LlmClient, signals: dict[str, dict], context: str) -> dict:
+    """A validated house model from the described signals ({id: description})."""
+    user = json.dumps({"house_context": context.strip(), "signals": signals}, ensure_ascii=False, indent=1)
+    text = client.chat(MODEL_SYSTEM, user)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("the model gave no JSON answer")
+    return validate_model(json.loads(text[start:end + 1]), set(signals))
+
+
+def validate_model(data: dict, known: set[str]) -> dict:
+    """Keep only well-formed entries that reference known signals."""
+    def ids(item):
+        return [s for s in item.get("signals", []) if isinstance(s, str) and s in known]
+
+    def text(item, key):
+        value = item.get(key)
+        return value.strip() if isinstance(value, str) else ""
+
+    model = {"systems": [], "points": [], "relations": [], "checks": [], "gaps": []}
+    for item in data.get("systems", []) if isinstance(data, dict) else []:
+        if isinstance(item, dict) and text(item, "name"):
+            model["systems"].append({"name": text(item, "name"), "description": text(item, "description"),
+                                     "signals": ids(item)})
+    for item in data.get("points", []) if isinstance(data, dict) else []:
+        if isinstance(item, dict) and item.get("signal") in known:
+            model["points"].append({"signal": item["signal"], "measures": text(item, "measures"),
+                                    "use": text(item, "use")})
+    for item in data.get("relations", []) if isinstance(data, dict) else []:
+        if isinstance(item, dict) and item.get("type") in RELATION_TYPES and len(ids(item)) >= 2:
+            model["relations"].append({"type": item["type"], "signals": ids(item),
+                                       "condition": text(item, "condition"),
+                                       "expectation": text(item, "expectation"), "why": text(item, "why")})
+    for item in data.get("checks", []) if isinstance(data, dict) else []:
+        if isinstance(item, dict) and text(item, "name") and ids(item):
+            severity = item.get("severity") if item.get("severity") in SEVERITIES else "warning"
+            model["checks"].append({"name": text(item, "name"), "signals": ids(item),
+                                    "condition": text(item, "condition"), "severity": severity})
+    for gap in data.get("gaps", []) if isinstance(data, dict) else []:
+        if isinstance(gap, str) and gap.strip():
+            model["gaps"].append(gap.strip())
+    return model

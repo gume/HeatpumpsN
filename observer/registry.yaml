@@ -41,6 +41,82 @@ rules:
     quantity: battery
     unit: "%"
     role: diagnostic
+  # EMS-ESP boiler fields: units and meaning by name (EMS-ESP's HA discovery is
+  # off, so the stream carries no units). Specific patterns come first.
+  - match: "ems-esp/boiler_data#*settemp*"
+    quantity: setpoint
+    unit: "°C"
+    role: dhw
+  - match: "ems-esp/boiler_data#dhw.*temp*"
+    quantity: temperature
+    unit: "°C"
+    role: dhw
+  - match: "ems-esp/boiler_data#*temp*"
+    quantity: temperature
+    unit: "°C"
+    role: boiler
+  - match: "ems-esp/boiler_data#*starts"
+    quantity: counter
+    role: burner
+    description: Start counter (rises by one per start; the rate shows short-cycling).
+  - match: "ems-esp/boiler_data#*workmin"
+    quantity: duration
+    unit: min
+    role: burner
+    description: Operating-time counter in minutes.
+  - match: "ems-esp/boiler_data#dhw.workm"
+    quantity: duration
+    unit: min
+    role: dhw
+    description: DHW operating-time counter in minutes.
+  - match: "ems-esp/boiler_data#*pow"
+    quantity: modulation
+    unit: "%"
+    role: burner
+  - match: "ems-esp/boiler_data#*pumpmod"
+    quantity: modulation
+    unit: "%"
+    role: pump
+  - match: "ems-esp/boiler_data#dhw.curflow"
+    quantity: other
+    unit: l/min
+    role: dhw
+    description: DHW (tap water) flow.
+  - match: "ems-esp/boiler_data#dhw.*"
+    quantity: state
+    role: dhw
+  # Controller internals: configuration and duplicates are not stored.
+  - match: "heatpumpsn/controller/state/mpc/params/*"
+    store: false
+    role: controller
+    description: MPC parameter set (configuration; changes only when a set is pushed).
+  - match: "heatpumpsn/controller/log/slow*"
+    store: false
+    role: controller
+    description: Slow log sample (repeats the state topics that are stored anyway).
+  - match: "heatpumpsn/controller/log/event*"
+    role: diagnostic
+    description: Controller event log record (code, severity, detail).
+  - match: "heatpumpsn/controller/state/mpc#*"
+    role: controller
+    description: Predictive mixer controller status (every 5 s).
+  - match: "heatpumpsn/controller/state/*_physical"
+    quantity: state
+    role: pump
+  - match: "heatpumpsn/controller/state/heating_loop_*"
+    quantity: state
+    role: controller
+    description: Effective heating demand of the circuit from Home Assistant (after keep-alive).
+  - match: "heatpumpsn/controller/state/floor_heating"
+    quantity: state
+    role: controller
+    description: Effective floor heating demand from Home Assistant (after keep-alive).
+  - match: "heatpumpsn/controller/state/power_*"
+    quantity: power
+    unit: W
+    role: pump
+  - match: "heatpumpsn/controller/state/wifi_*"
+    role: diagnostic
   # EMS-ESP repeats each DS18B20 address as a "name" text field: noise.
   - match: "ems-esp/temperaturesensor_data#*.name"
     store: false

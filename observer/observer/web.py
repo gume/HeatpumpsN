@@ -43,6 +43,55 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(404, "no registry entry for this signal")
         return {"ok": True}
 
+    @app.put("/api/signals")
+    def update_signals(body: dict = Body(...)):
+        ids = body.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(400, "ids: a non-empty list of signal ids")
+        return {"updated": service.update_signals(ids, body.get("set") or {})}
+
+    @app.post("/api/signal/polish")
+    async def polish(id: str = Query(...), draft: dict = Body(...)):
+        try:
+            return await run_in_threadpool(service.polish, id, draft)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"LLM request failed: {exc}") from exc
+
+    @app.get("/api/model")
+    def model():
+        return service.model()
+
+    @app.get("/api/model/inputs")
+    def model_inputs():
+        return service.model_inputs()
+
+    @app.post("/api/model/generate")
+    async def generate_model():
+        try:
+            return await run_in_threadpool(service.generate_model)
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"LLM request failed: {exc}") from exc
+
+    @app.post("/api/model/accept")
+    def accept_model():
+        try:
+            service.accept_model()
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no proposal to accept") from exc
+        return {"ok": True}
+
+    @app.put("/api/model")
+    def save_model(text: str = Body(..., embed=True)):
+        try:
+            service.save_model_text(text)
+        except Exception as exc:
+            raise HTTPException(400, f"not saved: {exc}") from exc
+        return {"ok": True}
+
     @app.get("/api/rules")
     def rules():
         return service.rules()

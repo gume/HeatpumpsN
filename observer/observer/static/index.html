@@ -65,6 +65,11 @@
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel-2);
            border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; display: none; }
   .hidden { display: none; }
+  .msys { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .msys .card h3 { margin: 0 0 4px; font-size: 14px; } .msys .card p { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+  .chip { display: inline-block; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 6px;
+          padding: 1px 6px; margin: 2px 2px 0 0; font-size: 11px; }
+  h3.sec { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 6px; }
 </style>
 </head>
 <body>
@@ -74,6 +79,7 @@
     <button data-view="status" class="active">Status</button>
     <button data-view="signals">Signals</button>
     <button data-view="proposals">Proposals</button>
+    <button data-view="model">House model</button>
     <button data-view="rules">Rules</button>
   </nav>
   <span id="mq">…</span>
@@ -90,16 +96,31 @@
   <section id="view-signals" class="hidden">
     <div class="bar">
       <select id="f-state">
-        <option value="all">All signals</option><option value="stored">Stored</option>
+        <option value="stored" selected>Stored</option><option value="all">All signals</option>
         <option value="unstored">Not stored</option><option value="undescribed">Undescribed</option>
+        <option value="nodesc">Stored, no description</option>
       </select>
       <select id="f-source"><option value="">All sources</option></select>
-      <input id="f-q" type="search" placeholder="Search id, name, location…" size="28">
+      <select id="f-unit"><option value="">All units</option></select>
+      <select id="f-quantity"><option value="">All quantities</option></select>
+      <select id="f-device"><option value="">All devices</option></select>
+      <input id="f-q" type="search" placeholder="Search id, name, location…" size="24">
       <span class="dim" id="f-count"></span>
     </div>
+    <div class="bar hidden" id="bulk">
+      <strong id="bulk-n"></strong>
+      <button class="btn" data-bulk="store">Store</button>
+      <button class="btn" data-bulk="nostore">Don't store</button>
+      <input id="bulk-location" list="locations" placeholder="location" size="10">
+      <select id="bulk-circuit"><option value="">circuit…</option><option>floor</option><option>rad1</option><option>rad2</option><option value="-">(clear)</option></select>
+      <select id="bulk-role"></select>
+      <select id="bulk-quantity"></select>
+      <button class="btn primary" data-bulk="apply">Apply to selected</button>
+      <button class="btn" data-bulk="clear">Clear selection</button>
+    </div>
     <div class="table-wrap"><table>
-      <thead><tr><th></th><th>Name</th><th>Signal</th><th class="num">Value</th><th class="num">Age</th>
-        <th>Location · circuit · role</th><th>Described by</th></tr></thead>
+      <thead><tr><th><input type="checkbox" id="sel-all" title="Select all shown"></th><th></th><th>Name</th><th>Signal</th>
+        <th class="num">Value</th><th class="num">Age</th><th>Quantity</th><th>Location · circuit · role</th><th>Described by</th></tr></thead>
       <tbody id="signals"></tbody>
     </table></div>
   </section>
@@ -115,6 +136,22 @@
         <th>Store</th><th class="num">Confidence</th><th></th></tr></thead>
       <tbody id="proposals"></tbody>
     </table></div>
+  </section>
+
+  <section id="view-model" class="hidden">
+    <p class="dim">What sensors the house has, what they measure and how they relate. Built by the LLM from the described,
+      stored signals and the house context; you review, edit and accept it. Analysis and anomaly checks read the accepted model
+      (<span class="mono">house_model.yaml</span>).</p>
+    <div class="bar">
+      <button class="btn primary" id="m-generate">Generate a proposal</button>
+      <button class="btn" id="m-accept">Accept the proposal</button>
+      <span class="dim" id="m-msg"></span>
+    </div>
+    <div id="m-body"></div>
+    <details style="margin-top:12px"><summary>Edit the accepted model (YAML)</summary>
+      <textarea id="m-yaml" rows="18" style="width:100%;font-family:var(--mono);font-size:12px;margin-top:8px"></textarea>
+      <div class="actions" style="margin-top:8px"><button class="btn primary" id="m-save">Save</button></div>
+    </details>
   </section>
 
   <section id="view-rules" class="hidden">
@@ -138,12 +175,14 @@
       <label>Circuit<select name="circuit"><option value=""></option><option>floor</option><option>rad1</option><option>rad2</option></select></label>
       <label>Role<select name="role"></select></label>
     </div>
-    <label>Description<textarea name="description" rows="2"></textarea></label>
+    <label>Description <span class="dim">(write a draft in any words; "Polish" turns it into a proper description)</span><textarea name="description" rows="3"></textarea></label>
+    <div class="dim" id="e-notes"></div>
     <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="store"> Store this signal in the database</label>
     <div class="dim" id="e-resolved"></div>
     <details><summary class="dim">What the message stream says about it</summary><pre id="e-meta"></pre></details>
     <div class="actions">
       <button class="btn danger" type="button" id="e-revert">Remove own entry</button>
+      <button class="btn" type="button" id="e-polish">Polish with LLM</button>
       <button class="btn" value="cancel" formnovalidate>Cancel</button>
       <button class="btn primary" type="button" id="e-save">Save</button>
     </div>
@@ -171,12 +210,15 @@ async function api(path, opts = {}) {
   return data;
 }
 for (const [sel, list] of [['[name=quantity]', QUANTITIES], ['[name=role]', ROLES]]) $(sel).innerHTML = list.map((q) => `<option>${q}</option>`).join('');
+$('#bulk-role').innerHTML = '<option value="">role…</option>' + ROLES.filter(Boolean).map((r) => `<option>${r}</option>`).join('') + '<option value="-">(clear)</option>';
+$('#bulk-quantity').innerHTML = '<option value="">quantity…</option>' + QUANTITIES.filter(Boolean).map((r) => `<option>${r}</option>`).join('');
+const selected = new Set();
 
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
 function show(v) {
   view = v;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-  for (const id of ['status', 'signals', 'proposals', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  for (const id of ['status', 'signals', 'proposals', 'model', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
 
@@ -200,31 +242,72 @@ async function loadStatus() {
 
 async function loadSignals() {
   signals = await api('/api/signals');
-  const sources = [...new Set(signals.map((s) => s.source))].sort();
-  const sel = $('#f-source'), cur = sel.value;
-  sel.innerHTML = '<option value="">All sources</option>' + sources.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const fill = (sel, label, values) => {
+    const cur = $(sel).value;
+    $(sel).innerHTML = `<option value="">${label}</option>` + [...new Set(values.filter(Boolean))].sort()
+      .map((v) => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  };
+  fill('#f-source', 'All sources', signals.map((s) => s.source));
+  fill('#f-unit', 'All units', signals.map((s) => s.unit));
+  if (!$('#f-unit').querySelector('[value="__none"]')) $('#f-unit').insertAdjacentHTML('beforeend', '<option value="__none">(no unit)</option>');
+  fill('#f-quantity', 'All quantities', signals.map((s) => s.quantity));
+  fill('#f-device', 'All devices', signals.map((s) => s.device));
   renderSignals();
 }
 function renderSignals() {
   const state = $('#f-state').value, src = $('#f-source').value, q = $('#f-q').value.trim().toLowerCase();
-  const rows = signals.filter((s) => (!src || s.source === src)
-    && (state === 'all' || (state === 'stored' && s.store) || (state === 'unstored' && !s.store) || (state === 'undescribed' && s.resolved_by === 'none'))
+  const unit = $('#f-unit').value, qty = $('#f-quantity').value, dev = $('#f-device').value;
+  const rows = signals.filter((s) => (!src || s.source === src) && (!unit || (unit === '__none' ? !s.unit : s.unit === unit))
+    && (!qty || s.quantity === qty) && (!dev || s.device === dev)
+    && (state === 'all' || (state === 'stored' && s.store) || (state === 'unstored' && !s.store)
+        || (state === 'undescribed' && s.resolved_by === 'none') || (state === 'nodesc' && s.store && !s.info.description))
     && (!q || [s.id, s.info.name, s.meta.name, s.info.location, s.info.description, s.meta.device].join(' ').toLowerCase().includes(q)));
+  shown = rows;
   $('#f-count').textContent = `${rows.length} of ${signals.length}`;
   $('#signals').innerHTML = rows.slice(0, 600).map((s) => {
     const name = s.info.name ? esc(s.info.name) : s.meta.name ? `<span class="dim">${esc(s.meta.name)}</span>` : '';
-    const unit = s.info.unit || s.meta.unit || '';
-    const value = s.value != null ? `${+s.value.toFixed(3)} ${esc(unit)}` : esc((s.text || '').slice(0, 24));
+    const value = s.value != null ? `${+s.value.toFixed(3)} ${esc(s.unit)}` : esc((s.text || '').slice(0, 24));
     const where = [s.info.location, s.info.circuit, s.info.role].filter(Boolean).map(esc).join(' · ');
     const by = s.resolved_by === 'none' ? '<span class="dim">—</span>' : s.resolved_by === 'signal' ? 'own entry' : `<span class="dim" title="${esc(s.resolved_by)}">rule</span>`;
-    return `<tr data-id="${esc(s.id)}"><td>${s.store ? '<span class="pill store">stored</span>' : ''}</td><td>${name}</td>
+    return `<tr data-id="${esc(s.id)}"><td><input type="checkbox" class="sel" ${selected.has(s.id) ? 'checked' : ''}></td>
+      <td>${s.store ? '<span class="pill store">stored</span>' : ''}</td><td>${name}${s.info.description ? '' : ' <span class="dim" title="no description">·</span>'}</td>
       <td class="mono">${esc(s.id)}</td><td class="num">${value}</td><td class="num ${s.age_s > 3600 ? 'dim' : ''}">${age(s.age_s)}</td>
-      <td>${where}</td><td>${by}</td></tr>`;
+      <td>${esc(s.quantity)}</td><td>${where}</td><td>${by}</td></tr>`;
   }).join('');
+  updateBulk();
 }
-['#f-state', '#f-source'].forEach((s) => $(s).addEventListener('change', renderSignals));
+let shown = [];
+['#f-state', '#f-source', '#f-unit', '#f-quantity', '#f-device'].forEach((s) => $(s).addEventListener('change', renderSignals));
+function updateBulk() {
+  $('#bulk').classList.toggle('hidden', selected.size === 0);
+  $('#bulk-n').textContent = `${selected.size} selected`;
+  $('#sel-all').checked = shown.length > 0 && shown.every((s) => selected.has(s.id));
+}
+$('#sel-all').addEventListener('change', (e) => { for (const s of shown) e.target.checked ? selected.add(s.id) : selected.delete(s.id); renderSignals(); });
+$('#bulk').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const act = b.dataset.bulk, set = {};
+  if (act === 'clear') { selected.clear(); renderSignals(); return; }
+  if (act === 'store') set.store = true;
+  if (act === 'nostore') set.store = false;
+  if (act === 'apply') {
+    const loc = $('#bulk-location').value.trim(), cir = $('#bulk-circuit').value, role = $('#bulk-role').value, qty = $('#bulk-quantity').value;
+    if (loc) set.location = loc;
+    if (cir) set.circuit = cir === '-' ? '' : cir;
+    if (role) set.role = role === '-' ? '' : role;
+    if (qty) set.quantity = qty;
+    if (!Object.keys(set).length) { toast('Choose a location, circuit, role or quantity first.'); return; }
+  }
+  try { const r = await api('/api/signals', { method: 'PUT', body: JSON.stringify({ ids: [...selected], set }) });
+        toast(`${r.updated} signals updated.`); await loadSignals(); }
+  catch (err) { toast(err.message, 5000); }
+});
 $('#f-q').addEventListener('input', renderSignals);
-$('#signals').addEventListener('click', (e) => { const tr = e.target.closest('tr'); if (tr) openEdit(signals.find((s) => s.id === tr.dataset.id)); });
+$('#signals').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  if (e.target.classList.contains('sel')) { e.target.checked ? selected.add(tr.dataset.id) : selected.delete(tr.dataset.id); updateBulk(); return; }
+  openEdit(signals.find((s) => s.id === tr.dataset.id));
+});
 
 function openEdit(s, prefill = null, onSave = null) {
   editing = { s, onSave };
@@ -236,6 +319,9 @@ function openEdit(s, prefill = null, onSave = null) {
   $('#e-resolved').textContent = s.resolved_by === 'signal' ? 'Has its own registry entry.' : s.resolved_by === 'none' ? 'Not described yet.' : `Described by ${s.resolved_by}.`;
   $('#e-meta').textContent = JSON.stringify({ ...s.meta, last: s.value ?? s.text, messages: s.count }, null, 1);
   $('#e-revert').classList.toggle('hidden', !s.entry);
+  $('#e-notes').textContent = '';
+  $('#e-polish').disabled = !llmOn;
+  $('#e-polish').title = llmOn ? '' : 'No LLM configured';
   $('#edit').showModal();
 }
 $('#e-save').addEventListener('click', async () => {
@@ -247,6 +333,19 @@ $('#e-save').addEventListener('click', async () => {
     else await api(`/api/signal?id=${encodeURIComponent(editing.s.id)}`, { method: 'PUT', body: JSON.stringify(entry) });
     $('#edit').close(); toast('Saved to the registry.'); refresh();
   } catch (err) { toast(err.message, 5000); }
+});
+$('#e-polish').addEventListener('click', async () => {
+  const f = $('#edit-form'), draft = {};
+  for (const k of ['name', 'quantity', 'unit', 'location', 'circuit', 'role', 'description']) draft[k] = f[k].value;
+  draft.store = f.store.checked;
+  $('#e-polish').disabled = true; $('#e-notes').textContent = 'Asking the LLM…';
+  try {
+    const p = await api(`/api/signal/polish?id=${encodeURIComponent(editing.s.id)}`, { method: 'POST', body: JSON.stringify(draft) });
+    for (const k of ['name', 'quantity', 'unit', 'location', 'circuit', 'role', 'description']) if (p[k] !== undefined) f[k].value = p[k];
+    f.store.checked = !!p.store;
+    $('#e-notes').textContent = p.notes ? `LLM: ${p.notes} Review, then Save.` : 'Polished. Review, then Save.';
+  } catch (err) { $('#e-notes').textContent = err.message; }
+  $('#e-polish').disabled = false;
 });
 $('#e-revert').addEventListener('click', async () => {
   if (!confirm('Remove this signal\'s own entry? A matching rule still applies.')) return;
@@ -290,6 +389,38 @@ $('#ask').addEventListener('click', async () => {
   $('#ask').disabled = false; loadProposals();
 });
 
+async function loadModel() {
+  const m = await api('/api/model');
+  if (!signals.length) signals = await api('/api/signals');
+  const name = (id) => { const s = signals.find((x) => x.id === id); return (s && (s.info.name || s.meta.name)) || id; };
+  const chips = (ids) => (ids || []).map((id) => `<span class="chip" title="${esc(id)}">${esc(name(id))}</span>`).join('');
+  const doc = m.proposal || m.current;
+  $('#m-accept').disabled = !m.proposal;
+  $('#m-generate').disabled = !llmOn;
+  $('#m-msg').textContent = !llmOn ? 'No LLM configured.' : m.proposal ? `Showing the proposal from ${m.proposal.generated || '?'} (not accepted yet).` : m.current ? 'Showing the accepted model.' : 'No model yet.';
+  $('#m-yaml').value = m.current_text || '';
+  if (!doc) { $('#m-body').innerHTML = '<p class="dim">Describe the important signals first (Signals tab), then generate a proposal.</p>'; return; }
+  const rows = (list, cols) => list && list.length ? `<div class="table-wrap"><table><tbody>${list.map(cols).join('')}</tbody></table></div>` : '<p class="dim">none</p>';
+  $('#m-body').innerHTML = `
+    <h3 class="sec">Systems</h3><div class="msys">${(doc.systems || []).map((x) => `<div class="card"><h3>${esc(x.name)}</h3><p>${esc(x.description)}</p>${chips(x.signals)}</div>`).join('')}</div>
+    <h3 class="sec">Relations</h3>${rows(doc.relations, (r) => `<tr><td><span class="pill">${esc(r.type)}</span></td><td>${chips(r.signals)}</td><td>${esc(r.condition)}</td><td>${esc(r.expectation)}<div class="dim">${esc(r.why)}</div></td></tr>`)}
+    <h3 class="sec">Checks</h3>${rows(doc.checks, (c) => `<tr><td class="${c.severity === 'alarm' ? 'err' : c.severity === 'warning' ? 'warn' : 'dim'}">${esc(c.severity)}</td><td>${esc(c.name)}</td><td>${chips(c.signals)}</td><td>${esc(c.condition)}</td></tr>`)}
+    <h3 class="sec">Measurement points</h3>${rows(doc.points, (p) => `<tr><td>${chips([p.signal])}</td><td>${esc(p.measures)}</td><td class="dim">${esc(p.use)}</td></tr>`)}
+    <h3 class="sec">Gaps</h3>${(doc.gaps || []).length ? `<ul>${doc.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '<p class="dim">none</p>'}`;
+}
+$('#m-generate').addEventListener('click', async () => {
+  $('#m-generate').disabled = true; $('#m-msg').textContent = 'Generating… this can take several minutes with a local model.';
+  try { await api('/api/model/generate', { method: 'POST' }); toast('Proposal ready.'); } catch (err) { $('#m-msg').textContent = err.message; }
+  $('#m-generate').disabled = false; loadModel();
+});
+$('#m-accept').addEventListener('click', async () => {
+  try { await api('/api/model/accept', { method: 'POST' }); toast('Model accepted.'); loadModel(); } catch (err) { toast(err.message, 5000); }
+});
+$('#m-save').addEventListener('click', async () => {
+  try { await api('/api/model', { method: 'PUT', body: JSON.stringify({ text: $('#m-yaml').value }) }); toast('Saved.'); loadModel(); }
+  catch (err) { toast(err.message, 6000); }
+});
+
 async function loadRules() {
   const rules = await api('/api/rules');
   $('#rules').innerHTML = rules.map((r) => `<tr><td class="mono">${esc(r.match)}</td><td>${esc([r.quantity, r.unit].filter(Boolean).join(' · '))}</td>
@@ -301,6 +432,7 @@ async function refresh() {
     await loadStatus();
     if (view === 'signals' && !$('#edit').open) await loadSignals();
     if (view === 'proposals') await loadProposals();
+    if (view === 'model') await loadModel();
     if (view === 'rules') await loadRules();
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
 }
