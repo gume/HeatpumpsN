@@ -94,7 +94,9 @@ Facts about this board:
    of one image; the same image ran cleanly afterwards. No coredump.
 4. **Home Assistant keep-alive**: the three heating switches must repeat their
    `ON` faster than `demand_timeout_s` (600 s); a missed refresh raises `301`
-   and drops the demand by design. Configure this when the S2 joins MQTT.
+   and drops the demand by design. The blueprint
+   `homeassistant/blueprints/automation/heatpumpsn/heating_keepalive.yaml` does
+   this (one automation per switch, e.g. 120 s); install it in HA.
 5. **Per-circuit pump after-run**: the firmware keeps separate timers, the
    configuration still exposes one `pump_stop_after_heating_s` for all three.
    Decide whether per-circuit values are needed.
@@ -131,6 +133,7 @@ Facts about this board:
 | `floor_simulator/` | HIL simulator: plant, boiler, bridges, dashboard, tuning tools, tests |
 | `tests/` | older runtime integration checks against a live controller |
 | `observer/` | the observer: ingest, catalog, registry, InfluxDB storage, web portal, tests |
+| `homeassistant/` | Home Assistant files: heating keep-alive blueprint |
 | `plans/` | system architecture, controller-node layer specs, observer and MQTT designs, schematics |
 | `analysis/` | old-system telemetry analysis (DuckDB), reports, its own handover |
 

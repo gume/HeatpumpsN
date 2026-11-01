@@ -1,0 +1,75 @@
+blueprint:
+  name: HeatpumpsN heating keep-alive
+  description: >-
+    Repeats ON to a HeatpumpsN heating switch (Heating loop 1, Heating loop 2,
+    Floor heating) every few seconds while the switch is on, and stops when it
+    is off. The controller drops a circuit's demand when no ON arrives within
+    its demand timeout (`demand_timeout_s`, 600 s by default) and reports error
+    301; this keeps an active demand alive.
+
+
+    Choose an interval well below the controller's demand timeout, e.g. 120 s
+    for the default 600 s, so a missed message or two never drops the demand.
+    Create one automation per switch.
+
+
+    The switch shows the controller's effective demand. If Home Assistant was
+    down longer than the timeout, the controller has dropped the demand and the
+    switch shows off, so this automation stays quiet until the switch is turned
+    on again (the controller re-arms at the next ON).
+  domain: automation
+  input:
+    switch_entity:
+      name: Heating switch
+      description: The HeatpumpsN heating switch to keep alive.
+      selector:
+        entity:
+          filter:
+            - domain: switch
+    interval:
+      name: Interval
+      description: Seconds between repeated ON commands while the switch is on.
+      default: 120
+      selector:
+        number:
+          min: 10
+          max: 3600
+          step: 1
+          unit_of_measurement: s
+          mode: box
+
+# Restart: every on/off change starts over, so turning the switch off ends a
+# running repeat at once and turning it on restarts the interval.
+mode: restart
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input switch_entity
+    to: "on"
+  - trigger: state
+    entity_id: !input switch_entity
+    to: "off"
+  - trigger: homeassistant
+    event: start
+
+variables:
+  interval_s: !input interval
+
+actions:
+  - repeat:
+      while:
+        - condition: state
+          entity_id: !input switch_entity
+          state: "on"
+      sequence:
+        - delay:
+            seconds: "{{ interval_s | int }}"
+        - if:
+            - condition: state
+              entity_id: !input switch_entity
+              state: "on"
+          then:
+            - action: switch.turn_on
+              target:
+                entity_id: !input switch_entity

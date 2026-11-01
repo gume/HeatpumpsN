@@ -19,6 +19,8 @@ for the firmware layers.
 | `HANDOVER.md` | Project handover: state, open issues, access, workflow, architecture |
 | `firmware/` | PlatformIO firmware project (ESP32 family) |
 | `floor_simulator/` | Hardware-in-the-loop floor-heating simulator |
+| `observer/` | Observer: MQTT ingest, signal registry, InfluxDB storage, web portal |
+| `homeassistant/` | Home Assistant files: the heating keep-alive blueprint |
 | `tests/` | Runtime integration checks against a running controller |
 | `plans/` | System, controller-node, and observer specifications |
 | `analysis/` | Python analysis, exported telemetry, and derived parameters |
