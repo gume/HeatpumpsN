@@ -25,10 +25,29 @@ from .store import InfluxWriter, MemoryWriter
 log = logging.getLogger("observer")
 
 
+def load_env(path: str) -> None:
+    """KEY=VALUE lines from a .env file into the environment (existing variables win)."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def load_config(path: str) -> dict:
+    base = os.path.dirname(os.path.abspath(path))
+    load_env(os.path.join(base, ".env"))
     with open(path, encoding="utf-8") as fp:
         cfg = yaml.safe_load(fp) or {}
-    base = os.path.dirname(os.path.abspath(path))
+    # The LLM endpoint may come entirely from .env.
+    llm = cfg.setdefault("llm", {}) or {}
+    cfg["llm"] = llm
+    llm["base_url"] = os.environ.get("OBSERVER_LLM_BASE_URL") or llm.get("base_url", "")
+    llm["model"] = os.environ.get("OBSERVER_LLM_MODEL") or llm.get("model", "")
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
                          ("proposals", "data/proposals.yaml")):

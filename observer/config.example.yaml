@@ -26,12 +26,13 @@ paths:
   registry: registry.yaml
   proposals: data/proposals.yaml
 
-# Optional: any OpenAI-compatible endpoint (LiteLLM, local server, hosted API).
+# Optional: any OpenAI-compatible endpoint (Ollama, LiteLLM, a hosted API).
+# Usually set in .env: OBSERVER_LLM_BASE_URL, OBSERVER_LLM_MODEL, OBSERVER_LLM_KEY.
 llm:
-  base_url: ""            # e.g. http://litellm.home:4000/v1
-  model: ""               # e.g. a model name LiteLLM routes
-  api_key_env: OBSERVER_LLM_KEY
-  timeout_s: 120
+  base_url: ""            # .env wins: e.g. http://ollama-host:11434/v1
+  model: ""               # .env wins: e.g. qwen2.5:14b
+  api_key_env: OBSERVER_LLM_KEY   # empty for Ollama
+  timeout_s: 300
 
 # What the LLM (and later the reports) know about the house.
 context: |

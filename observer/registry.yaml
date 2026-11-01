@@ -29,10 +29,22 @@ rules:
     quantity: humidity
     unit: "%"
     role: room
+  - match: "ha_state/sensor/*_battery_plus/state"
+    store: false
+    description: Duplicate of the sensor's battery percentage.
+  - match: "ha_state/sensor/*_voltage/state"
+    quantity: other
+    unit: V
+    role: diagnostic
+    description: Sensor battery voltage.
   - match: "ha_state/sensor/*_battery/state"
     quantity: battery
     unit: "%"
     role: diagnostic
+  # EMS-ESP repeats each DS18B20 address as a "name" text field: noise.
+  - match: "ems-esp/temperaturesensor_data#*.name"
+    store: false
+    description: Repeats the sensor address.
   # Everything else the boiler reports: stored raw, described when needed.
   - match: "ems-esp/boiler_data#*"
     role: boiler
@@ -222,6 +234,15 @@ signals:
     location: BF
     circuit: floor
     role: valve
+
+  # --- Outdoor (Home Assistant, OpenWeatherMap, via Statestream) -------------
+  "ha_state/sensor/openweathermap_temperature/state":
+    name: Outdoor
+    quantity: temperature
+    unit: "°C"
+    location: outdoor
+    role: outdoor
+    description: Outdoor air temperature from OpenWeatherMap (not the feels-like value).
 
   # --- Rooms (Home Assistant, via Statestream) --------------------------------
   "ha_state/sensor/temperature_humidity_sensor_50da_temperature/state": {name: Attic, location: attic}

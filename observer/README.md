@@ -45,6 +45,10 @@ MQTT (home broker; in development the mirror under mirror/)
 
 ### Storage (InfluxDB 2.x)
 
+The development database is disposable: `scripts/influx-reset.sh` deletes the
+volume and rebuilds it empty from `docker-compose.dev.yml`. The observer keeps
+running meanwhile and resumes writing when the database is back.
+
 Measurement `signal`; tags `id`, `source` (first topic level) and, from the
 registry, `quantity`, `location`, `circuit`, `role`; field `value` (float) or
 `text`; time = arrival time. Example: all bottom-floor temperatures are
@@ -61,6 +65,9 @@ database; they still appear in the catalog. New sensors therefore show up in
 you describe them, by hand or with `observer propose` + `observer accept`.
 
 ### LLM assistance (optional)
+
+The endpoint comes from `.env` (`OBSERVER_LLM_BASE_URL`, `OBSERVER_LLM_MODEL`,
+`OBSERVER_LLM_KEY`); for Ollama use `http://<host>:11434/v1` and no key.
 
 `observer propose` sends undescribed signals (id, stream metadata, last value)
 together with the house description from the config (`context`) and the
@@ -105,9 +112,9 @@ cp config.example.yaml config.yaml          # adjust; config.yaml is git-ignored
 .venv/bin/observer catalog --unregistered   # what is not described yet
 .venv/bin/observer serve --dry-run            # full ingest without a database
 
-# with InfluxDB (docker-compose.dev.yml)
-docker compose -f docker-compose.dev.yml up -d
-export INFLUX_TOKEN=observer-dev-token
+# with InfluxDB: disposable, rebuilt empty at any time
+scripts/influx-reset.sh                     # (re)creates org, bucket and token from docker-compose.dev.yml
+cp .env.example .env                        # INFLUX_TOKEN, LLM endpoint (git-ignored)
 .venv/bin/observer serve
 ```
 

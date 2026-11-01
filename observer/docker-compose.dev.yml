@@ -1,4 +1,5 @@
-# Development InfluxDB for the observer (port 38086, data in ./data/influx).
+# Development InfluxDB for the observer (port 38086, data in the named volume
+# observer-influx-dev). Disposable: scripts/influx-reset.sh rebuilds it empty.
 # docker compose -f docker-compose.dev.yml up -d
 services:
   influxdb:
@@ -7,7 +8,7 @@ services:
     ports:
       - "38086:8086"
     volumes:
-      - ./data/influx:/var/lib/influxdb2
+      - influx-data:/var/lib/influxdb2
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: observer
@@ -16,3 +17,7 @@ services:
       DOCKER_INFLUXDB_INIT_BUCKET: observer
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: observer-dev-token
     restart: unless-stopped
+
+volumes:
+  influx-data:
+    name: observer-influx-dev
