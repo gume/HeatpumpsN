@@ -312,13 +312,20 @@ signals:
     role: valve
 
   # --- Outdoor (Home Assistant, OpenWeatherMap, via Statestream) -------------
-  "ha_state/sensor/openweathermap_temperature/state":
+  "ha_state/sensor/owm_korona_temperature/state":
     name: Outdoor
     quantity: temperature
     unit: "°C"
     location: outdoor
     role: outdoor
-    description: Outdoor air temperature from OpenWeatherMap (not the feels-like value).
+    description: Outdoor air temperature from OpenWeatherMap for the house's location (HA "owm_korona"; not the feels-like value).
+  "ha_state/sensor/owm_korona_humidity/state":
+    name: Outdoor humidity
+    quantity: humidity
+    unit: "%"
+    location: outdoor
+    role: outdoor
+    description: Outdoor relative humidity from OpenWeatherMap (HA "owm_korona").
 
   # --- Rooms (Home Assistant, via Statestream) --------------------------------
   "ha_state/sensor/temperature_humidity_sensor_50da_temperature/state": {name: Attic, location: attic}
