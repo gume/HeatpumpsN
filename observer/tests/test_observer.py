@@ -154,3 +154,18 @@ def test_propose_batches_and_passes_context():
     out = propose(Fake(), signals, "TF top floor", {"known": {"name": "K"}}, batch=2)
     assert len(calls) == 3 and len(out) == 5
     assert calls[0]["house_context"] == "TF top floor"
+
+
+def test_lenient_json_and_one_repair_round():
+    from observer.llm import chat_json, loads_lenient
+    assert loads_lenient('```json\n{"a": [1, 2,], "b": {"c": 3,},}\n```') == {"a": [1, 2], "b": {"c": 3}}
+    answers = iter(['{"a": 1, b: 2}', '{"a": 1, "b": 2}'])
+    calls = []
+
+    class Fake:
+        def chat(self, system, user):
+            calls.append(user)
+            return next(answers)
+
+    assert chat_json(Fake(), "sys", "question") == {"a": 1, "b": 2}
+    assert len(calls) == 2 and "not valid JSON" in calls[1]

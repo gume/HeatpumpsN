@@ -68,6 +68,32 @@ class LlmClient:
         raise RuntimeError("unreachable")
 
 
+_TRAILING_COMMA = __import__("re").compile(r",(\s*[}\]])")
+
+
+def loads_lenient(text: str):
+    """JSON from a model's answer: code fences, surrounding prose and trailing commas tolerated."""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("the answer contains no JSON object")
+    body = text[start:end + 1]
+    try:
+        return json.loads(body)
+    except ValueError:
+        return json.loads(_TRAILING_COMMA.sub(r"\1", body))
+
+
+def chat_json(client, system: str, user: str):
+    """Ask for JSON; if the answer does not parse, show the model its error once and ask again."""
+    text = client.chat(system, user)
+    try:
+        return loads_lenient(text)
+    except ValueError as exc:
+        repair = (f"Your previous answer was not valid JSON ({exc}). Return the same content again as "
+                  f"one valid JSON object only, without comments or trailing commas.\n\nPrevious answer:\n{text}")
+        return loads_lenient(client.chat(system, repair))
+
+
 def build_request(signals: dict[str, dict], context: str, known: dict[str, dict]) -> str:
     """User message: house context, already described signals as examples, the signals to describe."""
     examples = dict(list(known.items())[:25])
@@ -137,11 +163,7 @@ def polish(client: LlmClient, signal: str, draft: dict, facts: dict, context: st
     """A polished registry entry for `signal`, from the user's draft (validated, not saved)."""
     user = json.dumps({"house_context": context.strip(), "signal": signal, "user_draft": draft,
                        "facts": facts, "related_signals": related}, ensure_ascii=False, indent=1)
-    text = client.chat(POLISH_SYSTEM, user)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("the model gave no JSON answer")
-    data = json.loads(text[start:end + 1])
+    data = chat_json(client, POLISH_SYSTEM, user)
     out = {k: data[k].strip() for k in FIELDS if isinstance(data.get(k), str) and data[k].strip()}
     if out.get("quantity") not in QUANTITIES:
         out.pop("quantity", None)
@@ -193,11 +215,7 @@ SEVERITIES = ("info", "warning", "alarm")
 def build_house_model(client: LlmClient, signals: dict[str, dict], context: str) -> dict:
     """A validated house model from the described signals ({id: description})."""
     user = json.dumps({"house_context": context.strip(), "signals": signals}, ensure_ascii=False, indent=1)
-    text = client.chat(MODEL_SYSTEM, user)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("the model gave no JSON answer")
-    return validate_model(json.loads(text[start:end + 1]), set(signals))
+    return validate_model(chat_json(client, MODEL_SYSTEM, user), set(signals))
 
 
 def validate_model(data: dict, known: set[str]) -> dict:
@@ -232,3 +250,65 @@ def validate_model(data: dict, known: set[str]) -> dict:
         if isinstance(gap, str) and gap.strip():
             model["gaps"].append(gap.strip())
     return model
+
+
+# --- The reviewed house description ------------------------------------------
+
+HOUSE_SYSTEM = """You write the description of a house's heating system for its owner,
+who will review it, correct it and add facts. A supervisor later uses the
+same understanding for analysis and anomaly detection.
+
+You get: the house context, the described signals (id, name, quantity, unit,
+location, circuit, role, description), signals that are recorded or seen but
+not described or not stored (candidates), the owner's review notes (they are
+authoritative: follow them, even against your own reading) and the previous
+audited description (keep what is still right, improve the rest).
+
+Answer only with JSON:
+{
+ "description_md": "Markdown for the owner. Sections: ## Overview, ## Boiler and hot water, ## Heating circuits (one ### per circuit), ## Rooms, ## Outdoor, ## Controller and measurement devices, ## How the parts interact (expected behaviour, with typical numbers where you can estimate them), ## Uncertain points. Name sensors by their names, with the id in backticks the first time. Plain, concrete sentences.",
+ "questions": ["specific questions whose answers would make the description or the analysis better"],
+ "recommendations": [{"kind": "existing_signal" or "new_sensor", "signal": "candidate id (existing_signal only)", "what": "short", "why": "what it would enable", "priority": "high" | "medium" | "low"}],
+ "model": {"systems": [{"name", "description", "signals": []}],
+           "points": [{"signal", "measures", "use"}],
+           "relations": [{"type": "redundant"|"order"|"causal"|"balance", "signals": [], "condition", "expectation", "why"}],
+           "checks": [{"name", "signals": [], "condition", "severity": "info"|"warning"|"alarm"}],
+           "gaps": []}
+}
+Use only signal ids from the input in "model" and "signal". Be physically
+plausible; do not invent equipment the inputs do not suggest; say what is
+uncertain instead."""
+
+PRIORITIES = ("high", "medium", "low")
+
+
+def build_house_description(client: LlmClient, context: str, described: dict[str, dict],
+                            candidates: dict[str, dict], notes: str, previous_md: str) -> dict:
+    """Validated description, questions, recommendations and model from the LLM."""
+    user = json.dumps({"house_context": context.strip(), "owner_review_notes": notes.strip(),
+                       "previous_audited_description": previous_md.strip(),
+                       "described_signals": described, "candidate_signals": candidates},
+                      ensure_ascii=False, indent=1)
+    data = chat_json(client, HOUSE_SYSTEM, user)
+    if not isinstance(data, dict) or not isinstance(data.get("description_md"), str) or not data["description_md"].strip():
+        raise ValueError("the answer has no description")
+    known = set(described) | set(candidates)
+    recs = []
+    for r in data.get("recommendations", []):
+        if not isinstance(r, dict) or r.get("kind") not in ("existing_signal", "new_sensor"):
+            continue
+        if r["kind"] == "existing_signal" and r.get("signal") not in known:
+            continue
+        recs.append({"kind": r["kind"], "signal": r.get("signal") if r["kind"] == "existing_signal" else "",
+                     "what": str(r.get("what") or "").strip(), "why": str(r.get("why") or "").strip(),
+                     "priority": r.get("priority") if r.get("priority") in PRIORITIES else "medium"})
+    # Signal ids the prose names in backticks but that do not exist (a model's
+    # typo would otherwise pass a human review unnoticed).
+    import re
+    named = {m for m in re.findall(r"`([^`\s]+)`", data["description_md"]) if "/" in m}
+    unknown = sorted(named - known)
+    return {"description_md": data["description_md"].strip(),
+            "unknown_ids": unknown,
+            "questions": [q.strip() for q in data.get("questions", []) if isinstance(q, str) and q.strip()],
+            "recommendations": recs,
+            "model": validate_model(data.get("model") or {}, set(described))}

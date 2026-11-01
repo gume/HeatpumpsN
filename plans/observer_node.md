@@ -9,3 +9,8 @@
 4. **Supervision:** drift detection, anomaly reports, parameter versioning with rollback.
 5. **Optional later stage:** offline RL / behavioral cloning in simulation using the identified plant model, evaluated against logs before any deployment.
 
+---
+
+The current plan for the observer's next stages (reviewed house description,
+supervision, tools, agents, sandbox, shared skills) is in
+[`observer_agentic_plan.md`](observer_agentic_plan.md).

@@ -69,6 +69,8 @@
   .msys .card h3 { margin: 0 0 4px; font-size: 14px; } .msys .card p { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
   .chip { display: inline-block; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 6px;
           padding: 1px 6px; margin: 2px 2px 0 0; font-size: 11px; }
+  .md h2, .md h3, .md h4, .md h5 { margin: 14px 0 6px; } .md h2:first-child, .md h3:first-child { margin-top: 0; }
+  .md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
   h3.sec { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 16px 0 6px; }
 </style>
 </head>
@@ -79,7 +81,8 @@
     <button data-view="status" class="active">Status</button>
     <button data-view="signals">Signals</button>
     <button data-view="proposals">Proposals</button>
-    <button data-view="model">House model</button>
+    <button data-view="house">House</button>
+    <button data-view="settings">Settings</button>
     <button data-view="rules">Rules</button>
   </nav>
   <span id="mq">…</span>
@@ -138,20 +141,36 @@
     </table></div>
   </section>
 
-  <section id="view-model" class="hidden">
-    <p class="dim">What sensors the house has, what they measure and how they relate. Built by the LLM from the described,
-      stored signals and the house context; you review, edit and accept it. Analysis and anomaly checks read the accepted model
-      (<span class="mono">house_model.yaml</span>).</p>
-    <div class="bar">
-      <button class="btn primary" id="m-generate">Generate a proposal</button>
-      <button class="btn" id="m-accept">Accept the proposal</button>
-      <span class="dim" id="m-msg"></span>
+  <section id="view-house" class="hidden">
+    <p class="dim">The observer's understanding of the house, written for you to check. Correct it and add facts in the review
+      notes; regenerating uses them. Accepting a proposal makes it the audited version and archives it
+      (<span class="mono">observer/house/</span>). Analysis and anomaly checks use the audited version.</p>
+    <div class="card" style="margin-bottom:12px">
+      <h3 class="sec" style="margin-top:0">Review notes</h3>
+      <p class="dim" style="margin:0 0 6px">Corrections, missing facts, answers to the questions. Always open; kept in git.</p>
+      <textarea id="h-notes" rows="7" style="width:100%"></textarea>
+      <div class="actions" style="margin-top:8px"><span class="dim" id="h-notes-msg"></span><button class="btn" id="h-notes-save">Save notes</button></div>
     </div>
-    <div id="m-body"></div>
-    <details style="margin-top:12px"><summary>Edit the accepted model (YAML)</summary>
-      <textarea id="m-yaml" rows="18" style="width:100%;font-family:var(--mono);font-size:12px;margin-top:8px"></textarea>
-      <div class="actions" style="margin-top:8px"><button class="btn primary" id="m-save">Save</button></div>
-    </details>
+    <div class="bar">
+      <button class="btn primary" id="h-generate">Generate a proposal</button>
+      <button class="btn" id="h-accept">Accept and archive</button>
+      <button class="btn" id="h-edit">Edit the proposal</button>
+      <select id="h-archive"><option value="">Archived versions…</option></select>
+      <span class="dim" id="h-msg"></span>
+    </div>
+    <div id="h-body"></div>
+  </section>
+
+  <section id="view-settings" class="hidden">
+    <p class="dim">LLM providers come from <span class="mono">.env</span> (endpoint and key per slot:
+      <span class="mono">OBSERVER_LLM_BASE_URL/KEY</span>, <span class="mono">OBSERVER_LLM_2_BASE_URL/KEY</span>, …).
+      Here you name them and choose a model for each task: a fast one for routine work, a strong one for the house description.</p>
+    <h3 class="sec">Providers</h3>
+    <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Name</th><th>Endpoint</th><th>Key</th></tr></thead><tbody id="s-providers"></tbody></table></div>
+    <h3 class="sec">Models per task</h3>
+    <div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Model</th><th></th></tr></thead><tbody id="s-tasks"></tbody></table></div>
+    <div class="actions" style="margin-top:10px"><span class="dim" id="s-msg"></span><button class="btn primary" id="s-save">Save settings</button></div>
+    <datalist id="s-models"></datalist>
   </section>
 
   <section id="view-rules" class="hidden">
@@ -200,7 +219,7 @@ const ROLES = ['', 'supply', 'return', 'room', 'outdoor', 'boiler', 'dhw', 'pump
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const age = (s) => s == null ? '—' : s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`;
-let signals = [], view = 'status', editing = null, llmOn = false;
+let signals = [], view = 'status', editing = null, llm = {};
 
 function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
 async function api(path, opts = {}) {
@@ -218,13 +237,13 @@ document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click
 function show(v) {
   view = v;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-  for (const id of ['status', 'signals', 'proposals', 'model', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  for (const id of ['status', 'signals', 'proposals', 'house', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
 
 async function loadStatus() {
   const s = await api('/api/status');
-  llmOn = s.llm;
+  llm = s.llm || {};
   $('#mq').innerHTML = s.mqtt.host ? `MQTT <span class="${s.mqtt.connected ? 'ok' : 'err'}">${s.mqtt.connected ? 'connected' : 'disconnected'}</span> · ${esc(s.mqtt.host)}:${s.mqtt.port}` : 'MQTT off';
   if (view !== 'status') return;
   const card = (k, v, sub = '', cls = '') => `<div class="card"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${sub}</div></div>`;
@@ -232,7 +251,7 @@ async function loadStatus() {
     card('MQTT', s.mqtt.connected ? 'connected' : 'disconnected', `${s.mqtt.messages} messages · last ${age(s.mqtt.last_message_age_s)} ago`, s.mqtt.connected ? 'ok' : 'err'),
     card('Stored samples', s.storage.samples.toLocaleString(), s.storage.kind === 'influx' ? 'InfluxDB' : 'dry run: nothing is written', s.storage.kind === 'influx' ? '' : 'warn'),
     card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
-    card('LLM', s.llm ? 'configured' : 'off', s.llm ? 'proposals available' : 'set llm.base_url and llm.model', s.llm ? 'ok' : 'dim'),
+    card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
     card('Uptime', age(s.uptime_s), ''),
   ].join('');
   $('#sources').innerHTML = Object.entries(s.sources).map(([src, x]) =>
@@ -320,8 +339,8 @@ function openEdit(s, prefill = null, onSave = null) {
   $('#e-meta').textContent = JSON.stringify({ ...s.meta, last: s.value ?? s.text, messages: s.count }, null, 1);
   $('#e-revert').classList.toggle('hidden', !s.entry);
   $('#e-notes').textContent = '';
-  $('#e-polish').disabled = !llmOn;
-  $('#e-polish').title = llmOn ? '' : 'No LLM configured';
+  $('#e-polish').disabled = !llm.describe;
+  $('#e-polish').title = llm.describe ? '' : 'No model set for descriptions (Settings)';
   $('#edit').showModal();
 }
 $('#e-save').addEventListener('click', async () => {
@@ -356,8 +375,8 @@ $('#e-revert').addEventListener('click', async () => {
 let proposals = [];
 async function loadProposals() {
   proposals = await api('/api/proposals');
-  $('#ask').disabled = !llmOn;
-  if (!llmOn) $('#ask-msg').textContent = 'No LLM configured (llm.base_url and llm.model in config.yaml).';
+  $('#ask').disabled = !llm.propose;
+  if (!llm.propose) $('#ask-msg').textContent = 'No model set for bulk proposals (Settings).';
   $('#proposals').innerHTML = proposals.length ? proposals.map((p, i) => `<tr data-i="${i}">
     <td class="mono">${esc(p.signal)}</td><td>${esc(p.name)}</td><td>${esc([p.quantity, p.unit].filter(Boolean).join(' · '))}</td>
     <td>${esc([p.location, p.circuit, p.role].filter(Boolean).join(' · '))}</td><td>${p.store ? 'yes' : 'no'}</td>
@@ -389,36 +408,122 @@ $('#ask').addEventListener('click', async () => {
   $('#ask').disabled = false; loadProposals();
 });
 
-async function loadModel() {
-  const m = await api('/api/model');
+// Minimal Markdown for the house description: headings, lists, bold, code, paragraphs.
+function md(text) {
+  const inline = (t) => esc(t).replace(/`([^`]+)`/g, '<span class="mono">$1</span>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const out = []; let list = null, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } if (list) { out.push(`</${list}>`); list = null; } };
+  for (const raw of (text || '').split('\n')) {
+    const line = raw.trimEnd(); let m;
+    if (!line.trim()) { flush(); continue; }
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flush(); const n = Math.min(m[1].length + 1, 5); out.push(`<h${n}>${inline(m[2])}</h${n}>`); continue; }
+    if ((m = line.match(/^\s*([-*]|\d+\.)\s+(.*)$/))) {
+      if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; }
+      const kind = /\d/.test(m[1]) ? 'ol' : 'ul';
+      if (list !== kind) { if (list) out.push(`</${list}>`); out.push(`<${kind}>`); list = kind; }
+      out.push(`<li>${inline(m[2])}</li>`); continue;
+    }
+    if (list) { out.push(`</${list}>`); list = null; }
+    para.push(line.trim());
+  }
+  flush();
+  return out.join('');
+}
+
+let house = null, houseEditing = false;
+async function loadHouse() {
+  house = await api('/api/house');
   if (!signals.length) signals = await api('/api/signals');
   const name = (id) => { const s = signals.find((x) => x.id === id); return (s && (s.info.name || s.meta.name)) || id; };
   const chips = (ids) => (ids || []).map((id) => `<span class="chip" title="${esc(id)}">${esc(name(id))}</span>`).join('');
-  const doc = m.proposal || m.current;
-  $('#m-accept').disabled = !m.proposal;
-  $('#m-generate').disabled = !llmOn;
-  $('#m-msg').textContent = !llmOn ? 'No LLM configured.' : m.proposal ? `Showing the proposal from ${m.proposal.generated || '?'} (not accepted yet).` : m.current ? 'Showing the accepted model.' : 'No model yet.';
-  $('#m-yaml').value = m.current_text || '';
-  if (!doc) { $('#m-body').innerHTML = '<p class="dim">Describe the important signals first (Signals tab), then generate a proposal.</p>'; return; }
+  if (document.activeElement !== $('#h-notes')) $('#h-notes').value = house.notes || '';
+  $('#h-archive').innerHTML = '<option value="">Archived versions…</option>' + house.archive.map((a) => `<option>${esc(a)}</option>`).join('');
+  const p = house.proposal, cur = house.current;
+  $('#h-accept').disabled = !p; $('#h-edit').disabled = !p; $('#h-generate').disabled = !llm.house;
+  $('#h-msg').textContent = !llm.house ? 'No model set for the house description (Settings).'
+    : p ? `Proposal from ${p.generated}${p.model_name ? ` (${p.model_name})` : ''}${p.edited ? ', edited' : ''}: not accepted yet.`
+    : cur.description ? `Audited version ${cur.audited || ''}.` : 'No description yet: generate a proposal.';
+  const doc = p ? { description: p.description_md, model: p.model, questions: p.questions, recommendations: p.recommendations } : cur;
+  if (!doc || !doc.description) { $('#h-body').innerHTML = ''; return; }
+  const model = doc.model || {};
   const rows = (list, cols) => list && list.length ? `<div class="table-wrap"><table><tbody>${list.map(cols).join('')}</tbody></table></div>` : '<p class="dim">none</p>';
-  $('#m-body').innerHTML = `
-    <h3 class="sec">Systems</h3><div class="msys">${(doc.systems || []).map((x) => `<div class="card"><h3>${esc(x.name)}</h3><p>${esc(x.description)}</p>${chips(x.signals)}</div>`).join('')}</div>
-    <h3 class="sec">Relations</h3>${rows(doc.relations, (r) => `<tr><td><span class="pill">${esc(r.type)}</span></td><td>${chips(r.signals)}</td><td>${esc(r.condition)}</td><td>${esc(r.expectation)}<div class="dim">${esc(r.why)}</div></td></tr>`)}
-    <h3 class="sec">Checks</h3>${rows(doc.checks, (c) => `<tr><td class="${c.severity === 'alarm' ? 'err' : c.severity === 'warning' ? 'warn' : 'dim'}">${esc(c.severity)}</td><td>${esc(c.name)}</td><td>${chips(c.signals)}</td><td>${esc(c.condition)}</td></tr>`)}
-    <h3 class="sec">Measurement points</h3>${rows(doc.points, (p) => `<tr><td>${chips([p.signal])}</td><td>${esc(p.measures)}</td><td class="dim">${esc(p.use)}</td></tr>`)}
-    <h3 class="sec">Gaps</h3>${(doc.gaps || []).length ? `<ul>${doc.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '<p class="dim">none</p>'}`;
+  $('#h-body').innerHTML = `
+    ${houseEditing && p ? `<textarea id="h-text" rows="28" style="width:100%;font-family:var(--mono);font-size:12px">${esc(p.description_md)}</textarea>
+      <div class="actions" style="margin-top:8px"><button class="btn" id="h-cancel">Cancel</button><button class="btn primary" id="h-save">Save the edited proposal</button></div>`
+      : `<div class="card md">${md(doc.description)}</div>`}
+    ${p && p.unknown_ids && p.unknown_ids.length ? `<div class="card" style="border-color:var(--warn);margin-top:10px"><strong class="warn">The text names ${p.unknown_ids.length} signal id(s) that do not exist</strong>
+      <div class="mono" style="margin-top:4px">${p.unknown_ids.map(esc).join('<br>')}</div><p class="dim" style="margin:6px 0 0">Correct them with "Edit the proposal", or regenerate.</p></div>` : ''}
+    ${doc.questions && doc.questions.length ? `<h3 class="sec">Questions for you</h3><div class="card"><ol>${doc.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>
+      <p class="dim" style="margin:6px 0 0">Answer them in the review notes, then generate again.</p></div>` : ''}
+    ${doc.recommendations && doc.recommendations.length ? `<h3 class="sec">Recommendations</h3>${rows(doc.recommendations, (r) => `<tr>
+      <td class="${r.priority === 'high' ? 'warn' : 'dim'}">${esc(r.priority)}</td><td>${r.kind === 'existing_signal' ? 'use existing' : 'new sensor'}</td>
+      <td>${r.signal ? chips([r.signal]) + ' ' : ''}${esc(r.what)}</td><td class="dim">${esc(r.why)}</td></tr>`)}` : ''}
+    <details style="margin-top:12px"><summary>Machine model: ${(model.systems || []).length} systems, ${(model.relations || []).length} relations, ${(model.checks || []).length} checks</summary>
+      <h3 class="sec">Relations</h3>${rows(model.relations, (r) => `<tr><td><span class="pill">${esc(r.type)}</span></td><td>${chips(r.signals)}</td><td>${esc(r.condition)}</td><td>${esc(r.expectation)}<div class="dim">${esc(r.why)}</div></td></tr>`)}
+      <h3 class="sec">Checks</h3>${rows(model.checks, (c) => `<tr><td class="${c.severity === 'alarm' ? 'err' : c.severity === 'warning' ? 'warn' : 'dim'}">${esc(c.severity)}</td><td>${esc(c.name)}</td><td>${chips(c.signals)}</td><td>${esc(c.condition)}</td></tr>`)}
+    </details>`;
+  if ($('#h-save')) $('#h-save').addEventListener('click', async () => {
+    try { await api('/api/house/proposal', { method: 'PUT', body: JSON.stringify({ description: $('#h-text').value }) }); houseEditing = false; toast('Proposal saved.'); loadHouse(); }
+    catch (err) { toast(err.message, 5000); }
+  });
+  if ($('#h-cancel')) $('#h-cancel').addEventListener('click', () => { houseEditing = false; loadHouse(); });
 }
-$('#m-generate').addEventListener('click', async () => {
-  $('#m-generate').disabled = true; $('#m-msg').textContent = 'Generating… this can take several minutes with a local model.';
-  try { await api('/api/model/generate', { method: 'POST' }); toast('Proposal ready.'); } catch (err) { $('#m-msg').textContent = err.message; }
-  $('#m-generate').disabled = false; loadModel();
+$('#h-notes-save').addEventListener('click', async () => {
+  try { await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }); $('#h-notes-msg').textContent = 'Saved.'; }
+  catch (err) { $('#h-notes-msg').textContent = err.message; }
 });
-$('#m-accept').addEventListener('click', async () => {
-  try { await api('/api/model/accept', { method: 'POST' }); toast('Model accepted.'); loadModel(); } catch (err) { toast(err.message, 5000); }
+$('#h-generate').addEventListener('click', async () => {
+  await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }).catch(() => {});
+  $('#h-generate').disabled = true; $('#h-msg').textContent = 'Generating… a minute or more with a strong model.';
+  try { await api('/api/house/generate', { method: 'POST' }); toast('Proposal ready.'); } catch (err) { $('#h-msg').textContent = err.message; }
+  $('#h-generate').disabled = false; houseEditing = false; loadHouse();
 });
-$('#m-save').addEventListener('click', async () => {
-  try { await api('/api/model', { method: 'PUT', body: JSON.stringify({ text: $('#m-yaml').value }) }); toast('Saved.'); loadModel(); }
-  catch (err) { toast(err.message, 6000); }
+$('#h-accept').addEventListener('click', async () => {
+  if (!confirm('Accept this proposal as the audited description? The current version and your notes are archived with it.')) return;
+  try { const r = await api('/api/house/accept', { method: 'POST' }); toast(`Accepted and archived (${r.archived}).`); loadHouse(); }
+  catch (err) { toast(err.message, 5000); }
+});
+$('#h-edit').addEventListener('click', () => { houseEditing = true; loadHouse(); });
+$('#h-archive').addEventListener('change', async (e) => {
+  if (!e.target.value) return;
+  try {
+    const a = await api(`/api/house/archive?stamp=${encodeURIComponent(e.target.value)}`);
+    $('#h-body').innerHTML = `<p class="dim">Archived version ${esc(a.stamp)}${a.review && a.review.model_name ? ` (${esc(a.review.model_name)})` : ''}. Pick "Archived versions…" to go back.</p>
+      <div class="card md">${md(a.description)}</div>${a.notes ? `<h3 class="sec">Notes at that time</h3><div class="card md">${md(a.notes)}</div>` : ''}`;
+  } catch (err) { toast(err.message, 5000); }
+  e.target.value = '';
+});
+
+let settingsView = null;
+async function loadSettings() {
+  settingsView = await api('/api/settings');
+  const prov = settingsView.providers;
+  $('#s-providers').innerHTML = prov.length ? prov.map((p) => `<tr><td>${esc(p.slot)}</td>
+      <td><input data-slot="${esc(p.slot)}" class="s-name" value="${esc(p.name)}"></td>
+      <td class="mono">${esc(p.base_url)}</td><td>${p.has_key ? 'set' : '<span class="dim">none</span>'}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="dim">No provider in .env (OBSERVER_LLM_BASE_URL).</td></tr>';
+  $('#s-tasks').innerHTML = settingsView.tasks.map((t) => `<tr data-task="${esc(t.task)}"><td>${esc(t.label)}</td>
+      <td><select class="s-prov"><option value=""></option>${prov.map((p) => `<option value="${esc(p.slot)}" ${p.slot === t.provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
+      <td><input class="s-model" list="s-models" value="${esc(t.model)}" placeholder="model name" size="28"></td>
+      <td>${t.ready ? '<span class="ok">ready</span>' : '<span class="dim">not set</span>'} <button class="btn btn-sm s-list" type="button">List models</button></td></tr>`).join('');
+}
+$('#s-tasks').addEventListener('click', async (e) => {
+  if (!e.target.classList.contains('s-list')) return;
+  const slot = e.target.closest('tr').querySelector('.s-prov').value;
+  if (!slot) { toast('Choose a provider first.'); return; }
+  try { const models = await api(`/api/settings/models?provider=${encodeURIComponent(slot)}`);
+        $('#s-models').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
+        toast(`${models.length} models listed: type to choose.`); e.target.closest('tr').querySelector('.s-model').focus(); }
+  catch (err) { toast(err.message, 5000); }
+});
+$('#s-save').addEventListener('click', async () => {
+  const body = { providers: {}, tasks: {} };
+  document.querySelectorAll('.s-name').forEach((i) => { body.providers[i.dataset.slot] = { name: i.value }; });
+  document.querySelectorAll('#s-tasks tr').forEach((tr) => {
+    body.tasks[tr.dataset.task] = { provider: tr.querySelector('.s-prov').value, model: tr.querySelector('.s-model').value };
+  });
+  try { await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) }); $('#s-msg').textContent = 'Saved.'; await loadStatus(); loadSettings(); }
+  catch (err) { $('#s-msg').textContent = err.message; }
 });
 
 async function loadRules() {
@@ -432,7 +537,8 @@ async function refresh() {
     await loadStatus();
     if (view === 'signals' && !$('#edit').open) await loadSignals();
     if (view === 'proposals') await loadProposals();
-    if (view === 'model') await loadModel();
+    if (view === 'house' && !houseEditing) await loadHouse();
+    if (view === 'settings') await loadSettings();
     if (view === 'rules') await loadRules();
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
 }

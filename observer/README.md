@@ -45,9 +45,9 @@ MQTT (home broker; in development the mirror under mirror/)
 
 ### Storage (InfluxDB 2.x)
 
-The development database is disposable: `scripts/influx-reset.sh` deletes the
-volume and rebuilds it empty from `docker-compose.dev.yml`. The observer keeps
-running meanwhile and resumes writing when the database is back.
+The database holds recorded house data and is **not** disposable.
+`scripts/influx-reset.sh --yes-delete-all-data` deletes the volume and
+rebuilds it empty from `docker-compose.dev.yml`; without that flag it refuses.
 
 Measurement `signal`; tags `id`, `source` (first topic level) and, from the
 registry, `quantity`, `location`, `circuit`, `role`; field `value` (float) or
@@ -66,8 +66,8 @@ you describe them, by hand or with `observer propose` + `observer accept`.
 
 ### LLM assistance (optional)
 
-The endpoint comes from `.env` (`OBSERVER_LLM_BASE_URL`, `OBSERVER_LLM_MODEL`,
-`OBSERVER_LLM_KEY`); for Ollama use `http://<host>:11434/v1` and no key.
+Provider and model come from the Settings page (see "LLM providers and
+models"); for Ollama use `http://<host>:11434/v1` and no key.
 
 `observer propose` sends undescribed signals (id, stream metadata, last value)
 together with the house description from the config (`context`) and the
@@ -92,7 +92,8 @@ Nothing changes without that step, and everything works without an LLM.
 * **Proposals:** ask the LLM about undescribed signals, then accept, edit and
   accept, or reject each proposal.
 * **Rules:** the family rules from `registry.yaml` (edited in the file).
-* **House model:** see below.
+* **House:** the reviewed house description, see below.
+* **Settings:** LLM provider names and the model per task.
 
 Signals can be filtered by source, unit (including "no unit"), quantity,
 device and description state, and the shown rows selected for bulk changes
@@ -101,32 +102,49 @@ write a draft description in your own words and press **Polish with LLM**: the
 model rewrites it using the signal's metadata, unit, rule and neighbouring
 signals, and says what it changed; you review and save.
 
-## House model
+## House description (reviewed)
 
-`house_model.yaml` (in git) is the shared understanding of the house that
-analysis and anomaly detection build on:
+The observer's understanding of the house, written for the owner to check and
+extend. Files in `house/` (in git):
 
-* **systems:** boiler, DHW, each circuit, the mixer, rooms per floor, outdoor,
-  the controller, and which signals belong to each;
-* **points:** what each heating-relevant signal measures and what it is used for;
-* **relations:** `redundant` (two sensors of the same quantity should agree),
-  `order` (supply above return while the pump runs), `causal` (a change here
-  follows a change there after a delay), `balance` (derived quantities), each
-  with its condition and expectation;
-* **checks:** anomaly checks that follow from the relations and from single
-  signals, with a severity;
-* **gaps:** what is missing for a good analysis.
+* `description.md`: the audited description (overview, boiler and DHW, each
+  circuit, rooms, outdoor, controller and devices, how the parts interact,
+  uncertain points);
+* `model.yaml`: the same understanding in machine form (systems, points,
+  relations, checks, gaps), read by analysis and anomaly checks;
+* `notes.md`: the owner's review notes: corrections, missing facts, answers to
+  the questions. Always editable; every regeneration uses them;
+* `archive/<time>/`: every audited version with its notes, model and review
+  data (questions, recommendations, which model wrote it, whether it was edited).
 
-The LLM proposes it (**Generate a proposal**) from the described, stored,
-non-diagnostic signals and the house context; unknown signal ids are dropped.
-You review, accept, and edit the YAML when needed. The better the signal
-descriptions, the better the model: describe the important signals first.
+**Cycle:** *Generate a proposal* (from the house context, all described
+signals, the not-yet-used catalog signals, the notes and the previous audited
+description) → read it, answer its **questions** in the notes, look at the
+**recommendations** (existing signals worth using, sensors worth adding) →
+edit the text if needed or regenerate → *Accept and archive*. Signal ids named
+in the text that do not exist are flagged above the proposal. The proposal
+waits in `data/house_proposal.yaml` until it is accepted.
 
+The quality depends on the model: the house description benefits from a
+strong reasoning model (Settings).
 
-The API is at `/api/...` (interactive documentation at `/api/docs`). The
-portal has **no login yet**: keep it on `127.0.0.1` or behind your reverse
-proxy until it has one, which it will need before it can push controller
-parameters.
+## LLM providers and models
+
+`.env` holds only endpoints and keys, one slot per provider:
+
+```
+OBSERVER_LLM_BASE_URL=http://localhost:38080/v1     # slot 1
+OBSERVER_LLM_KEY=
+OBSERVER_LLM_2_BASE_URL=http://ollama:11434/v1      # slot 2 (up to 9)
+OBSERVER_LLM_2_KEY=
+```
+
+The **Settings** page names each slot and assigns a provider and model to each
+task: *describe* (polish one signal's description), *propose* (bulk
+proposals), *house* (the house description). It can list the models a
+provider offers. These choices are not secrets and live in
+`data/settings.yaml`. Transient provider errors (rate limits, overload) are
+retried; an answer that is not valid JSON gets one repair round.
 
 ## Development
 
@@ -143,7 +161,7 @@ cp config.example.yaml config.yaml          # adjust; config.yaml is git-ignored
 .venv/bin/observer serve --dry-run            # full ingest without a database
 
 # with InfluxDB: disposable, rebuilt empty at any time
-scripts/influx-reset.sh                     # (re)creates org, bucket and token from docker-compose.dev.yml
+scripts/influx-reset.sh --yes-delete-all-data   # DELETES all recorded data, then recreates org, bucket, token
 cp .env.example .env                        # INFLUX_TOKEN, LLM endpoint (git-ignored)
 .venv/bin/observer serve
 ```

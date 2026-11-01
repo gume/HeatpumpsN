@@ -46,6 +46,8 @@ class Service:
                              prefix=m.get("topic_prefix", ""),
                              statestream_base=cfg.get("statestream_base", "ha_state"))
         self.mqtt: MqttRunner | None = None
+        from .settings import Settings
+        self.settings = Settings(paths["settings"], float((cfg.get("llm") or {}).get("timeout_s", 300)))
         self.started = time.time()
         self._stop = threading.Event()
         self._saver: threading.Thread | None = None
@@ -106,7 +108,7 @@ class Service:
                 "signals": {"total": len(self.ingest.catalog.entries), "stored": stored_signals,
                             "unregistered": unregistered},
                 "sources": dict(sorted(sources.items())),
-                "llm": bool(self.cfg.get("llm", {}).get("base_url") and self.cfg.get("llm", {}).get("model")),
+                "llm": {t["task"]: t["ready"] for t in self.settings.view()["tasks"]},
             }
 
     def signals(self) -> list[dict]:
@@ -181,11 +183,11 @@ class Service:
 
     def run_proposals(self, limit: int, client=None) -> int:
         """Ask the LLM about up to `limit` undescribed signals (blocking; minutes for many)."""
-        from .llm import LlmClient, propose
+        from .llm import propose
 
-        client = client or LlmClient.from_config(self.cfg.get("llm"))
+        client = client or self.settings.client("propose")
         if client is None:
-            raise RuntimeError("no LLM configured (llm.base_url and llm.model)")
+            raise RuntimeError("no LLM configured for bulk proposals (Settings)")
         with self.lock:
             todo = {}
             for sig, e in sorted(self.ingest.catalog.entries.items()):
@@ -221,11 +223,11 @@ class Service:
 
     # --- LLM: polishing one description -------------------------------------------
     def polish(self, signal: str, draft: dict, client=None) -> dict:
-        from .llm import LlmClient, polish
+        from .llm import polish
 
-        client = client or LlmClient.from_config(self.cfg.get("llm"))
+        client = client or self.settings.client("describe")
         if client is None:
-            raise RuntimeError("no LLM configured (OBSERVER_LLM_BASE_URL and OBSERVER_LLM_MODEL)")
+            raise RuntimeError("no LLM configured for descriptions (Settings)")
         with self.lock:
             entry = self.ingest.catalog.entries.get(signal)
             resolved = self.ingest.registry.resolve(signal)
@@ -245,53 +247,106 @@ class Service:
                     break
         return polish(client, signal, draft, facts, self.cfg.get("context", ""), related)
 
-    # --- the house model ------------------------------------------------------------
-    def _model_paths(self) -> tuple[str, str]:
-        return self.cfg["paths"]["house_model"], self.cfg["paths"]["house_model_proposal"]
+    # --- the reviewed house description -----------------------------------------------
+    # observer/house/ (in git): description.md and model.yaml (the audited
+    # version), notes.md (the owner's review notes, always editable),
+    # archive/<time>/ (every audited version with the notes of that moment).
+    # The proposal waits in data/house_proposal.yaml until it is accepted.
+    def _house(self, name: str) -> str:
+        return os.path.join(self.cfg["paths"]["house_dir"], name)
 
-    def model(self) -> dict:
-        current, proposal = self._model_paths()
-        out = {}
-        for key, path in (("current", current), ("proposal", proposal)):
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as fp:
-                    out[key] = yaml.safe_load(fp) or {}
-                out[f"{key}_text"] = open(path, encoding="utf-8").read()
-            else:
-                out[key] = None
+    def _read(self, path: str) -> str:
+        return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+
+    def house(self) -> dict:
+        archive_dir = self._house("archive")
+        archive = sorted(os.listdir(archive_dir), reverse=True) if os.path.isdir(archive_dir) else []
+        proposal = None
+        if os.path.exists(self.cfg["paths"]["house_proposal"]):
+            with open(self.cfg["paths"]["house_proposal"], encoding="utf-8") as fp:
+                proposal = yaml.safe_load(fp)
+        model_text = self._read(self._house("model.yaml"))
+        return {"current": {"description": self._read(self._house("description.md")),
+                            "model": yaml.safe_load(model_text) if model_text else None,
+                            "audited": archive[0] if archive else None},
+                "proposal": proposal, "notes": self._read(self._house("notes.md")), "archive": archive}
+
+    def save_notes(self, text: str) -> None:
+        os.makedirs(self.cfg["paths"]["house_dir"], exist_ok=True)
+        with open(self._house("notes.md"), "w", encoding="utf-8") as fp:
+            fp.write(text.rstrip() + "\n" if text.strip() else "")
+
+    def house_inputs(self) -> tuple[dict, dict]:
+        """(described signals, candidates): what the description is built from."""
+        with self.lock:
+            described, candidates = {}, {}
+            for sig, e in self.ingest.catalog.entries.items():
+                r = self.ingest.registry.resolve(sig)
+                if r.store and (r.info.get("name") or r.info.get("description")):
+                    described[sig] = r.info
+                elif e.numeric and r.info.get("role") != "diagnostic" and e.count > 1:
+                    candidates[sig] = {"stored": r.store, "name": r.info.get("name") or e.meta.get("name"),
+                                       "unit": r.info.get("unit") or e.meta.get("unit"),
+                                       "device": e.meta.get("device"), "last": e.last_value}
+        return described, dict(list(sorted(candidates.items()))[:200])
+
+    def generate_house(self, client=None) -> dict:
+        from .llm import build_house_description
+
+        client = client or self.settings.client("house")
+        if client is None:
+            raise RuntimeError("no LLM configured for the house description (Settings)")
+        described, candidates = self.house_inputs()
+        out = build_house_description(client, self.cfg.get("context", ""), described, candidates,
+                                      self._read(self._house("notes.md")), self._read(self._house("description.md")))
+        out["generated"] = time.strftime("%Y-%m-%d %H:%M")
+        out["model_name"] = getattr(client, "model", "")
+        with open(self.cfg["paths"]["house_proposal"], "w", encoding="utf-8") as fp:
+            yaml.safe_dump(out, fp, sort_keys=False, allow_unicode=True, width=100)
         return out
 
-    def model_inputs(self) -> dict[str, dict]:
-        """Described, stored, non-diagnostic signals: what the model is built from."""
-        with self.lock:
-            signals = {}
-            for sig in self.ingest.catalog.entries:
-                r = self.ingest.registry.resolve(sig)
-                if r.store and r.info.get("role") != "diagnostic" and (r.info.get("name") or r.info.get("description")):
-                    signals[sig] = r.info
-        return signals
-
-    def generate_model(self, client=None) -> dict:
-        from .llm import LlmClient, build_house_model
-
-        client = client or LlmClient.from_config(self.cfg.get("llm"))
-        if client is None:
-            raise RuntimeError("no LLM configured (OBSERVER_LLM_BASE_URL and OBSERVER_LLM_MODEL)")
-        model = build_house_model(client, self.model_inputs(), self.cfg.get("context", ""))
-        model["generated"] = time.strftime("%Y-%m-%d %H:%M")
-        with open(self._model_paths()[1], "w", encoding="utf-8") as fp:
-            yaml.safe_dump(model, fp, sort_keys=False, allow_unicode=True, width=100)
-        return model
-
-    def accept_model(self) -> None:
-        current, proposal = self._model_paths()
-        if not os.path.exists(proposal):
+    def edit_proposal(self, description: str) -> None:
+        path = self.cfg["paths"]["house_proposal"]
+        if not os.path.exists(path):
             raise FileNotFoundError("no proposal")
-        os.replace(proposal, current)
+        with open(path, encoding="utf-8") as fp:
+            proposal = yaml.safe_load(fp)
+        proposal["description_md"] = description
+        proposal["edited"] = True
+        with open(path, "w", encoding="utf-8") as fp:
+            yaml.safe_dump(proposal, fp, sort_keys=False, allow_unicode=True, width=100)
 
-    def save_model_text(self, text: str) -> None:
-        data = yaml.safe_load(text)          # raises on invalid YAML
-        if not isinstance(data, dict):
-            raise ValueError("the house model must be a YAML mapping")
-        with open(self._model_paths()[0], "w", encoding="utf-8") as fp:
-            fp.write(text)
+    def accept_house(self) -> str:
+        """The proposal becomes the audited version; it is archived with the current notes."""
+        path = self.cfg["paths"]["house_proposal"]
+        if not os.path.exists(path):
+            raise FileNotFoundError("no proposal")
+        with open(path, encoding="utf-8") as fp:
+            proposal = yaml.safe_load(fp)
+        stamp = time.strftime("%Y-%m-%d_%H%M%S")
+        folder = self._house(os.path.join("archive", stamp))
+        os.makedirs(folder, exist_ok=True)
+        model_yaml = yaml.safe_dump(proposal.get("model") or {}, sort_keys=False, allow_unicode=True, width=100)
+        review = {k: proposal.get(k) for k in ("generated", "model_name", "edited", "questions", "recommendations")}
+        for target in (self.cfg["paths"]["house_dir"], folder):
+            with open(os.path.join(target, "description.md"), "w", encoding="utf-8") as fp:
+                fp.write(proposal["description_md"].rstrip() + "\n")
+            with open(os.path.join(target, "model.yaml"), "w", encoding="utf-8") as fp:
+                fp.write(model_yaml)
+        with open(os.path.join(folder, "review.yaml"), "w", encoding="utf-8") as fp:
+            yaml.safe_dump(review, fp, sort_keys=False, allow_unicode=True, width=100)
+        with open(os.path.join(folder, "notes.md"), "w", encoding="utf-8") as fp:
+            fp.write(self._read(self._house("notes.md")))
+        os.remove(path)
+        return stamp
+
+    def archived(self, stamp: str) -> dict:
+        if "/" in stamp or ".." in stamp:
+            raise KeyError(stamp)
+        folder = self._house(os.path.join("archive", stamp))
+        if not os.path.isdir(folder):
+            raise KeyError(stamp)
+        review = self._read(os.path.join(folder, "review.yaml"))
+        return {"stamp": stamp, "description": self._read(os.path.join(folder, "description.md")),
+                "notes": self._read(os.path.join(folder, "notes.md")),
+                "review": yaml.safe_load(review) if review else {}}

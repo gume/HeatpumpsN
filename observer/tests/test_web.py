@@ -13,8 +13,9 @@ def make(tmp_path):
         "rules": [{"match": "ems-esp/boiler_data#*", "role": "boiler"}], "signals": {}}))
     cfg = {"paths": {"catalog": str(tmp_path / "catalog.json"), "registry": str(tmp_path / "registry.yaml"),
                      "proposals": str(tmp_path / "proposals.yaml"),
-                     "house_model": str(tmp_path / "house_model.yaml"),
-                     "house_model_proposal": str(tmp_path / "house_model_proposal.yaml")},
+                     "house_dir": str(tmp_path / "house"),
+                     "house_proposal": str(tmp_path / "house_proposal.yaml"),
+                     "settings": str(tmp_path / "settings.yaml")},
            "context": "TF top floor"}
     service = Service(cfg, MemoryWriter(), "dry-run")
     service._handle("ems-esp/boiler_data", json.dumps({"curflowtemp": 57.2}).encode(), False)
@@ -105,35 +106,69 @@ def test_polish_uses_draft_and_validates(tmp_path):
     assert client.post("/api/signal/polish", params={"id": "x"}, json={}).status_code == 400   # no LLM configured
 
 
-def test_house_model_generate_accept_edit(tmp_path):
+def test_settings_providers_and_tasks(tmp_path, monkeypatch):
+    monkeypatch.setenv("OBSERVER_LLM_BASE_URL", "http://proxy:4000/v1")
+    monkeypatch.setenv("OBSERVER_LLM_KEY", "secret")
+    monkeypatch.setenv("OBSERVER_LLM_2_BASE_URL", "http://ollama:11434/v1")
+    monkeypatch.delenv("OBSERVER_LLM_MODEL", raising=False)
+    service, client = make(tmp_path)
+    view = client.get("/api/settings").json()
+    assert [p["slot"] for p in view["providers"]] == ["1", "2"]
+    assert view["providers"][0]["has_key"] is True and "secret" not in json.dumps(view)
+    assert all(not t["ready"] for t in view["tasks"])
+    r = client.put("/api/settings", json={"providers": {"1": {"name": "Gemini"}, "9": {"name": "nope"}},
+                                          "tasks": {"house": {"provider": "1", "model": "gemini-2.5-pro"},
+                                                    "describe": {"provider": "2", "model": "qwen2.5"}}}).json()
+    assert r["providers"][0]["name"] == "Gemini"
+    ready = {t["task"]: t["ready"] for t in r["tasks"]}
+    assert ready == {"describe": True, "propose": False, "house": True}
+    house_client = service.settings.client("house")
+    assert (house_client.base_url, house_client.model, house_client.api_key) == ("http://proxy:4000/v1", "gemini-2.5-pro", "secret")
+    assert service.settings.client("describe").api_key is None
+    assert client.get("/api/status").json()["llm"] == ready
+    assert "gemini-2.5-pro" in (tmp_path / "settings.yaml").read_text()
+
+
+def test_house_description_review_cycle(tmp_path):
     service, client = make(tmp_path)
     client.put("/api/signal", params={"id": "ems-esp/boiler_data#curflowtemp"},
                json={"name": "Boiler flow", "quantity": "temperature", "store": True})
-    client.put("/api/signal", params={"id": "zigbee2mqtt/radar#humidity"},
-               json={"name": "Radar humidity", "store": True})
-    assert set(service.model_inputs()) == {"ems-esp/boiler_data#curflowtemp", "zigbee2mqtt/radar#humidity"}
+    service._handle("zigbee2mqtt/radar", json.dumps({"humidity": 53}).encode(), False)   # candidates need 2 messages
+    assert client.post("/api/house/generate").status_code == 400            # no LLM configured
+    client.put("/api/house/notes", json={"text": "The bottom floor has floor heating only."})
+    seen = {}
 
     class Fake:
-        def chat(self, system, user):
-            return json.dumps({
-                "systems": [{"name": "Boiler", "description": "Gas boiler", "signals": ["ems-esp/boiler_data#curflowtemp", "bogus"]}],
-                "points": [{"signal": "ems-esp/boiler_data#curflowtemp", "measures": "flow", "use": "load"}],
-                "relations": [{"type": "redundant", "signals": ["ems-esp/boiler_data#curflowtemp", "zigbee2mqtt/radar#humidity"],
-                               "condition": "x", "expectation": "y", "why": "z"},
-                              {"type": "magic", "signals": ["a", "b"]},
-                              {"type": "order", "signals": ["ems-esp/boiler_data#curflowtemp"]}],
-                "checks": [{"name": "stale", "signals": ["ems-esp/boiler_data#curflowtemp"], "condition": "no data 10 min",
-                            "severity": "extreme"}],
-                "gaps": ["no outdoor temperature"]})
+        model = "fake-model"
 
-    model = service.generate_model(client=Fake())
-    assert model["systems"][0]["signals"] == ["ems-esp/boiler_data#curflowtemp"]     # unknown id dropped
-    assert len(model["relations"]) == 1 and model["checks"][0]["severity"] == "warning"
-    m = client.get("/api/model").json()
-    assert m["current"] is None and m["proposal"]["gaps"] == ["no outdoor temperature"]
-    assert client.post("/api/model/accept").status_code == 200
-    m = client.get("/api/model").json()
-    assert m["proposal"] is None and m["current"]["systems"][0]["name"] == "Boiler"
-    assert client.post("/api/model/accept").status_code == 404
-    assert client.put("/api/model", json={"text": "systems: [\n"}).status_code == 400   # invalid YAML refused
-    assert client.put("/api/model", json={"text": "systems: []\n"}).status_code == 200
+        def chat(self, system, user):
+            seen.update(json.loads(user))
+            return json.dumps({
+                "description_md": "## Overview\nA gas boiler feeds three circuits: `ems-esp/boiler_data#curflowtemp`, `ems-esp/boiler_data#curflowtmp`.",
+                "questions": ["Is the garage heated?"],
+                "recommendations": [{"kind": "existing_signal", "signal": "zigbee2mqtt/radar#humidity",
+                                     "what": "Use the radar humidity", "why": "room comfort", "priority": "low"},
+                                    {"kind": "existing_signal", "signal": "not/known", "what": "x"},
+                                    {"kind": "new_sensor", "what": "Outdoor sensor", "why": "heating curve",
+                                     "priority": "high"}],
+                "model": {"systems": [{"name": "Boiler", "description": "", "signals": ["ems-esp/boiler_data#curflowtemp"]}]}})
+
+    out = service.generate_house(client=Fake())
+    assert seen["owner_review_notes"] == "The bottom floor has floor heating only."
+    assert "ems-esp/boiler_data#curflowtemp" in seen["described_signals"]
+    assert "zigbee2mqtt/radar#humidity" in seen["candidate_signals"]
+    assert [r["kind"] for r in out["recommendations"]] == ["existing_signal", "new_sensor"]   # unknown id dropped
+    assert out["unknown_ids"] == ["ems-esp/boiler_data#curflowtmp"]                          # typo in the prose flagged
+    h = client.get("/api/house").json()
+    assert h["proposal"]["questions"] == ["Is the garage heated?"] and h["current"]["description"] == ""
+    assert client.put("/api/house/proposal", json={"description": "## Overview\nEdited."}).status_code == 200
+    stamp = client.post("/api/house/accept").json()["archived"]
+    h = client.get("/api/house").json()
+    assert h["proposal"] is None and h["current"]["description"].startswith("## Overview\nEdited.")
+    assert h["archive"] == [stamp] and h["current"]["model"]["systems"][0]["name"] == "Boiler"
+    a = client.get("/api/house/archive", params={"stamp": stamp}).json()
+    assert a["notes"].startswith("The bottom floor") and a["review"]["edited"] is True
+    assert a["review"]["model_name"] == "fake-model"
+    assert (tmp_path / "house" / "description.md").exists() and (tmp_path / "house" / "notes.md").exists()
+    assert client.post("/api/house/accept").status_code == 404
+    assert client.get("/api/house/archive", params={"stamp": "../x"}).status_code == 404

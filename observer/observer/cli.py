@@ -43,18 +43,15 @@ def load_config(path: str) -> dict:
     load_env(os.path.join(base, ".env"))
     with open(path, encoding="utf-8") as fp:
         cfg = yaml.safe_load(fp) or {}
-    # The LLM endpoint may come entirely from .env.
-    llm = cfg.setdefault("llm", {}) or {}
-    cfg["llm"] = llm
-    llm["base_url"] = os.environ.get("OBSERVER_LLM_BASE_URL") or llm.get("base_url", "")
-    llm["model"] = os.environ.get("OBSERVER_LLM_MODEL") or llm.get("model", "")
+    cfg["llm"] = cfg.get("llm") or {}   # providers come from .env, models from the Settings page
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
-                         ("proposals", "data/proposals.yaml"), ("house_model", "house_model.yaml"),
-                         ("house_model_proposal", "data/house_model_proposal.yaml")):
+                         ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
+                         ("house_proposal", "data/house_proposal.yaml"), ("settings", "data/settings.yaml")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
+    paths["house_dir"] = os.path.dirname(paths["house_dir"])   # a folder: house/
     return cfg
 
 
@@ -155,11 +152,12 @@ def cmd_serve(cfg: dict, args) -> None:
 
 
 def cmd_propose(cfg: dict, args) -> None:
-    from .llm import LlmClient, propose
+    from .llm import propose
+    from .settings import Settings
 
-    client = LlmClient.from_config(cfg.get("llm"))
+    client = Settings(cfg["paths"]["settings"]).client("propose")
     if client is None:
-        sys.exit("no LLM configured (llm.base_url and llm.model in the config)")
+        sys.exit("no LLM configured for bulk proposals: set provider and model on the portal's Settings page")
     catalog, registry = Catalog(cfg["paths"]["catalog"]), Registry(cfg["paths"]["registry"])
     todo = {}
     for sig, e in sorted(catalog.entries.items()):

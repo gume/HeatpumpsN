@@ -59,38 +59,64 @@ def create_app(service: Service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    @app.get("/api/model")
-    def model():
-        return service.model()
+    # --- the reviewed house description ---------------------------------------
+    @app.get("/api/house")
+    def house():
+        return service.house()
 
-    @app.get("/api/model/inputs")
-    def model_inputs():
-        return service.model_inputs()
+    @app.put("/api/house/notes")
+    def save_notes(text: str = Body(..., embed=True)):
+        service.save_notes(text)
+        return {"ok": True}
 
-    @app.post("/api/model/generate")
-    async def generate_model():
+    @app.post("/api/house/generate")
+    async def generate_house():
         try:
-            return await run_in_threadpool(service.generate_model)
+            return await run_in_threadpool(service.generate_house)
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    @app.post("/api/model/accept")
-    def accept_model():
+    @app.put("/api/house/proposal")
+    def edit_proposal(description: str = Body(..., embed=True)):
         try:
-            service.accept_model()
+            service.edit_proposal(description)
         except FileNotFoundError as exc:
-            raise HTTPException(404, "no proposal to accept") from exc
+            raise HTTPException(404, "no proposal") from exc
         return {"ok": True}
 
-    @app.put("/api/model")
-    def save_model(text: str = Body(..., embed=True)):
+    @app.post("/api/house/accept")
+    def accept_house():
         try:
-            service.save_model_text(text)
+            return {"archived": service.accept_house()}
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no proposal to accept") from exc
+
+    @app.get("/api/house/archive")
+    def archived(stamp: str = Query(...)):
+        try:
+            return service.archived(stamp)
+        except KeyError as exc:
+            raise HTTPException(404, "no such archived version") from exc
+
+    # --- settings ---------------------------------------------------------------
+    @app.get("/api/settings")
+    def settings():
+        return service.settings.view()
+
+    @app.put("/api/settings")
+    def update_settings(body: dict = Body(...)):
+        return service.settings.update(body)
+
+    @app.get("/api/settings/models")
+    async def provider_models(provider: str = Query(...)):
+        try:
+            return await run_in_threadpool(service.settings.models, provider)
+        except KeyError as exc:
+            raise HTTPException(404, "no such provider slot in .env") from exc
         except Exception as exc:
-            raise HTTPException(400, f"not saved: {exc}") from exc
-        return {"ok": True}
+            raise HTTPException(502, f"listing models failed: {exc}") from exc
 
     @app.get("/api/rules")
     def rules():
