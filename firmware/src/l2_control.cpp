@@ -12,6 +12,11 @@ namespace {
 
 constexpr float kIntegratorLimit = 0.35f;
 constexpr uint32_t kDeltaTCollapseDebounceMs = 60000u;
+// A small floor delta-T means a saturated slab only once the forward
+// temperature is near the setpoint. Below that the loop is still warming up
+// (a cold loop has forward = return too), and pausing it would stop every
+// heating start. Constant rather than a setting so the NVS format is unchanged.
+constexpr float kDeltaTCollapseSetpointBandK = 2.0f;
 
 uint32_t g_last_tick_ms = 0;
 uint32_t g_floor_flush_end_ms = 0;
@@ -531,7 +536,9 @@ void tick(const Config& config, SystemState& state) {
       !state.dhw_active && reading_valid(state.T_mix_out) &&
       reading_valid(state.T_return_floor)) {
     const float delta_t = state.T_mix_out.value_c - state.T_return_floor.value_c;
-    if (delta_t < config.min_useful_delta_t) {
+    const bool at_setpoint =
+        state.T_mix_out.value_c >= config.floor_setpoint_shadow - kDeltaTCollapseSetpointBandK;
+    if (at_setpoint && delta_t < config.min_useful_delta_t) {
       if (g_delta_low_since_ms == 0) {
         g_delta_low_since_ms = now;
       } else if (now - g_delta_low_since_ms >= kDeltaTCollapseDebounceMs) {

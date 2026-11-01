@@ -82,9 +82,11 @@ Communication between Home Assistant (HA) and the controller uses **switches** a
    * The circuit's pump stays requested until `pump_stop_after_heating_s` expires, then stops. The heater never stays on for an after-run.
    * `divergence_reason = DIV_AFTER_RUN` is reported while an after-run is the only active condition. HA does not orchestrate this; it only observes the switch state and the physical pump sensor.
 3. **Floor $\Delta T$-Collapse Rule (Early Floor Shutdown & Planned Pause):**
-   * When the floor circuit is running post-flush (`t_ret_flush_valid == true`) and its temperature drop persistently collapses:
+   * When the floor circuit is running post-flush (`t_ret_flush_valid == true`), the forward temperature has reached the setpoint band
+     $$T_{\text{mix\_out}} \ge T_{\text{setpoint}} - 2\ \text{K}$$
+     and its temperature drop persistently (60 s) collapses:
      $$T_{\text{mix\_out}} - T_{\text{return\_floor}} < \text{min\_useful\_delta\_t}$$
-     the floor slab is thermally saturated.
+     the floor slab is thermally saturated. Below the setpoint band a small $\Delta T$ only means a loop that is still warming up (a cold loop has forward = return), so it never triggers the pause; the 2 K band is a firmware constant (`kDeltaTCollapseSetpointBandK`).
    * **Action on Floor Circuit:** L2 sets `pump_floor_requested = OFF` (keeping `pump_floor_intended = ON`), drives the mixer to $0.0$, sets `flush_state = PAUSED_DELTA_T`, and sets `divergence_reason = DIV_FLOOR_DELTA_T_COLLAPSED`.
    * **Action on Shared Heater:** If **neither radiator pump is requested or running** (`req_rad1 == false && req_rad2 == false`), the derived heater call drops for the planned pause duration `floor_pause_duration_s` (optimized by the Observer). If any radiator circuit is active, `heater_phys` remains `ON` to serve the radiators.
    * **Recovery:** After `floor_pause_duration_s` expires, L2 restarts `pump_floor` and runs a Warm-Up Flush (§2.3) to sample whether a useful $\Delta T$ has returned.
