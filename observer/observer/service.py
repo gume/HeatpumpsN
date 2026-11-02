@@ -51,7 +51,7 @@ class Service:
         self.started = time.time()
         self._agents = None
         self._supervisor = None
-        self.db_total: dict | None = None        # all samples in the database, counted every 15 minutes
+        self.db_total: dict | None = None        # samples in the database, counted once at the start
         self._db_job: dict | None = None
         from . import __version__
         from .updates import UpdateChecker
@@ -103,16 +103,12 @@ class Service:
 
     def _save_loop(self) -> None:
         self._count_total()
-        minutes = 0
         while not self._stop.wait(60):
             with self.lock:
                 self.ingest.catalog.save()
-            minutes += 1
-            if minutes % 15 == 0:
-                self._count_total()
 
     def _count_total(self) -> None:
-        """All samples in the database (a full count: done in the background, every 15 minutes)."""
+        """Count the samples in the database once, at the start; the status adds what was written since."""
         if self.writer_kind != "influx":
             return
         try:
@@ -129,7 +125,7 @@ class Service:
                     lines = [ln.strip() for ln in fp if ln.strip()]
                 # ",result,table,t" then ",_result,0,<count>"; an empty bucket gives no lines
                 total = int(lines[1].split(",")[-1]) if len(lines) > 1 else 0
-            self.db_total = {"samples": total, "at": time.strftime("%H:%M")}
+            self.db_total = {"samples": total, "stored_then": self.ingest.stored}
         except Exception as exc:              # shown as unknown; ingest is unaffected
             log.warning("counting the stored samples failed: %s", exc)
 
@@ -263,7 +259,9 @@ class Service:
                          "messages": self.mqtt.messages if self.mqtt else 0,
                          "last_message_age_s": round(now - self.mqtt.last_message)
                          if self.mqtt and self.mqtt.last_message else None},
-                "storage": {"kind": self.writer_kind, "samples": self.ingest.stored, "total": self.db_total},
+                "storage": {"kind": self.writer_kind, "samples": self.ingest.stored,
+                            "total": self.db_total["samples"] + self.ingest.stored - self.db_total["stored_then"]
+                            if self.db_total else None},
                 "signals": {"total": len(self.ingest.catalog.entries), "stored": stored_signals,
                             "unregistered": unregistered},
                 "sources": dict(sorted(sources.items())),

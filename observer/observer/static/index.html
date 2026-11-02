@@ -422,8 +422,7 @@ async function loadStatus() {
   $('#cards').innerHTML = [
     card('MQTT', s.mqtt.connected ? 'connected' : 'disconnected', `${s.mqtt.messages} messages · last ${age(s.mqtt.last_message_age_s)} ago`, s.mqtt.connected ? 'ok' : 'err'),
     s.storage.kind === 'influx'
-      ? card('Stored samples', s.storage.total ? s.storage.total.samples.toLocaleString() : '…',
-             `in InfluxDB${s.storage.total ? ` (counted ${s.storage.total.at})` : ''} · +${s.storage.samples.toLocaleString()} since the start ${age(s.uptime_s)} ago`)
+      ? card('Stored samples', s.storage.total != null ? s.storage.total.toLocaleString() : '…', 'InfluxDB')
       : card('Stored samples', '0', 'dry run: nothing is written', 'warn'),
     card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
     card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
