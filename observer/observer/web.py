@@ -103,6 +103,53 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such archived version") from exc
 
+    # --- database export / import ------------------------------------------------
+    @app.get("/api/db")
+    def db_status():
+        return service.db_status()
+
+    @app.post("/api/db/export")
+    def db_export(body: dict | None = Body(None)):
+        try:
+            return service.db_export((body or {}).get("start"), (body or {}).get("stop"))
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/db/import")
+    async def db_import(request: Request, dry_run: bool = Query(False), name: str = Query("upload.parquet")):
+        import tempfile
+
+        folder = os.path.join(service.cfg["paths"]["exports"], "uploads")
+        os.makedirs(folder, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="import-", suffix=".parquet", dir=folder)
+        size = 0
+        with os.fdopen(fd, "wb") as fp:
+            async for chunk in request.stream():
+                size += len(chunk)
+                fp.write(chunk)
+        try:
+            job = await run_in_threadpool(service.db_import, path, dry_run)
+        except (ValueError, RuntimeError) as exc:
+            os.remove(path)
+            raise HTTPException(400, str(exc)) from exc
+        job["upload"] = {"name": os.path.basename(name), "bytes": size}
+        return job
+
+    @app.get("/api/db/file")
+    def db_file(name: str = Query(...)):
+        try:
+            return FileResponse(service.db_file(name), media_type="application/vnd.apache.parquet", filename=name)
+        except KeyError as exc:
+            raise HTTPException(404, "no such export") from exc
+
+    @app.delete("/api/db/file")
+    def db_file_delete(name: str = Query(...)):
+        try:
+            os.remove(service.db_file(name))
+        except KeyError as exc:
+            raise HTTPException(404, "no such export") from exc
+        return {"ok": True}
+
     # --- settings ---------------------------------------------------------------
     @app.get("/api/settings")
     def settings():

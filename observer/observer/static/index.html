@@ -37,8 +37,8 @@
   .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
   input, select, textarea { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
                             border-radius: 8px; padding: 6px 9px; }
-  button.btn { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
-               padding: 6px 12px; cursor: pointer; }
+  button.btn, label.btn, a.btn { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
+               border-radius: 8px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-block; }
   button.btn.primary { background: var(--accent); border-color: var(--accent); color: #06111f; }
   button.btn.danger { color: var(--err); border-color: var(--err); background: none; }
   button.btn:disabled { opacity: .45; cursor: default; }
@@ -108,6 +108,23 @@
       <thead><tr><th>Source</th><th class="num">Signals</th><th class="num">Stored</th><th class="num">Last message</th></tr></thead>
       <tbody id="sources"></tbody>
     </table></div>
+    <h3 class="sec">Database export and import</h3>
+    <div class="card">
+      <p class="dim" style="margin:0 0 8px">Export writes the recorded samples into one compact file (Parquet with zstd, about 2 bytes per
+        sample; DuckDB, pandas and others read it directly). Import adds the samples of such a file that the database does not
+        have yet: a sample counts as present when the same signal has a sample at the same time, so importing a file twice, or a
+        file that overlaps the database, never duplicates anything. Nothing is ever deleted or overwritten.</p>
+      <div class="bar">
+        <label>From (optional)<input id="db-start" type="datetime-local"></label>
+        <label>To (optional)<input id="db-stop" type="datetime-local"></label>
+        <button class="btn primary" id="db-export" style="align-self:flex-end">Export</button>
+        <span style="width:24px"></span>
+        <label style="display:flex;align-items:center;gap:6px;align-self:flex-end"><input type="checkbox" id="db-dry" checked> dry run (only count)</label>
+        <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;align-self:flex-end">Import a file…<input type="file" id="db-import" accept=".parquet" style="display:none"></label>
+      </div>
+      <div id="db-job" style="margin:6px 0"></div>
+      <div class="table-wrap"><table><thead><tr><th>Export file</th><th class="num">Size</th><th>Created</th><th></th></tr></thead><tbody id="db-files"></tbody></table></div>
+    </div>
   </section>
 
   <section id="view-signals" class="hidden">
@@ -326,10 +343,52 @@ async function loadStatus() {
     card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
     card('Uptime', age(s.uptime_s), ''),
   ].join('');
+  loadDb().catch(() => {});
   $('#sources').innerHTML = Object.entries(s.sources).map(([src, x]) =>
     `<tr><td>${esc(src)}</td><td class="num">${x.signals}</td><td class="num">${x.stored}</td>
      <td class="num ${x.age_s > 900 ? 'warn' : ''}">${age(x.age_s)} ago</td></tr>`).join('');
 }
+
+const mb = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.ceil(b / 1024)} kB`;
+async function loadDb() {
+  const d = await api('/api/db');
+  const j = d.job;
+  if (!j) $('#db-job').innerHTML = '';
+  else {
+    const r = j.result || {};
+    const res = j.kind === 'export' && r.samples != null ? `${r.samples.toLocaleString()} samples of ${r.signals} signals, ${r.first.slice(0, 16)} – ${r.last.slice(0, 16)} UTC, ${mb(r.bytes)}, ${r.seconds} s`
+      : j.kind === 'import' && r.written != null ? `${r.dry_run ? 'dry run: would write' : 'written'} ${r.written.toLocaleString()} new samples, ${r.skipped_existing.toLocaleString()} already present (skipped), ${r.signals} signals, ${r.seconds} s`
+      : '';
+    $('#db-job').innerHTML = `<span class="${j.state === 'done' ? 'ok' : j.state === 'error' ? 'err' : 'warn'}">${esc(j.kind)} ${esc(j.state)}</span>
+      <span class="dim">${esc(j.started)}${j.upload ? ` · ${esc(j.upload.name)} (${mb(j.upload.bytes)})` : ''}</span>
+      ${j.state === 'running' ? `<span class="dim"> · ${esc(j.progress || 'working…')}</span>` : ''} ${esc(res)} ${j.error ? `<span class="err">${esc(j.error)}</span>` : ''}`;
+  }
+  const running = j && j.state === 'running';
+  $('#db-export').disabled = running;
+  $('#db-files').innerHTML = d.files.map((f) => `<tr><td class="mono"><a href="/api/db/file?name=${encodeURIComponent(f.name)}">${esc(f.name)}</a></td>
+      <td class="num">${mb(f.bytes)}</td><td>${esc(f.modified)}</td><td><button class="btn danger" data-dbdel="${esc(f.name)}">Delete file</button></td></tr>`).join('')
+    || '<tr><td colspan="4" class="dim">No exports yet.</td></tr>';
+  document.querySelectorAll('[data-dbdel]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`Delete the export file ${b.dataset.dbdel}? (The database is not touched.)`)) return;
+    await api(`/api/db/file?name=${encodeURIComponent(b.dataset.dbdel)}`, { method: 'DELETE' }); loadDb();
+  }));
+}
+const isoOrNull = (v) => v ? new Date(v).toISOString() : null;
+$('#db-export').addEventListener('click', async () => {
+  try { await api('/api/db/export', { method: 'POST', body: JSON.stringify({ start: isoOrNull($('#db-start').value), stop: isoOrNull($('#db-stop').value) }) }); }
+  catch (err) { toast(err.message, 5000); }
+  loadDb();
+});
+$('#db-import').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const dry = $('#db-dry').checked;
+  if (!dry && !confirm(`Import ${f.name}? Only samples the database does not have are written; nothing is deleted.`)) { e.target.value = ''; return; }
+  $('#db-job').innerHTML = `<span class="warn">uploading ${esc(f.name)} (${mb(f.size)})…</span>`;
+  try { const r = await fetch(`/api/db/import?dry_run=${dry}&name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f });
+        const d = await r.json(); if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`); }
+  catch (err) { toast(err.message, 6000); }
+  e.target.value = ''; loadDb();
+});
 
 async function loadSignals() {
   signals = await api('/api/signals');

@@ -50,6 +50,7 @@ class Service:
         self.settings = Settings(paths["settings"], float((cfg.get("llm") or {}).get("timeout_s", 300)))
         self.started = time.time()
         self._agents = None
+        self._db_job: dict | None = None
         self._stop = threading.Event()
         self._saver: threading.Thread | None = None
 
@@ -77,6 +78,74 @@ class Service:
         while not self._stop.wait(60):
             with self.lock:
                 self.ingest.catalog.save()
+
+    # --- database export / import (background jobs) ---------------------------------
+    def _influx(self, write: bool):
+        from .dbarchive import Influx
+
+        i = self.cfg.get("influx") or {}
+        token = os.environ.get(i.get("token_env", "INFLUX_TOKEN"), "") if write else (
+            os.environ.get(((self.cfg.get("agent") or {}).get("read_token_env") or "OBSERVER_INFLUX_READ_TOKEN"), "")
+            or os.environ.get(i.get("token_env", "INFLUX_TOKEN"), ""))
+        if not token or not i.get("url"):
+            raise RuntimeError("no InfluxDB configured (influx.url and the token in .env)")
+        return Influx(i["url"], i.get("org", ""), i.get("bucket", ""), token)
+
+    def db_files(self) -> list[dict]:
+        d = self.cfg["paths"]["exports"]
+        out = []
+        for name in sorted(os.listdir(d), reverse=True):
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and name.endswith(".parquet"):
+                out.append({"name": name, "bytes": os.path.getsize(p),
+                            "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p)))})
+        return out
+
+    def db_file(self, name: str) -> str:
+        path = os.path.join(self.cfg["paths"]["exports"], os.path.basename(name))
+        if not name.endswith(".parquet") or not os.path.isfile(path):
+            raise KeyError(name)
+        return path
+
+    def db_status(self) -> dict:
+        return {"job": self._db_job, "files": self.db_files()}
+
+    def _start_db_job(self, kind: str, work) -> dict:
+        with self.lock:
+            if self._db_job and self._db_job.get("state") == "running":
+                raise RuntimeError(f"a database {self._db_job['kind']} is still running")
+            job = {"kind": kind, "state": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S"), "progress": ""}
+            self._db_job = job
+
+        def run():
+            try:
+                job["result"] = work(lambda msg: job.update(progress=msg))
+                job["state"] = "done"
+            except Exception as exc:             # reported to the portal
+                job.update(state="error", error=f"{type(exc).__name__}: {exc}")
+            job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        threading.Thread(target=run, name=f"db-{kind}", daemon=True).start()
+        return job
+
+    def db_export(self, start: str | None = None, stop: str | None = None) -> dict:
+        """Export the recorded samples (read-only token) into exports/observer-<time>.parquet."""
+        from .dbarchive import export_db
+
+        influx = self._influx(write=False)
+        name = time.strftime("observer-%Y%m%d-%H%M%S.parquet")
+        path = os.path.join(self.cfg["paths"]["exports"], name)
+        signals = self.signals()
+        return self._start_db_job("export", lambda progress: export_db(influx, path, start or None, stop or None,
+                                                                         signals, progress))
+
+    def db_import(self, path: str, dry_run: bool = False) -> dict:
+        """Add the samples of an export file that the database does not have; never deletes anything."""
+        from .dbarchive import import_db, read_meta
+
+        read_meta(path)                                   # reject a wrong file before starting
+        influx = self._influx(write=True)
+        return self._start_db_job("import", lambda progress: import_db(influx, path, dry_run, progress))
 
     @property
     def agents(self):

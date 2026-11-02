@@ -14,6 +14,9 @@ settings, proposals). The repository holds only code, docs and defaults.
   propose  [--limit N]     ask the LLM to describe unregistered signals -> proposals.yaml
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
 
+  db export [-o FILE] [--start T] [--stop T]   recorded samples into one compact Parquet file
+  db import FILE [--dry-run]                   add the samples the database does not have (never deletes)
+
   sandbox-setup            create the sandbox's Python environment (numpy, pandas, scipy, matplotlib)
   library [list]           the library sources, tools and skills (version, audit and test state)
   library export [--all | --item KIND/NAME ...] [--name N] [--version V] [-o FILE.tgz]
@@ -98,7 +101,7 @@ def load_config(path: str) -> dict:
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
                          ("house_draft", "data/house_draft.yaml"), ("settings", "data/settings.yaml"),
                          ("runs", "runs/runs.keep"), ("library", "library/library.keep"),
-                         ("sandbox_venv", "sandbox/venv")):
+                         ("sandbox_venv", "sandbox/venv"), ("exports", "exports/exports.keep")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
@@ -107,6 +110,7 @@ def load_config(path: str) -> dict:
     if os.path.exists(old_draft) and not os.path.exists(paths["house_draft"]):
         os.replace(old_draft, paths["house_draft"])             # the draft's former name
     paths["runs"] = os.path.dirname(paths["runs"])             # agent runs: runs/<id>/
+    paths["exports"] = os.path.dirname(paths["exports"])       # database exports (.parquet)
     paths["library"] = os.path.dirname(paths["library"])       # house tools and skills, audits
     return cfg
 
@@ -327,6 +331,25 @@ def cmd_agent(cfg: dict, args) -> None:
     print(run.report() or meta.get("error") or "")
 
 
+def cmd_db(cfg: dict, args) -> None:
+    import json
+
+    from .dbarchive import export_db, import_db
+    from .service import Service
+
+    service = Service(cfg, MemoryWriter(), "none")
+    if args.action == "export":
+        out = args.output or os.path.join(cfg["paths"]["exports"], time.strftime("observer-%Y%m%d-%H%M%S.parquet"))
+        r = export_db(service._influx(write=False), out, args.start, args.stop, service.signals(),
+                      lambda m: print(m, file=sys.stderr))
+    else:
+        if not args.file:
+            sys.exit("db import FILE")
+        r = import_db(service._influx(write=True), args.file, args.dry_run, lambda m: print(m, file=sys.stderr))
+        r.pop("new_by_signal", None)
+    print(json.dumps(r, indent=1))
+
+
 def cmd_mcp(cfg: dict, args) -> None:
     from .agent.mcp_server import serve
 
@@ -376,6 +399,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--skill", default=None)
     p.add_argument("question", nargs="*")
     sub.add_parser("mcp")
+    p = sub.add_parser("db")
+    p.add_argument("action", choices=["export", "import"])
+    p.add_argument("file", nargs="?", default=None)
+    p.add_argument("-o", "--output", default="")
+    p.add_argument("--start", default=None, help="ISO time (UTC unless an offset is given)")
+    p.add_argument("--stop", default=None)
+    p.add_argument("--dry-run", action="store_true", help="import: count what would be written, write nothing")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -386,7 +416,7 @@ def main(argv: list[str] | None = None) -> None:
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
      "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "library": cmd_library, "test-tool": cmd_test_tool,
      "agent": cmd_agent,
-     "mcp": cmd_mcp}[args.command](cfg, args)
+     "mcp": cmd_mcp, "db": cmd_db}[args.command](cfg, args)
 
 
 if __name__ == "__main__":

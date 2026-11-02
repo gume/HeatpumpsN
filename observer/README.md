@@ -24,6 +24,7 @@ send later is a validated controller parameter set (plan:
 | `observer/sandbox_lib/`: the `obs` library for sandboxed code (tools and skills: the separate observer-library repository) | `data/`: catalog, settings, proposals, log |
 | | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, their history, imported packs, audit flags, test results |
 | | `sandbox/venv`: the sandbox's Python environment |
+| | `exports/`: database exports (`.parquet`) and uploaded imports |
 | | InfluxDB: the Docker volume `observer-influx-dev` |
 
 The data directory is `OBSERVER_HOME`, default
@@ -267,6 +268,37 @@ docker exec observer-influx-dev influx auth create --org heatpumpsn \
 .venv/bin/observer agent "Why did the floor circuit heat slowly this morning?"
 uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
 ```
+
+## Database export and import
+
+The recorded samples can be taken out of InfluxDB and brought back as **one
+compact file**: Parquet with zstd (about 2 bytes per sample: the first day,
+about 1 million samples, is 2.0 MB; InfluxDB itself uses 20 MB). One row per
+sample, lossless (`time_ns` in nanoseconds, `id`, `field`, `value` / `text`,
+the tags), sorted by signal and time; the file's metadata carries the export
+time, range, counts and the registry's description of every signal. DuckDB
+reads it directly:
+
+```sql
+SELECT make_timestamp(time_ns // 1000) AS t, value
+FROM 'observer-20261102-153653.parquet' WHERE id = 'heatpumpsn/controller/state/temp_mix';
+```
+
+* **Export** (Status tab, or `observer db export [--start T] [--stop T] [-o FILE]`)
+  reads with the read-only token, day by day, and writes the file into
+  `<OBSERVER_HOME>/exports/`.
+* **Import** (Status tab, or `observer db import FILE [--dry-run]`) **never
+  deletes or overwrites**. A sample counts as present when the same signal
+  and field have a sample at the same timestamp (tags are not compared: they
+  change when the registry changes); for every signal the import reads the
+  timestamps InfluxDB already has in the file's range and writes only the
+  missing samples. Importing a file twice, or a file that overlaps the
+  database, therefore adds nothing twice. A dry run only counts. Uploaded
+  files are kept in `exports/uploads/`.
+
+Checked on the real data: re-importing a full export wrote 0 of 1,003,897
+samples; into an empty bucket the first import wrote everything, the second
+nothing, and a re-export was identical row for row.
 
 ## Development
 
