@@ -101,6 +101,7 @@
   </nav>
   <span id="mq">…</span>
 </header>
+<div id="upd" class="hidden" style="background:var(--panel-2);border-bottom:1px solid var(--warn);padding:8px 16px;font-size:13px"></div>
 <main>
   <section id="view-status">
     <div class="cards" id="cards"></div>
@@ -246,6 +247,9 @@
       <button class="btn" id="l-export-house">Export house items (.tgz)</button>
       <button class="btn" id="l-export-all">Export everything (.tgz)</button>
       <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">Import a pack (.tgz)<input type="file" id="l-import" accept=".tgz,.tar.gz,.tar" style="display:none"></label>
+      <input id="l-url" placeholder="or a release URL: https://github.com/…/observer-library-0.2.0.tgz" style="flex:1;min-width:260px">
+      <button class="btn" id="l-url-go">Import from URL</button>
+      <button class="btn" id="l-check">Check for updates</button>
       <span class="dim" id="l-msg"></span>
     </div>
     <div class="two">
@@ -336,10 +340,44 @@ function show(v) {
   refresh();
 }
 
+let updShown = '';
+async function showUpdates(list) {
+  const key = list.join('|');
+  if (key === updShown) return;
+  updShown = key;
+  if (!list.length) { $('#upd').classList.add('hidden'); return; }
+  const u = await api('/api/updates');
+  const parts = [];
+  if (u.observer && u.observer.newer) parts.push(`<strong>Observer ${esc(u.observer.latest)}</strong> is released (running ${esc(u.observer.current)}):
+      <a href="${esc(u.observer.url)}" target="_blank">release notes</a> · upgrade: unpack the new bundle, copy <span class="mono">deploy/.env</span>, <span class="mono">docker compose up -d --build</span>`);
+  for (const p of u.packs.filter((x) => x.newer)) parts.push(`<strong>${esc(p.name)} ${esc(p.latest)}</strong> is released (installed ${esc(p.current)}):
+      <a href="${esc(p.url)}" target="_blank">notes</a> · <a href="#" data-install="${esc(p.asset_url)}">install now</a>`);
+  $('#upd').innerHTML = `<span class="warn">New version available.</span> ` + parts.join('<br>');
+  $('#upd').classList.remove('hidden');
+  document.querySelectorAll('#upd [data-install]').forEach((a) => a.addEventListener('click', async (e) => {
+    e.preventDefault(); await installUrl(a.dataset.install);
+  }));
+}
+async function installUrl(url) {
+  $('#l-msg').textContent = 'Downloading and installing…'; toast('Installing…');
+  try { const r = await api('/api/library/import-url', { method: 'POST', body: JSON.stringify({ url }) });
+        const msg = `Installed pack ${r.pack} ${r.version || ''}: ${r.items.length} items (unaudited unless their content was audited before).`;
+        $('#l-msg').textContent = msg; toast(msg, 5000); updShown = ''; await loadStatus(); if (view === 'library') loadLibrary(); }
+  catch (err) { $('#l-msg').textContent = err.message; toast(err.message, 6000); }
+}
+$('#l-url-go').addEventListener('click', () => { const u = $('#l-url').value.trim(); if (u) installUrl(u); });
+$('#l-check').addEventListener('click', async () => {
+  $('#l-msg').textContent = 'Checking…';
+  try { const u = await api('/api/updates/check', { method: 'POST' });
+        $('#l-msg').textContent = u.available.length ? `Available: ${u.available.join(', ')}` : `Up to date (checked ${u.checked})${u.errors.length ? '; ' + u.errors.join('; ') : ''}`;
+        updShown = ''; loadStatus(); }
+  catch (err) { $('#l-msg').textContent = err.message; }
+});
 async function loadStatus() {
   const s = await api('/api/status');
   llm = s.llm || {};
   document.title = `HeatpumpsN Observer ${s.version || ''}`;
+  showUpdates(s.updates || []);
   $('#ver').textContent = s.version ? `v${s.version}` : '';
   $('#mq').innerHTML = s.mqtt.host ? `MQTT <span class="${s.mqtt.connected ? 'ok' : 'err'}">${s.mqtt.connected ? 'connected' : 'disconnected'}</span> · ${esc(s.mqtt.host)}:${s.mqtt.port}` : 'MQTT off';
   if (view !== 'status') return;

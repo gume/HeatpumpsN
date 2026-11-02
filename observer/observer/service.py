@@ -51,6 +51,14 @@ class Service:
         self.started = time.time()
         self._agents = None
         self._db_job: dict | None = None
+        from . import __version__
+        from .updates import UpdateChecker
+
+        def library():
+            from .agent.manager import make_library
+            return self._agents.library if self._agents else make_library(self.cfg)
+
+        self.updates = UpdateChecker(cfg, __version__, library)
         self._stop = threading.Event()
         self._saver: threading.Thread | None = None
 
@@ -61,9 +69,11 @@ class Service:
             self.mqtt.start()
         self._saver = threading.Thread(target=self._save_loop, name="catalog-saver", daemon=True)
         self._saver.start()
+        self.updates.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self.updates.stop()
         if self.mqtt:
             self.mqtt.stop()
         with self.lock:
@@ -214,6 +224,7 @@ class Service:
                             "unregistered": unregistered},
                 "sources": dict(sorted(sources.items())),
                 "llm": {t["task"]: t["ready"] for t in self.settings.view()["tasks"]},
+                "updates": self.updates.summary()["available"],
             }
 
     def signals(self) -> list[dict]:

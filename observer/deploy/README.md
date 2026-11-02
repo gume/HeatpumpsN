@@ -82,8 +82,11 @@ docker compose exec observer observer db import /data/exports/observer-20261102-
 * **LLM**: `OBSERVER_LLM_BASE_URL` / `OBSERVER_LLM_KEY` in `.env` (a proxy on
   the Docker host: `http://host.docker.internal:<port>/v1`), then the models
   per task on the Settings page.
-* **Library**: build a pack in the observer-library repository
-  (`scripts/pack.sh`) and import it on the Library tab.
+* **Library** (the analysis tools and skills, repository
+  gume/observer-library): Library tab → *Import from URL* with the release
+  asset, e.g.
+  `https://github.com/gume/observer-library/releases/download/v0.2.0/observer-library-0.2.0.tgz`
+  (or `docker compose exec observer observer library import <url>`).
 * **Agent runs** are not available in the container yet: the sandbox
   (bubblewrap) needs user namespaces, which Docker's default security profile
   blocks, and the sandbox's Python environment is not in the image. Data
@@ -93,9 +96,13 @@ docker compose exec observer observer db import /data/exports/observer-20261102-
 
 ## 4. Operate
 
-* **Update** to a new release: unpack the new bundle next to the old one,
-  copy `.env` over (`cp ../../heatpumpsn-observer-0.2.0/deploy/.env .`) and
-  run `docker compose up -d --build` in its `deploy/`. The compose project
+* **New versions**: the portal shows a banner when a newer observer or
+  library-pack release exists (checked every 12 hours; Library tab → *Check
+  for updates*). A newer pack installs with one click from the banner.
+* **Update** to a new observer release: unpack the new bundle next to the old
+  one, copy `.env` over (`cp ../../heatpumpsn-observer-0.2.0/deploy/.env .`;
+  coming from 0.2.0, delete its line `OBSERVER_VERSION=0.2.0`), and run
+  `docker compose up -d --build` in its `deploy/`. The compose project
   name is fixed (`heatpumpsn-observer`), so the new containers use the same
   volumes (`heatpumpsn-observer_influx-data`, `_influx-config`,
   `_observer-data`): the data and the state stay. The portal header and

@@ -79,6 +79,16 @@ Signals tab writes the entries. The generic starter file is
   integration is removed.
 
 
+### 1.8 Releases (2026-11-02)
+
+* Observer: tags `observer-v<version>` on gume/HeatpumpsN (public), GitHub
+  Release with the deploy bundle by `.github/workflows/observer-release.yml`;
+  0.2.0 published, 0.3.0 tagged locally (update check, packs from URL).
+* Library: gume/observer-library (public), tags `v<version>`, workflow
+  publishes the pack; v0.2.0 tagged locally, to be pushed.
+* The observer checks both for newer releases (banner; packs install with
+  one click). Pushing stays with the owner.
+
 ### 1.9 Release deployment (2026-11-02)
 
 `observer/Dockerfile`, `observer/deploy/` (compose, env.example, README with

@@ -37,7 +37,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.2.0}
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.3.0}
     restart: unless-stopped
     depends_on:
       influxdb:

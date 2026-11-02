@@ -140,6 +140,9 @@ class AgentManager:
     def import_library(self, data: bytes) -> dict:
         return self.library.import_archive(data)
 
+    def import_library_url(self, url: str) -> dict:
+        return self.library.import_url(url)
+
     def remove_pack(self, name: str) -> None:
         self.library.remove_pack(name)
 

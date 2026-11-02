@@ -55,6 +55,14 @@ agent:
     tasks: 64
     file_mb: 200
 
+# Release checks: GitHub releases of the observer and of installed library
+# packs (each pack's library.yaml names its repository). A banner in the
+# portal shows newer versions; nothing is installed automatically.
+updates:
+  enabled: true
+  observer_repository: gume/HeatpumpsN
+  interval_h: 12
+
 # What the LLM, the house understanding and the agent know about the house
 # before any review: a few lines on the building, the heat source, the
 # circuits and the rooms. The House tab refines it.

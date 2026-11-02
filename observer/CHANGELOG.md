@@ -4,6 +4,22 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## 0.3.0 - 2026-11-02
+
+* Update check: the observer looks at the GitHub releases of the observer
+  (`observer-v*` in gume/HeatpumpsN) and of every installed library pack
+  (the repository named in its `library.yaml`) every 12 hours and on demand;
+  a banner in the portal shows newer versions (`observer updates` on the
+  command line). Nothing is installed automatically.
+* Library packs from a URL: Library tab *Import from URL* and
+  `observer library import <url>`; a newer pack release is installed with one
+  click from the banner.
+* Configuration: `updates` (enabled, observer_repository, interval_h);
+  `OBSERVER_GITHUB_TOKEN` for private repositories.
+* `OBSERVER_VERSION` is no longer in `deploy/env.example`: the compose file
+  of each bundle carries its version. When upgrading from 0.2.0, delete the
+  line `OBSERVER_VERSION=0.2.0` from the copied `.env`.
+
 ## 0.2.0 - 2026-11-02
 
 First release for deployment.

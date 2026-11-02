@@ -136,6 +136,16 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such archived version") from exc
 
+    # --- updates -------------------------------------------------------------------
+    @app.get("/api/updates")
+    def updates():
+        return service.updates.summary()
+
+    @app.post("/api/updates/check")
+    async def check_updates():
+        await run_in_threadpool(service.updates.check)
+        return service.updates.summary()
+
     # --- the observer's state ------------------------------------------------------
     @app.get("/api/state/export")
     def state_export():
@@ -340,6 +350,17 @@ def create_app(service: Service) -> FastAPI:
             return service.agents.import_library(data)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/library/import-url")
+    async def import_library_url(body: dict = Body(...)):
+        try:
+            result = await run_in_threadpool(service.agents.import_library_url, str(body.get("url") or ""))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"download failed: {exc}") from exc
+        await run_in_threadpool(service.updates.check)       # the banner reflects the new version at once
+        return result
 
     @app.delete("/api/library/pack")
     def remove_pack(name: str = Query(...)):

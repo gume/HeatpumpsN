@@ -24,7 +24,8 @@ settings, proposals). The repository holds only code, docs and defaults.
   library [list]           the library sources, tools and skills (version, audit and test state)
   library export [--all | --item KIND/NAME ...] [--name N] [--version V] [-o FILE.tgz]
                            house items (default), all items or chosen ones as a .tgz pack
-  library import FILE.tgz  install a pack (strictly checked; a previous version is kept)
+  library import FILE.tgz|URL   install a pack, e.g. a release asset (strictly checked; a previous version is kept)
+  updates                  check GitHub for newer observer and library-pack releases
   library remove-pack NAME
   test-tool NAME           run a library tool's tests in the sandbox
   agent    [--skill NAME] [QUESTION ...]   one agent run in the foreground; the record goes to runs/
@@ -301,8 +302,11 @@ def cmd_library(cfg: dict, args) -> None:
         print(f"{out}: {len(data)} bytes")
         return
     if args.action == "import":
-        with open(args.file, "rb") as fp:
-            r = lib.import_archive(fp.read())
+        if args.file.startswith(("http://", "https://")):
+            r = lib.import_url(args.file)
+        else:
+            with open(args.file, "rb") as fp:
+                r = lib.import_archive(fp.read())
         print(f"pack {r['pack']} {r['version']}: {len(r['items'])} items")
         return
     if args.action == "remove-pack":
@@ -431,6 +435,17 @@ def cmd_state(cfg: dict, args) -> None:
         print("restart a running observer (it reads the state at start)")
 
 
+def cmd_updates(cfg: dict, args) -> None:
+    import json
+
+    from . import __version__
+    from .agent.manager import make_library
+    from .updates import UpdateChecker
+
+    r = UpdateChecker(cfg, __version__, lambda: make_library(cfg)).check()
+    print(json.dumps({k: v for k, v in r.items()}, indent=1, default=str))
+
+
 def cmd_mcp(cfg: dict, args) -> None:
     from .agent.mcp_server import serve
 
@@ -483,6 +498,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("question", nargs="*")
     sub.add_parser("mcp")
     sub.add_parser("influx-setup")
+    sub.add_parser("updates")
     p = sub.add_parser("state")
     p.add_argument("action", choices=["export", "import"])
     p.add_argument("file", nargs="?", default=None)
@@ -504,7 +520,7 @@ def main(argv: list[str] | None = None) -> None:
      "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "library": cmd_library, "test-tool": cmd_test_tool,
      "agent": cmd_agent,
      "mcp": cmd_mcp, "db": cmd_db, "influx-setup": cmd_influx_setup,
-     "state": cmd_state}[args.command](cfg, args)
+     "state": cmd_state, "updates": cmd_updates}[args.command](cfg, args)
 
 
 if __name__ == "__main__":

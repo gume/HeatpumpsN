@@ -273,7 +273,9 @@ uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
 
 Releases are tags `observer-v<version>` with a deploy bundle
 `heatpumpsn-observer-<version>.tar.gz` (`scripts/release.sh`, the GitHub
-workflow `.github/workflows/observer-release.yml`, `CHANGELOG.md`).
+workflow `.github/workflows/observer-release.yml`, `CHANGELOG.md`). The
+observer checks GitHub for newer releases of itself and of its library packs
+(`updates.py`; banner in the portal, `observer updates`).
 
 `deploy/docker-compose.yml` runs InfluxDB and the observer (image from
 `Dockerfile`); settings in `deploy/.env` (`deploy/env.example`). Step by step,

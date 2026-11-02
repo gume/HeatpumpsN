@@ -63,10 +63,13 @@ class Source:
     version: str = ""
     description: str = ""
     writable: bool = False
+    repository: str = ""       # owner/name on GitHub, from library.yaml: where newer versions are released
+    tag_prefix: str = "v"
 
     def view(self) -> dict:
         return {"id": self.id, "kind": self.kind, "name": self.name, "version": self.version,
-                "description": self.description, "root": self.root, "writable": self.writable}
+                "description": self.description, "root": self.root, "writable": self.writable,
+                "repository": self.repository}
 
 
 @dataclass
@@ -166,14 +169,16 @@ class Library:
             m = _manifest(p, os.path.basename(p))
             name = str(m.get("name") or os.path.basename(p))
             out.append(Source("path-" + re.sub(r"[^a-z0-9_.-]", "_", name.lower()), "path", p, name,
-                              str(m.get("version", "")), str(m.get("description", ""))))
+                              str(m.get("version", "")), str(m.get("description", "")), False,
+                              str(m.get("repository") or ""), str(m.get("tag_prefix") or "v")))
         packs = os.path.join(self.house_dir, "packs")
         for d in sorted(os.listdir(packs)):
             root = os.path.join(packs, d)
             if os.path.isdir(root) and not d.startswith("."):
                 m = _manifest(root, d)
                 out.append(Source("pack-" + d, "pack", root, str(m.get("name") or d), str(m.get("version", "")),
-                                  str(m.get("description", ""))))
+                                  str(m.get("description", "")), False, str(m.get("repository") or ""),
+                                  str(m.get("tag_prefix") or "v")))
         return out
 
     def source(self, source_id: str) -> Source:
@@ -475,6 +480,14 @@ class Library:
                     fp.write(content)
         items = [p.split("/")[:2] for p in files if p.count("/") == 2]
         return {"pack": name, "version": manifest.get("version"), "items": sorted({"/".join(i) for i in items})}
+
+    def import_url(self, url: str) -> dict:
+        """Download an archive (e.g. a GitHub release asset) and install it as a pack."""
+        from ..updates import download
+
+        r = self.import_archive(download(url, MAX_ARCHIVE))
+        r["url"] = url
+        return r
 
     def remove_pack(self, name: str) -> None:
         root = os.path.join(self.house_dir, "packs", name)
