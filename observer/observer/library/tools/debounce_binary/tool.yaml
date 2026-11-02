@@ -1,0 +1,15 @@
+name: debounce_binary
+version: 1
+purpose: >-
+  Turn a noisy on/off or power-like signal into a clean 0/1 state: threshold,
+  then a causal majority vote over a time window, so that short artefacts
+  (e.g. 2-second power-meter flicker around a threshold) do not count as
+  switchings. Causal: the state at t uses only samples up to t.
+needs: one time series that represents an on/off state (relay, pump power, burner flag)
+inputs:
+- {name: series, type: series, description: "time-indexed values (0/1, or numeric like power in W)", required: true}
+- {name: threshold, type: number, description: "values >= threshold are on", required: false, default: 0.5}
+- {name: window, type: string, description: "majority window as a pandas offset, e.g. 1min", required: false, default: 1min}
+outputs: {type: series, description: "0/1 integer series on the input's timestamps"}
+requires: [pandas]
+author: observer (seed, after floor_simulator/log_analysis causal_majority)

@@ -1,0 +1,15 @@
+name: pair_offset
+version: 1
+purpose: >-
+  Compare two sensors that measure the same quantity (redundant sensors, or a
+  sensor and its reference): mean offset a-b, its spread, the largest
+  difference and when it happened, and the correlation. Optionally only where
+  a condition holds (e.g. pump running, so both see the same water).
+needs: two time series of the same quantity, aligned on a common grid (resample first)
+inputs:
+- {name: a, type: series, description: "first sensor", required: true}
+- {name: b, type: series, description: "second sensor (reference)", required: true}
+- {name: mask, type: series, description: "optional boolean series: compare only where True", required: false, default: null}
+outputs: {type: dict, description: "points, mean_offset, median_offset, spread (std), p95_abs, max_abs, max_abs_at (ISO time), correlation"}
+requires: [pandas, numpy]
+author: observer (seed)

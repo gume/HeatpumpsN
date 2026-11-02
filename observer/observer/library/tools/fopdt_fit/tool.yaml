@@ -1,0 +1,19 @@
+name: fopdt_fit
+version: 1
+purpose: >-
+  Identify a first-order-plus-dead-time model y' = (K*u(t-L) + c - y)/tau
+  from an input and an output signal on a regular grid: gain K, time
+  constant tau, dead time L, offset c, with the fit quality of a free-run
+  simulation (RMSE, R2). Searches the dead time on a grid, fits a discrete
+  first-order model by least squares for each, keeps the best simulation.
+  Typical uses: transport delay and lag of a mixer to a forward sensor,
+  heat-up dynamics of a circuit, sensor lag.
+needs: one input and one output time series on the same regular grid, covering excitation (changes of the input)
+inputs:
+- {name: u, type: series, description: "input (e.g. valve position, burner power), regular grid", required: true}
+- {name: y, type: series, description: "output (e.g. a temperature), same grid", required: true}
+- {name: max_delay_s, type: number, description: "largest dead time to try", required: false, default: 600}
+- {name: delay_step_s, type: number, description: "step of the dead-time search (rounded to the grid)", required: false, default: 0}
+outputs: {type: dict, description: "gain, tau_s, delay_s, offset, rmse, r2, points, dt_s; or {error} when the data does not allow a fit"}
+requires: [pandas, numpy]
+author: observer (seed)

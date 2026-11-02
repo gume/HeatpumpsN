@@ -79,27 +79,27 @@ Signals tab writes the entries. The generic starter file is
   integration is removed.
 
 
-### 2.1 Agent, tools, sandbox, skills (first version, 2026-11-01)
+### 2.1 Agent, sandbox, data socket, library (2026-11-02)
 
-* Portal **Agent** tab, `observer agent [--skill NAME] [QUESTION]`, and
-  `observer mcp` (the same tools for MCP clients). Design and limits in
-  `README.md` → "Agent, tools, sandbox and skills".
-* Tools run inside the observer and read the database with the **read-only
-  token** `OBSERVER_INFLUX_READ_TOKEN` (in the data directory's `.env`;
-  created 2026-11-01, a write with it returns 403). Generated code runs in
-  **bubblewrap** (rootless, no network: data reaches it only as CSV files the
-  tools wrote; cgroup memory/process limits via `systemd-run --user`; CPU
-  time by rlimit, since the cpu controller is not delegated to the user).
-  The sandbox's Python lives in `<OBSERVER_HOME>/sandbox/venv`
-  (`observer sandbox-setup`).
-* Skills: `sensor-health`, `heating-start`, `boiler-cycling` in
-  `observer/skills/`. Runs and their audit records in `<OBSERVER_HOME>/runs/`.
-* Model for the task *agent*: `gemini-3.5-flash-lite` (runs take 30–80 s,
-  ~140k tokens). The first runs found real things (overshoot at heating
-  starts, MPC anomalies, BLE sensor gaps) but also misread facts the
-  unreviewed house description does not settle (see ISSUES).
-* Docker is available here too, but the user is in the `docker` group
-  (root-equivalent), so it is not used as the default sandbox.
+* Design and use: `README.md` → "Agent, sandbox, data socket and library".
+  Portal tabs **Agent** (runs, harvest, pause/resume) and **Library** (tools
+  and skills, tests, audit flags); CLI `observer agent | library | test-tool |
+  mcp`.
+* The agent picks its data and windows; code in the bwrap sandbox (no
+  network) reads InfluxDB through the run's Unix-socket data service
+  (`agent/broker.py`, read-only token `OBSERVER_INFLUX_READ_TOKEN`, every
+  request in `queries.jsonl`). Sandbox Python: `<OBSERVER_HOME>/sandbox/venv`
+  (`observer sandbox-setup`; pytest is needed for tool tests).
+* Library: package items in `observer/library/{tools,skills}`, house items and
+  `audits.yaml` / `tests.yaml` in `<OBSERVER_HOME>/library/`. Nothing is
+  audited yet: the owner audits in the Library tab.
+* Models: all tasks on `gemini-3.5-flash-lite` (owner's choice;
+  `gemini-3.8-flash` has 20 requests/day, worth it for *harvest* and
+  *house*). Flash-lite follows recipes and the library poorly (it wrote its
+  own code instead of using the skill and tools); a stronger agent model
+  should do better.
+* A harvest proposal (`identify_short_cycles`, overlapping `on_periods`)
+  waits in run `20261102-024337-question`, not added.
 
 ## 3. Working on it
 

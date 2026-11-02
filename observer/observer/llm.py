@@ -33,6 +33,50 @@ role is one of: %s.
 Keep name short (as on a dashboard); description is one sentence.""" % (", ".join(QUANTITIES), ", ".join(ROLES))
 
 
+_DURATION = __import__("re").compile(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?$")
+_RETRY_TEXT = __import__("re").compile(r"retry (?:in|after) ((?:\d+(?:\.\d+)?[hms])+)", __import__("re").I)
+_RETRY_DELAY = __import__("re").compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
+
+
+def _duration_s(text: str) -> float | None:
+    m = _DURATION.match(text.strip())
+    if not m or not any(m.groups()):
+        return None
+    h, mi, s = (float(g) if g else 0.0 for g in m.groups())
+    return h * 3600 + mi * 60 + s
+
+
+def retry_after_s(response) -> float | None:
+    """How long the provider asks to wait after a 429, in seconds, or None if it does not say.
+
+    Looks at the Retry-After header, Google's RetryInfo ("retryDelay": "37s") and
+    the message text ("Please retry in 6h11m16.5s")."""
+    header = response.headers.get("retry-after")
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            from email.utils import parsedate_to_datetime
+            try:
+                return max(0.0, parsedate_to_datetime(header).timestamp() - time.time())
+            except (TypeError, ValueError):
+                pass
+    text = response.text or ""
+    m = _RETRY_DELAY.search(text)
+    if m:
+        return float(m.group(1))
+    m = _RETRY_TEXT.search(text)
+    return _duration_s(m.group(1)) if m else None
+
+
+def human_duration(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min"
+    return f"{int(seconds // 3600)} h {int(seconds % 3600 // 60)} min"
+
+
 class LlmClient:
     def __init__(self, base_url: str, model: str, api_key: str | None = None, timeout_s: float = 120.0):
         self.base_url = base_url.rstrip("/")
@@ -48,47 +92,60 @@ class LlmClient:
         return cls(cfg["base_url"], cfg["model"], key, float(cfg.get("timeout_s", 120)))
 
     RETRY_STATUS = (429, 500, 502, 503, 504)
+    MAX_SHORT_WAIT_S = 60          # a 429 that asks for at most this long is waited out
+    MAX_SHORT_WAITS = 5
+    sleep = staticmethod(time.sleep)
 
-    def chat(self, system: str, user: str, attempts: int = 3) -> str:
-        """One chat completion; transient errors (overload, rate limit) are retried."""
+    def _post(self, body: dict, attempts: int = 3) -> dict:
+        """POST /chat/completions with retries.
+
+        429 with a stated delay of at most a minute: wait it and repeat (up to
+        MAX_SHORT_WAITS times); a longer stated delay is raised at once (the
+        caller pauses); no stated delay: backoff like other transient errors."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        body = {"model": self.model, "temperature": 0,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-        for attempt in range(attempts):
+        attempt = short_waits = 0
+        while True:
             try:
                 r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
                                timeout=self.timeout_s)
-                if r.status_code not in self.RETRY_STATUS or attempt == attempts - 1:
-                    r.raise_for_status()
-                    return r.json()["choices"][0]["message"]["content"]
             except (httpx.TimeoutException, httpx.TransportError):
-                if attempt == attempts - 1:
+                attempt += 1
+                if attempt >= attempts:
                     raise
-            time.sleep(10 * (attempt + 1))
-        raise RuntimeError("unreachable")
+                self.sleep(10 * attempt)
+                continue
+            if r.status_code == 429:
+                delay = retry_after_s(r)
+                if delay is not None:
+                    if delay <= self.MAX_SHORT_WAIT_S and short_waits < self.MAX_SHORT_WAITS:
+                        short_waits += 1
+                        self.sleep(delay + 1)
+                        continue
+                    r.raise_for_status()                      # long wait: let the caller pause
+            if r.status_code not in self.RETRY_STATUS:
+                r.raise_for_status()
+                return r.json()
+            attempt += 1
+            if attempt >= attempts:
+                r.raise_for_status()
+            self.sleep(10 * attempt)
+
+    def chat(self, system: str, user: str, attempts: int = 3) -> str:
+        """One chat completion; transient errors (overload, rate limit) are retried."""
+        body = {"model": self.model, "temperature": 0,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        return self._post(body, attempts)["choices"][0]["message"]["content"]
 
     def chat_tools(self, messages: list[dict], tools: list[dict], attempts: int = 3) -> tuple[dict, dict]:
         """One step of function calling: (assistant message as returned, usage).
 
         The message goes back into the history unchanged: some providers
         (Gemini) attach signatures to tool calls that must be returned."""
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         body = {"model": self.model, "temperature": 0, "messages": messages}
         if tools:
             body["tools"] = tools
-        for attempt in range(attempts):
-            try:
-                r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
-                               timeout=self.timeout_s)
-                if r.status_code not in self.RETRY_STATUS or attempt == attempts - 1:
-                    r.raise_for_status()
-                    data = r.json()
-                    return data["choices"][0]["message"], data.get("usage") or {}
-            except (httpx.TimeoutException, httpx.TransportError):
-                if attempt == attempts - 1:
-                    raise
-            time.sleep(10 * (attempt + 1))
-        raise RuntimeError("unreachable")
+        data = self._post(body, attempts)
+        return data["choices"][0]["message"], data.get("usage") or {}
 
 
 _TRAILING_COMMA = __import__("re").compile(r",(\s*[}\]])")
@@ -376,3 +433,48 @@ def build_house_description(client: LlmClient, context: str, described: dict[str
             "questions": [q.strip() for q in data.get("questions", []) if isinstance(q, str) and q.strip()],
             "recommendations": recs,
             "model": validate_model(data.get("model") or {}, set(described))}
+
+
+HARVEST_SYSTEM = """You review a finished analysis run of a home heating observer and
+propose what should become reusable: analysis TOOLS (code) and SKILLS
+(recipes). The library already has the items listed; do not duplicate them
+(propose an improved version only with a clearly different name and why).
+
+A tool must be universal: it works on generic inputs (pandas Series with a
+DatetimeIndex, DataFrames, numbers), never on one house's signal ids, so it
+can move to another house with other sensors or no controller. Write it as a
+Python module with a function run(...) (numpy, pandas, scipy allowed), a
+clear purpose, the kind of data it needs, typed inputs and the output, and
+pytest tests on synthetic data (`from tool import run`, functions test_...)
+that check the result numerically. Generalise the code the run wrote; fix its
+bugs; keep it small.
+
+A skill is a recipe in Markdown: the steps that worked in this run, in
+generic terms (circuits, roles, regimes), the checks and thresholds used, the
+pitfalls met, and the library tools to use. Propose one only if the method is
+worth repeating.
+
+Propose nothing rather than something weak. Answer only with JSON:
+{"tools": [{"name": "snake_case", "purpose": "...", "needs": "...",
+            "inputs": [{"name", "type": "series|dataframe|number|integer|string|boolean|list|dict|timestamp|any",
+                        "description", "required": true}],
+            "outputs": {"type", "description"}, "code": "...", "tests": "...", "why": "what in the run it comes from"}],
+ "skills": [{"name": "snake_case", "title", "description", "recipe": "Markdown", "tools": ["names"],
+             "why": "..."}],
+ "notes": "one or two sentences about the run's method"}"""
+
+
+def harvest_run(client: LlmClient, digest: dict, library: dict) -> dict:
+    """Proposed tools and skills from a run digest; incomplete proposals are dropped."""
+    user = json.dumps({"run": digest, "library": library}, ensure_ascii=False, indent=1)
+    data = chat_json(client, HARVEST_SYSTEM, user)
+    if not isinstance(data, dict):
+        raise ValueError("the answer is not a JSON object")
+    import re
+    name_ok = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+    tools = [t for t in data.get("tools") or [] if isinstance(t, dict) and name_ok.match(str(t.get("name", "")))
+             and "def run(" in str(t.get("code", "")) and "def test_" in str(t.get("tests", ""))
+             and isinstance(t.get("outputs"), dict) and t.get("purpose")]
+    skills = [k for k in data.get("skills") or [] if isinstance(k, dict) and name_ok.match(str(k.get("name", "")))
+              and k.get("recipe") and k.get("description")]
+    return {"tools": tools, "skills": skills, "notes": str(data.get("notes") or "")}

@@ -59,40 +59,55 @@ audited description, and data summaries (value ranges, update rates).
 ## 3. Tools
 
 Agents work through tools, never directly on the database or the plant.
+Two layers:
 
-| Kind | Examples |
-| --- | --- |
-| Data access (read-only) | time series of signals by id, tag (location, circuit, role) or house-model relation; resampled at query time; event log |
-| Features | delta-T, heat-up times, cycle counts and lengths, duty cycles, correlations, response delays, stuck-value and staleness detection |
-| Calculation | steady-state heat balance, heating curve fit, degree days, valve characteristic fit |
-| Simulation | the floor simulator's plant model (`floor_simulator/`), closed loop with the firmware MPC core (`fw_mpc`), what-if runs |
-| Solvers | parameter fitting (least squares), optimisation of MPC parameter sets against recorded data |
+* **Core tools** (in the observer, called by the model): house context,
+  signal search, data coverage, quick features, series summaries, events,
+  `run_python`, the library (list, read, create tool, save skill), finish.
+* **Analysis tools** (the library, run in the sandbox by the agent's code):
+  generic functions with a manifest (purpose, the kind of data they need,
+  typed inputs, output), code (`run(...)`) and tests on synthetic data.
+  Examples: resampling with hold horizons, debounce, on-periods, sensor-pair
+  comparison, setpoint tracking, first-order-plus-dead-time fits; later heat
+  balance, heating-curve fit, valve characteristic, simulator runs
+  (`floor_simulator/`), parameter optimisation.
 
-**Interface:** tools are exposed as MCP servers (Model Context Protocol), so any
-MCP-capable agent can use them; a plain HTTP/JSON or Python API wraps the same
-functions for deterministic jobs. Small results go back in the response; large
-ones (data frames, plots) are written to the agent's workspace as files
-(Parquet/CSV/PNG) and returned as paths.
+**Data access from code:** the agent decides which data and windows it
+needs; its code reads them itself (`obs.data.series(...)`) through the run's
+data socket (section 4). Small results go back in tool responses; large ones
+stay in the workspace as files.
 
-**Tool creation by the LLM:** an agent may write a new tool (code + schema +
-tests) when no existing one fits. A new tool runs only in the sandbox, must
-pass its tests on recorded data, and is promoted to the shared tool set only
-after review (by the owner or a stronger reviewing model, then the owner).
+**Tools and skills created by the LLM:** an agent may write a tool
+(`create_tool`) or a skill (`save_skill`) during a run; the *harvest* (a
+button on a finished run, its own model setting) proposes them from what a
+run did. They go to the house part of the library, unaudited; a tool's tests
+run in the sandbox at once. **Audit** is the owner's flag, bound to a hash of
+the item (any change voids it); the agent sees the flags and says when a
+result depends on an unaudited item. Tools are written against generic
+inputs, never one house's signal ids, so they can move to another house with
+another sensor set or no controller; promoting a house item to the package
+(git) is the owner's decision.
 
 ## 4. Sandbox and resources
 
-* **Isolation:** tools and agent-generated code run in **rootless** containers
-  (Podman rootless or Docker rootless; gVisor or a microVM such as Firecracker
-  are stronger options if needed). No root inside or outside, no privileged
-  mode, read-only root filesystem, dropped capabilities, seccomp profile.
-* **Data access:** a read-only InfluxDB token scoped to the observer's bucket;
-  no write access to the database, the registry or the controller. The
-  network is limited to the database (and the LLM endpoint for the agent
-  process itself).
-* **Resource limits** per workspace and per run: CPU, memory, disk quota,
-  wall-clock time, number of processes; results and logs kept for audit.
-* **Workspace:** one directory per run (inputs, tool outputs, the agent's notes
-  and the final report), archived with the run's audit record.
+* **Isolation:** agent-written code runs in **bubblewrap**: unprivileged user
+  namespaces (rootless, no daemon), all namespaces unshared (**no network**),
+  only `/usr`, its own Python environment, the client library, the tool
+  library (read-only) and the run's workspace visible, a cleared environment.
+  `podman` (rootless) or `docker` are alternative runtimes.
+* **Data access:** the only way out of the sandbox is the run's **data
+  socket**, a Unix socket file bound into it. The service behind it runs in
+  the observer, validates every request (known signal ids, strict time and
+  window formats, size and request limits), reads InfluxDB with a read-only
+  token the code never sees, and logs every request. No write access to the
+  database, the registry or the controller.
+* **Resource limits** per code run: memory and processes (systemd user scope,
+  cgroup v2), CPU time and file size (rlimits), wall-clock time; per agent
+  run: steps, total time, data requests.
+* **Workspace and audit record:** one directory per run with the steps, every
+  script, every data request, the files and the report; the conversation is
+  saved after each step, so a run **pauses** when the LLM is unavailable
+  (quota) and resumes later, possibly with another model.
 
 ## 5. Agents and workflows
 
@@ -124,9 +139,11 @@ optimisation.
   (circuits, roles, relations), not against one house's signal ids, so they
   can be **shared between houses**; each house maps them through its own
   audited model.
-* Repository layout: `observer/observer/skills/<name>/` (recipe, helpers,
-  tests) in git; house-specific description, model, notes and archive in
-  `<OBSERVER_HOME>/house/`, never in git.
+* Repository layout: package tools and skills in
+  `observer/observer/library/{tools,skills}/<name>/` (git); house items,
+  audit flags and test results in `<OBSERVER_HOME>/library/`; the house's
+  description, knowledge, review and archive in `<OBSERVER_HOME>/house/`,
+  never in git.
 
 ## 7. Phases
 
@@ -135,11 +152,11 @@ optimisation.
 | A (done) | data collection, registry, catalog, LLM descriptions, per-task model settings |
 | B (done) | reviewed house description with notes, questions, recommendations and archive |
 | C | deterministic supervision from the audited model's checks; alerts to HA |
-| D (first version) | read-only tools (data, features, events, house context) as MCP + Python API; skills `sensor-health`, `heating-start`, `boiler-cycling` |
-| E (first version) | sandbox: bubblewrap (rootless, no network, cgroup memory/process limits, rlimits, timeout); workspaces and audit records per run |
-| F (first version) | agent loop with skills and free questions; portal Agent tab; still to come: triggering it from supervision (C) |
+| D (first version) | core tools (MCP + function calling); library of analysis tools with manifests, tests and audit flags; seed tools and skills incl. plant identification |
+| E (first version) | sandbox: bubblewrap (rootless, no network) with the read-only data socket; limits; workspaces, query logs, audit records |
+| F (first version) | agent loop: free questions or skills, own data selection, tool and skill creation, harvest of finished runs, pause/resume on LLM quota; still to come: triggering it from supervision (C) |
 | G | optimisation agent with backtesting against recorded data and the simulator; approval flow for parameter pushes |
-| H | LLM-written tools with tests and review; shareable skills |
+| H | sharing library items between houses (export/import, promotion to the package) |
 
 Prerequisites before G: the portal needs a login (it may then approve
 parameter pushes). The read-only database token exists (agent tools).

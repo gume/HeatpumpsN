@@ -5,6 +5,10 @@ no root anywhere. Each run sees only
 
 * ``/usr`` and the sandbox's own Python environment, read-only;
 * the run's workspace at ``/work``, read-write (data files, plots, notes);
+* the ``obs`` client library (``/opt/obs/lib``) and the tool library
+  (``/opt/obs/tools/package`` and ``/house``), read-only;
+* the run's data socket (``/run/obs/data.sock``, ``OBS_SOCKET``): the only
+  way out, to the observer's read-only data service (``broker.py``);
 * an empty ``/tmp``, ``/proc`` and a minimal ``/dev``;
 
 with **no network** (all namespaces unshared), a cleared environment, and
@@ -29,7 +33,8 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-PACKAGES = ("numpy", "pandas", "scipy", "matplotlib")
+LIB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sandbox_lib")
+PACKAGES = ("numpy", "pandas", "scipy", "matplotlib", "pytest")
 OUTPUT_LIMIT = 12_000
 
 
@@ -73,11 +78,16 @@ def _files(root: str) -> dict[str, float]:
 
 class Sandbox:
     def __init__(self, venv: str, runtime: str = "bwrap", limits: Limits | None = None,
-                 image: str = "python:3.11-slim"):
+                 image: str = "python:3.11-slim", tool_dirs: dict[str, str] | None = None):
         self.venv = os.path.abspath(venv)
         self.runtime = runtime
         self.limits = limits or Limits()
         self.image = image
+        # Read-only mounts: the obs client library and the tool library.
+        self.mounts = {LIB_DIR: "/opt/obs/lib"}
+        for origin, path in (tool_dirs or {}).items():
+            if path and os.path.isdir(path):
+                self.mounts[os.path.abspath(path)] = f"/opt/obs/tools/{origin}"
 
     # --- environment ---------------------------------------------------------------
     @property
@@ -118,20 +128,28 @@ class Sandbox:
             subprocess.run([os.path.join(venv, "bin", "pip"), "install", "--quiet", *PACKAGES], check=True)
 
     # --- running code ----------------------------------------------------------------
-    def _bwrap(self, workspace: str, script: str) -> list[str]:
+    def _bwrap(self, workspace: str, script: str, socket_dir: str | None = None) -> list[str]:
         lim = self.limits
         binds = ["--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
                  "--symlink", "usr/bin", "/bin"]
         for path in {self.venv, self.base_prefix()}:
             if path and not path.startswith("/usr/"):
                 binds += ["--ro-bind", path, path]
+        for host, target in self.mounts.items():
+            binds += ["--ro-bind", host, target]
+        env = ["--setenv", "PYTHONPATH", "/opt/obs/lib"]
+        if socket_dir:
+            binds += ["--bind", socket_dir, "/run/obs"]
+            env += ["--setenv", "OBS_SOCKET", "/run/obs/data.sock"]
         bw = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
               *binds, "--ro-bind-try", "/etc/fonts", "/etc/fonts", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
               "--bind", workspace, "/work", "--chdir", "/work",
               "--setenv", "HOME", "/work", "--setenv", "PATH", f"{self.venv}/bin:/usr/bin",
               "--setenv", "MPLBACKEND", "Agg", "--setenv", "MPLCONFIGDIR", "/tmp",
-              "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
-              self.python, "-I", "-B", f"/work/{script}"]
+              "--setenv", "PYTHONDONTWRITEBYTECODE", "1", *env,
+              # -s -B (no user site, no bytecode); the environment is already
+              # cleared, so PYTHONPATH is ours and -I is not needed.
+              self.python, "-s", "-B", f"/work/{script}"]
         rl = ["prlimit", f"--cpu={lim.cpu_s}", f"--fsize={lim.file_mb * 1024 * 1024}",
               f"--nofile={lim.open_files}", "--core=0"]
         if shutil.which("systemd-run"):
@@ -140,17 +158,23 @@ class Sandbox:
             return scope + rl + ["--"] + bw
         return rl + [f"--as={lim.memory_mb * 1024 * 1024 * 4}", f"--nproc={lim.tasks}", "--"] + bw
 
-    def _container(self, workspace: str, script: str) -> list[str]:
+    def _container(self, workspace: str, script: str, socket_dir: str | None = None) -> list[str]:
         lim = self.limits
+        mounts = []
+        for host, target in self.mounts.items():
+            mounts += ["-v", f"{host}:{target}:ro"]
+        if socket_dir:
+            mounts += ["-v", f"{socket_dir}:/run/obs", "-e", "OBS_SOCKET=/run/obs/data.sock"]
         return [self.runtime, "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                *mounts, "-e", "PYTHONPATH=/opt/obs/lib",
                 "--security-opt", "no-new-privileges", "--user", "65534:65534",
                 "--memory", f"{lim.memory_mb}m", "--memory-swap", f"{lim.memory_mb}m",
                 "--pids-limit", str(lim.tasks), "--cpus", "1", "--tmpfs", "/tmp",
                 "--ulimit", f"cpu={lim.cpu_s}", "--ulimit", f"fsize={lim.file_mb * 1024 * 1024}",
                 "-e", "MPLBACKEND=Agg", "-e", "MPLCONFIGDIR=/tmp", "-e", "HOME=/work",
-                "-v", f"{workspace}:/work", "-w", "/work", self.image, "python", "-I", "-B", f"/work/{script}"]
+                "-v", f"{workspace}:/work", "-w", "/work", self.image, "python", "-s", "-B", f"/work/{script}"]
 
-    def run(self, code: str, workspace: str, name: str = "snippet") -> Result:
+    def run(self, code: str, workspace: str, name: str = "snippet", socket_dir: str | None = None) -> Result:
         """Run `code` with the workspace as /work; the script is kept in .runs/ for the audit."""
         workspace = os.path.abspath(workspace)
         runs = os.path.join(workspace, ".runs")
@@ -159,7 +183,8 @@ class Sandbox:
         with open(os.path.join(workspace, script), "w", encoding="utf-8") as fp:
             fp.write(code)
         before = _files(workspace)
-        cmd = self._bwrap(workspace, script) if self.runtime == "bwrap" else self._container(workspace, script)
+        cmd = (self._bwrap(workspace, script, socket_dir) if self.runtime == "bwrap"
+               else self._container(workspace, script, socket_dir))
         # systemd-run --user needs the user session even when the caller (an
         # MCP client) started us with a minimal environment.
         env = dict(os.environ)

@@ -1,0 +1,20 @@
+name: setpoint_tracking
+version: 1
+purpose: >-
+  How well a controlled temperature (or any value) reaches its setpoint after
+  given start times: value at start, minutes until it is within a band of the
+  setpoint, overshoot above the setpoint, and optional companion signals
+  (e.g. valve position, return temperature) sampled a few minutes after the
+  start. The setpoint is carried forward from before the start.
+needs: a controlled value, its setpoint (series or constant) and event times (e.g. from on_periods)
+inputs:
+- {name: value, type: series, description: "the controlled value, time-indexed", required: true}
+- {name: setpoint, type: any, description: "setpoint series (carried forward) or a number", required: true}
+- {name: starts, type: list, description: "start times (timestamps)", required: true}
+- {name: band, type: number, description: "within band below the setpoint counts as reached", required: false, default: 2.0}
+- {name: horizon_min, type: number, description: "minutes after each start to evaluate", required: false, default: 90}
+- {name: companions, type: dict, description: "{label: series} sampled at sample_min after each start", required: false, default: null}
+- {name: sample_min, type: list, description: "minutes after start for the companion samples", required: false, default: [5, 15, 30]}
+outputs: {type: dataframe, description: "one row per start: start, value_at_start, setpoint, minutes_to_band, overshoot, <label>_<m>min for each companion and minute"}
+requires: [pandas, numpy]
+author: observer (seed)

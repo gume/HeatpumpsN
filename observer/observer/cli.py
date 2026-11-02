@@ -15,7 +15,8 @@ settings, proposals). The repository holds only code, docs and defaults.
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
 
   sandbox-setup            create the sandbox's Python environment (numpy, pandas, scipy, matplotlib)
-  skills                   list the agent skills
+  library                  list the analysis tools and skills (audit and test state)
+  test-tool NAME           run a library tool's tests in the sandbox
   agent    [--skill NAME] [QUESTION ...]   one agent run in the foreground; the record goes to runs/
   mcp                      the agent tools as an MCP server (stdio)
 """
@@ -92,7 +93,7 @@ def load_config(path: str) -> dict:
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
                          ("house_draft", "data/house_draft.yaml"), ("settings", "data/settings.yaml"),
-                         ("runs", "runs/runs.keep"), ("skills", "skills/skills.keep"),
+                         ("runs", "runs/runs.keep"), ("library", "library/library.keep"),
                          ("sandbox_venv", "sandbox/venv")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
@@ -102,7 +103,7 @@ def load_config(path: str) -> dict:
     if os.path.exists(old_draft) and not os.path.exists(paths["house_draft"]):
         os.replace(old_draft, paths["house_draft"])             # the draft's former name
     paths["runs"] = os.path.dirname(paths["runs"])             # agent runs: runs/<id>/
-    paths["skills"] = os.path.dirname(paths["skills"])         # house-local skills
+    paths["library"] = os.path.dirname(paths["library"])       # house tools and skills, audits
     return cfg
 
 
@@ -252,15 +253,31 @@ def cmd_sandbox_setup(cfg: dict, args) -> None:
     print(sb.status())
 
 
-def cmd_skills(cfg: dict, args) -> None:
-    from .agent import skills
+def cmd_library(cfg: dict, args) -> None:
+    from .agent.manager import make_library
 
-    for s in skills.load([cfg["paths"]["skills"]]).values():
-        print(f"{s.name:18s} {s.title} [{s.origin}]\n{'':18s} {s.description}")
+    lib = make_library(cfg)
+    for kind in ("tools", "skills"):
+        print(kind.upper())
+        for i in lib.items(kind).values():
+            s = i.summary()
+            tests = {None: "  ", True: "T+", False: "T-"}[s.get("tests_passed")] if kind == "tools" else "  "
+            print(f"  {'A' if s['audited'] else '-'} {tests} {i.name:22s} [{i.origin}] "
+                  f"{(s.get('purpose') or s.get('description') or '')[:90]}")
+    print("A = audited by the owner, T+/T- = tests passed/failed for the current version")
+
+
+def cmd_test_tool(cfg: dict, args) -> None:
+    from .agent.manager import make_library, make_sandbox
+
+    lib = make_library(cfg)
+    r = lib.run_tests(args.name, make_sandbox(cfg, lib))
+    print(r["output"])
+    print("PASSED" if r["passed"] else "FAILED")
 
 
 def cmd_agent(cfg: dict, args) -> None:
-    from .agent.runner import Run, execute
+    from .agent.runner import Run
     from .service import Service
 
     service = Service(cfg, MemoryWriter(), "none")
@@ -268,15 +285,14 @@ def cmd_agent(cfg: dict, args) -> None:
     client = service.settings.client("agent")
     if client is None:
         sys.exit("no LLM configured for the task 'agent' (portal Settings)")
-    skill = agents.skills().get(args.skill) if args.skill else None
-    if args.skill and skill is None:
-        sys.exit(f"no skill {args.skill!r}: see `observer skills`")
+    try:
+        skill = agents.library.get("skills", args.skill) if args.skill else None
+    except KeyError:
+        sys.exit(f"no skill {args.skill!r}: see `observer library`")
     folder = os.path.join(agents.runs_dir, time.strftime("%Y%m%d-%H%M%S-") + (args.skill or "question"))
     os.makedirs(folder)
     run = Run(folder)
-    meta = execute(run, client, agents.toolbox(folder), " ".join(args.question), skill,
-                   skill.defaults if skill else {}, min(skill.max_steps, agents.max_steps) if skill
-                   else agents.max_steps, agents.deadline_s)
+    meta = agents.execute_in(folder, client, " ".join(args.question), skill)
     for step in run.steps():
         if step["kind"] == "tool":
             print(f"  [{step['n']:2d}] {step['tool']}({', '.join(f'{k}=' for k in step['args'])})")
@@ -319,7 +335,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--all", action="store_true")
     p.add_argument("--min-confidence", type=float, default=0.7)
     sub.add_parser("sandbox-setup")
-    sub.add_parser("skills")
+    sub.add_parser("library")
+    p = sub.add_parser("test-tool")
+    p.add_argument("name")
     p = sub.add_parser("agent")
     p.add_argument("--skill", default=None)
     p.add_argument("question", nargs="*")
@@ -332,7 +350,8 @@ def main(argv: list[str] | None = None) -> None:
         return
     cfg = load_config(args.config)
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
-     "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "skills": cmd_skills, "agent": cmd_agent,
+     "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "library": cmd_library, "test-tool": cmd_test_tool,
+     "agent": cmd_agent,
      "mcp": cmd_mcp}[args.command](cfg, args)
 
 

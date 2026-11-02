@@ -21,8 +21,8 @@ send later is a validated controller parameter set (plan:
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
 | `docker-compose.dev.yml`, scripts | `house/`: your review, owner knowledge, accepted understanding, archive |
-| `observer/skills/`: agent skills (recipes and helpers) | `data/`: catalog, settings, proposals, log |
-| | `runs/`: every agent run (steps, code, data, report); `skills/`: house-local skills |
+| `observer/library/`: package tools and skills; `observer/sandbox_lib/`: the `obs` library | `data/`: catalog, settings, proposals, log |
+| | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, audit flags, test results |
 | | `sandbox/venv`: the sandbox's Python environment |
 | | InfluxDB: the Docker volume `observer-influx-dev` |
 
@@ -169,61 +169,85 @@ provider offers. These choices are not secrets and live in
 `data/settings.yaml` in the data directory. Transient provider errors (rate limits, overload) are
 retried; an answer that is not valid JSON gets one repair round.
 
-## Agent, tools, sandbox and skills
+## Agent, sandbox, data socket and library
 
 The agent answers questions about the house from the recorded data
-(`plans/observer_agentic_plan.md`, phases D–F). Start it from the portal's
-**Agent** tab, from the command line (`observer agent --skill heating-start`)
-or use its tools from any MCP client (`observer mcp`).
+(`plans/observer_agentic_plan.md`). Start it from the portal's **Agent** tab,
+from the command line (`observer agent [--skill NAME] QUESTION`), or use its
+core tools from any MCP client (`observer mcp`).
 
 ```
- model (Settings: task "agent")
-   │  function calls
-   ▼
- tools (inside the observer)                      the run's workspace runs/<id>/
-   house_context, find_signals ── registry, house    data/*.csv  ◄── get_series
-   get_series, signal_features,  ── InfluxDB,         *.png, results
-   get_events                       read-only token   .runs/*.py (every script)
-   run_python ──────────────────► sandbox ──────────► reads/writes only the workspace
-   finish ── report.md, findings, proposals           steps.jsonl, run.yaml (audit)
+ model (Settings: task "agent")                       run workspace runs/<id>/
+   │ function calls                                     run.yaml, steps.jsonl (audit)
+   ▼                                                    queries.jsonl (every data request)
+ core tools (inside the observer)                       state.json (resume point)
+   house_context, find_signals, data_coverage,          report.md, *.png, data/, .runs/*.py
+   signal_features, get_series, get_events ── InfluxDB, read-only token
+   list_library, read_library_item,
+   create_tool, save_skill ─────────────────── library (house part, unaudited)
+   run_python ─► sandbox (bwrap, no network)
+                   from obs import data, tools
+                   data.series(...) ── Unix socket ──► data service ── InfluxDB (read-only)
+                   tools.load(name).run(...) ◄── library tools, read-only mount
+   finish ── report, findings, proposals
 ```
 
-* **Tools** (`observer/agent/tools.py`) read the registry, the house
-  description and the recorded data. The database is read with a token that
-  can only read the bucket (`OBSERVER_INFLUX_READ_TOKEN`); signal ids are
-  checked against the catalog and times and windows against strict patterns
-  before they reach a query. Series go into the workspace as CSV; the model
-  gets statistics and a short sample.
-* **Sandbox** (`observer/agent/sandbox.py`): the code the model writes runs
-  in bubblewrap, rootless, with all namespaces unshared, so **no network**
-  (the database, the broker and the internet are unreachable: data reaches
-  the code only as files the tools wrote), only `/usr`, its own Python
-  environment (numpy, pandas, scipy, matplotlib) and the workspace visible, a
-  cleared environment, and limits: memory and processes by a systemd user
-  scope (cgroup), CPU time, file size and open files by rlimits, wall-clock
-  timeout. `podman` (rootless) or `docker` can be configured instead.
-* **Skills** (`observer/skills/<name>/SKILL.md` + helpers): recipes in the
-  house model's vocabulary (circuits, roles), shareable between houses.
-  Helpers are copied into the workspace (`skill/`). Now: `sensor-health`,
-  `heating-start`, `boiler-cycling`. House-local skills in
-  `<OBSERVER_HOME>/skills/` override them.
-* **Runs**: one at a time, at most 25 model steps and 30 minutes; everything
-  is kept in `runs/<id>/` and shown in the portal (report, findings,
-  proposals, plots, every step with its code and output). The agent never
-  changes anything; proposals are for the owner.
+* **The agent chooses the data and the time windows.** Its code in the
+  sandbox reads the database itself: `obs.data.series(ids, start, stop,
+  every, agg)` returns a pandas DataFrame; also `find`, `coverage`, `events`,
+  `house`. The sandbox has no network; the only way out is the run's **data
+  socket** (`agent/broker.py`), a Unix socket file bound into the sandbox. The
+  service behind it runs in the observer, checks every request (known signal
+  ids, strict time and window formats, size limits), reads InfluxDB with the
+  read-only token (never visible to the code) and logs every request in
+  `queries.jsonl`.
+* **Sandbox** (`agent/sandbox.py`): bubblewrap, rootless, all namespaces
+  unshared, only `/usr`, its own Python (numpy, pandas, scipy, matplotlib,
+  pytest), the `obs` library, the tool library (read-only), the workspace and
+  the socket visible; cleared environment; memory and process limits by a
+  systemd user scope, CPU time and file size by rlimits, wall-clock timeout.
+* **Library** (`agent/library.py`, Library tab): analysis **tools** (a folder
+  with `tool.yaml`: purpose, the kind of data it needs, typed inputs, output;
+  `tool.py` with `run(...)`; `test_tool.py`: pytest on synthetic data, run in
+  the sandbox) and **skills** (`SKILL.md`: a recipe, domain knowledge or a
+  method that worked). Package items ship in `observer/library/` (git);
+  house items are written into `<OBSERVER_HOME>/library/` by agents
+  (`create_tool`, `save_skill`) or by the harvest. Tools are generic (series,
+  frames, numbers; no signal ids), so they can move to another house.
+  **Audit** is the owner's flag per item, bound to a hash of its files: any
+  change voids it. The agent sees the flags (an index is in its prompt,
+  loading an unaudited tool prints a warning) and the run records which items
+  it used and whether they were audited.
+  Seed tools: `resample_hold`, `debounce_binary`, `on_periods`, `pair_offset`,
+  `setpoint_tracking`, `fopdt_fit`. Skills: `sensor_health`, `heating_start`,
+  `boiler_cycling`, `plant_identification` (the method of
+  `floor_simulator/log_analysis`: data audit, regimes, frozen gates,
+  FIT/TUNE/HOLDOUT, free-run evaluation, honest PASS/FAIL).
+* **Harvest**: the button *Find tools and skills in this run* sends the run
+  (code, outputs, report) and the library index to the task *harvest*
+  (1-2 requests; a strong model pays off) and lists proposed tools and skills;
+  *Add to library* saves one (unaudited, a tool's tests run at once).
+* **Pause and resume**: the conversation is saved after every step. A 429
+  whose stated delay (Retry-After header, Google's `retryDelay`, or "retry in
+  …" in the message) is at most a minute is waited out and repeated
+  automatically (up to 5 times). A longer delay, other provider errors or an
+  unreachable endpoint (after the retries) **pause** the run instead of
+  failing it; the run view says when the provider expects the quota back.
+  *Resume* continues from the saved step with the model now set for the task
+  *agent*, so you can wait or switch the model.
+* **Runs**: one at a time, at most 25 model steps and 30 minutes.
 
-Setup once: create the read-only token (below), `observer sandbox-setup`,
-and choose a model for the task *agent* on the Settings page. A strong model
-gives better analyses; the reports are only as good as the reviewed house
-description they start from.
+Setup once: the read-only token (below), `observer sandbox-setup`, models for
+the tasks *agent* and *harvest* on the Settings page.
 
 ```bash
 docker exec observer-influx-dev influx auth create --org heatpumpsn \
   --read-bucket <bucket id from `influx bucket list`> --description "observer agent tools: read-only" -t <admin token>
 # put the token into .env as OBSERVER_INFLUX_READ_TOKEN
 .venv/bin/observer sandbox-setup
-.venv/bin/observer skills
-.venv/bin/observer agent --skill sensor-health
+.venv/bin/observer library                  # tools and skills with audit and test state
+.venv/bin/observer test-tool fopdt_fit      # a tool's tests in the sandbox
+.venv/bin/observer agent --skill sensor_health
 .venv/bin/observer agent "Why did the floor circuit heat slowly this morning?"
 uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
 ```

@@ -1,8 +1,11 @@
-"""The tool set agents work with.
+"""The core tools the model calls (function calling, or MCP).
 
-Every tool is read-only towards the house: it reads the registry, the catalog,
-the house description and the recorded data (read-only token), and writes
-only into the run's own workspace. Generated code runs in the sandbox.
+Read-only towards the house: they read the registry, the catalog, the house
+understanding and the recorded data (read-only token), write only into the
+run's workspace, and into the house part of the library (new tools and
+skills, always unaudited). Code runs in the sandbox, where it reads the data
+itself through the run's data socket (``obs.data``) and uses the library's
+analysis tools (``obs.tools``).
 
 A tool is a name, a description, a JSON schema for its arguments and a
 function; the same definitions serve the agent loop (OpenAI-style function
@@ -67,10 +70,14 @@ class Toolbox:
     """Tools bound to one workspace. `service` provides signals() and house()."""
 
     def __init__(self, service, data: DataSource | None, sandbox: Sandbox | None, workspace: str,
-                 context: str = ""):
+                 context: str = "", library=None, author: str = ""):
         self.service, self.data, self.sandbox = service, data, sandbox
         self.workspace = os.path.abspath(workspace)
         self.context = context
+        self.library, self.author = library, author
+        self.broker = None                 # set by the runner: the run's data socket for sandboxed code
+        self.skills_read: dict[str, bool] = {}
+        self.created: list[str] = []
         self.finished: dict | None = None
         self.tools: dict[str, Tool] = {t.name: t for t in self._define()}
 
@@ -274,14 +281,60 @@ class Toolbox:
         return {"count": len(events), "events": events[-max(1, min(int(limit), 500)):], "times": "UTC",
                 "min_severity": "0 info, 1 warn, 2 error"}
 
+    def data_coverage(self, signals: list[str]) -> dict:
+        ids = self._known(list(signals))
+        return {"coverage": self._need_data().coverage(ids), "times": "UTC"}
+
     def run_python(self, code: str, purpose: str = "") -> dict:
         if self.sandbox is None:
             raise ValueError("no sandbox configured")
         st = self.sandbox.status()
         if not st["ready"]:
             raise ValueError("sandbox not ready: " + "; ".join(st["problems"]))
-        result = self.sandbox.run(code, self.workspace, _safe_name(purpose or "snippet")[:30])
+        os.makedirs(self.workspace, exist_ok=True)
+        result = self.sandbox.run(code, self.workspace, _safe_name(purpose or "snippet")[:30],
+                                  socket_dir=self.broker.dir if self.broker else None)
         return result.as_dict()
+
+    # --- the library: analysis tools and skills -------------------------------------------
+    def _need_library(self):
+        if self.library is None:
+            raise ValueError("no library configured")
+        return self.library
+
+    def list_library(self, kind: str = "tools") -> dict:
+        items = self._need_library().items(kind)
+        return {"kind": kind, "items": [i.summary() for i in items.values()],
+                "note": "audited = checked and approved by the owner; prefer audited items and say in the "
+                        "report when a result depends on an unaudited one"}
+
+    def read_library_item(self, kind: str, name: str) -> dict:
+        item = self._need_library().get(kind, name)
+        if kind == "skills":
+            self.skills_read[name] = item.audited
+        return item.detail()
+
+    def create_tool(self, name: str, purpose: str, inputs: list, outputs: dict, code: str, tests: str,
+                    needs: str = "") -> dict:
+        lib = self._need_library()
+        existing = lib.items("tools").get(name)
+        if existing is not None and existing.audited and existing.origin == "house":
+            raise PermissionError(f"tool {name!r} is audited; create a new name instead of changing it")
+        item = lib.save_tool(name, purpose, inputs, outputs, code, tests, needs, author=self.author)
+        self.created.append(f"tools/{name}")
+        result = lib.run_tests(name, self.sandbox) if self.sandbox else {"passed": None, "output": "no sandbox"}
+        return {"name": name, "origin": item.origin, "version": item.meta.get("version"), "audited": False,
+                "tests_passed": result["passed"], "test_output": result["output"][-3000:],
+                "use": f"obs.tools.load({name!r}).run(...) in run_python"}
+
+    def save_skill(self, name: str, title: str, description: str, recipe: str, tools: list | None = None) -> dict:
+        lib = self._need_library()
+        existing = lib.items("skills").get(name)
+        if existing is not None and existing.audited and existing.origin == "house":
+            raise PermissionError(f"skill {name!r} is audited; save under a new name")
+        item = lib.save_skill(name, title, description, recipe, tools, author=self.author)
+        self.created.append(f"skills/{name}")
+        return {"name": name, "origin": item.origin, "audited": False}
 
     def list_files(self) -> dict:
         files = []
@@ -347,12 +400,50 @@ class Toolbox:
                        "min_severity": {"type": "integer", "description": "0 all, 1 warnings and errors, 2 errors only"},
                        "text": {"type": "string", "description": "only events whose text contains this"},
                        "limit": {"type": "integer"}}), self.get_events),
-            Tool("run_python", "Run Python 3 code in the sandbox (no network, no database; numpy, pandas, scipy, "
-                 "matplotlib). The workspace is the current directory: read data/*.csv written by get_series, "
-                 "write results and plots (PNG) there. Print what you need to see; output is truncated.",
+            Tool("data_coverage", "How much history each signal has: first and last sample time and the number "
+                 "of samples. Use it to choose time windows.",
+                 _obj({"signals": {"type": "array", "items": {"type": "string"}}}, ("signals",)), self.data_coverage),
+            Tool("run_python", "Run Python 3 code in the sandbox (numpy, pandas, scipy, matplotlib; no network). "
+                 "The code reads the recorded data itself, read-only: `from obs import data` -> "
+                 "data.series(ids, start, stop, every, agg) returns a pandas DataFrame (UTC index, one column per "
+                 "signal), data.find(...), data.coverage(ids), data.events(...), data.house(). Library tools: "
+                 "`from obs import tools` -> tools.load(name).run(...), tools.list(). The workspace is the current "
+                 "directory (data/*.csv from get_series, your results, PNG plots). Print what you need to see; "
+                 "output is truncated.",
                  _obj({"code": {"type": "string"},
                        "purpose": {"type": "string", "description": "a few words, used as the script name"}},
                       ("code",)), self.run_python),
+            Tool("list_library", "The library: analysis tools (code usable in run_python, with purpose, inputs, "
+                 "outputs, test status) or skills (recipes), each with its audit flag.",
+                 _obj({"kind": {"type": "string", "enum": ["tools", "skills"]}}), self.list_library),
+            Tool("read_library_item", "Full content of a library tool (manifest, code, tests, last test result) or "
+                 "skill (recipe).",
+                 _obj({"kind": {"type": "string", "enum": ["tools", "skills"]}, "name": {"type": "string"}},
+                      ("kind", "name")), self.read_library_item),
+            Tool("create_tool", "Add a reusable analysis tool to the house library (unaudited until the owner "
+                 "checks it); its tests run at once in the sandbox. Make it universal: generic inputs (series, data "
+                 "frames, numbers), no house-specific signal ids, documented purpose, inputs and output, and tests on "
+                 "synthetic data (`from tool import run`). Saving an existing unaudited house tool replaces it.",
+                 _obj({"name": {"type": "string", "description": "snake_case"},
+                       "purpose": {"type": "string", "description": "what it is for and how it works"},
+                       "needs": {"type": "string", "description": "what kind of data it needs, in generic terms"},
+                       "inputs": {"type": "array", "items": _obj({
+                           "name": {"type": "string"},
+                           "type": {"type": "string", "enum": ["series", "dataframe", "number", "integer", "string",
+                                                               "boolean", "list", "dict", "timestamp", "any"]},
+                           "description": {"type": "string"}, "required": {"type": "boolean"}}, ("name", "type"))},
+                       "outputs": _obj({"type": {"type": "string"}, "description": {"type": "string"}},
+                                       ("description",)),
+                       "code": {"type": "string", "description": "Python module defining run(...)"},
+                       "tests": {"type": "string", "description": "pytest module: from tool import run; def test_..."}},
+                      ("name", "purpose", "inputs", "outputs", "code", "tests")), self.create_tool),
+            Tool("save_skill", "Save a recipe to the house library (unaudited until the owner checks it): a method "
+                 "that worked, domain knowledge for a recurring question. Write it in generic terms (circuits, roles), "
+                 "naming the library tools it uses.",
+                 _obj({"name": {"type": "string", "description": "snake_case"}, "title": {"type": "string"},
+                       "description": {"type": "string"}, "recipe": {"type": "string", "description": "Markdown steps"},
+                       "tools": {"type": "array", "items": {"type": "string"}}},
+                      ("name", "title", "description", "recipe")), self.save_skill),
             Tool("list_files", "Files in the run's workspace.", _obj({}), self.list_files),
             Tool("read_file", "Read a text file from the workspace.",
                  _obj({"path": {"type": "string"}, "max_chars": {"type": "integer"}}, ("path",)), self.read_file),

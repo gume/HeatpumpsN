@@ -1,0 +1,16 @@
+name: on_periods
+version: 1
+purpose: >-
+  List the on-periods of an on/off signal (start, end, duration) and the off
+  gap before each, merging off-gaps shorter than min_off_s and dropping
+  on-periods shorter than min_on_s. Basis for counting starts, short cycling,
+  duty cycles and for picking events (e.g. heating starts after a long off).
+needs: one on/off time series (0/1); debounce it first if it is noisy
+inputs:
+- {name: series, type: series, description: "time-indexed 0/1 values (or numeric with threshold)", required: true}
+- {name: threshold, type: number, description: "values >= threshold are on", required: false, default: 0.5}
+- {name: min_off_s, type: number, description: "off gaps shorter than this are merged into the on-period", required: false, default: 0}
+- {name: min_on_s, type: number, description: "on-periods shorter than this are dropped", required: false, default: 0}
+outputs: {type: dataframe, description: "columns start, end, duration_s, off_before_s (NaN for the first), ongoing (bool: still on at the end of the data)"}
+requires: [pandas]
+author: observer (seed)

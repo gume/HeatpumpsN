@@ -2,10 +2,12 @@
 
     observer mcp            # e.g. as an MCP server in Claude Code, Claude Desktop or another agent
 
-The server has the same tools as the built-in agent except ``finish``. One
-workspace per server session, ``<OBSERVER_HOME>/runs/<time>-mcp/``, holds the
-CSV files, plots and sandboxed scripts. Database access uses the read-only
-token; generated code runs in the sandbox.
+The server has the same core tools as the built-in agent except ``finish``,
+including the library (list, read, create tools and skills; created items are
+unaudited). One workspace per server session,
+``<OBSERVER_HOME>/runs/<time>-mcp/``, holds the CSV files, plots and sandboxed
+scripts; a data socket is open for the session so ``run_python`` code can read
+the data. Database access uses the read-only token.
 """
 from __future__ import annotations
 
@@ -19,13 +21,18 @@ def serve(cfg: dict) -> None:
 
     from ..service import Service
     from ..store import MemoryWriter
-    from .manager import make_data, make_sandbox
+    from .broker import DataBroker
+    from .manager import make_data, make_library, make_sandbox
     from .tools import Toolbox
 
     service = Service(cfg, MemoryWriter(), "none")      # registry, catalog, house; no ingest
     workspace = os.path.join(cfg["paths"]["runs"], time.strftime("%Y%m%d-%H%M%S-mcp"))
     os.makedirs(workspace, exist_ok=True)
-    box = Toolbox(service, make_data(cfg), make_sandbox(cfg), workspace, cfg.get("context", ""))
+    library = make_library(cfg)
+    box = Toolbox(service, make_data(cfg), make_sandbox(cfg, library), workspace, cfg.get("context", ""),
+                  library, author=f"MCP session {os.path.basename(workspace)}")
+    broker = DataBroker(box, library, os.path.join(workspace, "queries.jsonl")).start()
+    box.broker = broker
     server = MCPServer(name="heatpumpsn-observer",
                        instructions="Read-only tools on one house's heating data: start with house_context, "
                                     "then find_signals for exact ids. run_python executes in a sandbox without "
@@ -34,6 +41,10 @@ def serve(cfg: dict) -> None:
         if tool.name == "finish":
             continue
         server.add_tool(tool.fn, name=tool.name, description=tool.description,
-                        annotations=ToolAnnotations(readOnlyHint=tool.name != "run_python",
+                        annotations=ToolAnnotations(readOnlyHint=tool.name not in ("run_python", "create_tool",
+                                                                                   "save_skill"),
                                                     openWorldHint=False, destructiveHint=False))
-    server.run("stdio")
+    try:
+        server.run("stdio")
+    finally:
+        broker.stop()

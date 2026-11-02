@@ -156,7 +156,7 @@ def create_app(service: Service) -> FastAPI:
     @app.get("/api/agent")
     def agent_status():
         a = service.agents
-        return {**a.status(), "skills": [s.view() for s in a.skills().values()], "tools": a.tools()}
+        return {**a.status(), "core_tools": a.core_tools(), **a.library_view()}
 
     @app.get("/api/agent/runs")
     def agent_runs():
@@ -165,8 +165,7 @@ def create_app(service: Service) -> FastAPI:
     @app.post("/api/agent/runs")
     def start_run(body: dict = Body(...)):
         try:
-            return {"id": service.agents.start(body.get("skill") or None, str(body.get("question") or ""),
-                                               body.get("params") or {})}
+            return {"id": service.agents.start(body.get("skill") or None, str(body.get("question") or ""))}
         except KeyError as exc:
             raise HTTPException(404, f"no skill {exc}") from exc
         except (RuntimeError, ValueError) as exc:
@@ -179,9 +178,74 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such run") from exc
 
+    @app.post("/api/agent/run/harvest")
+    async def harvest(id: str = Query(...)):
+        try:
+            return await run_in_threadpool(service.agents.harvest, id)
+        except KeyError as exc:
+            raise HTTPException(404, "no such run") from exc
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"LLM request failed: {exc}") from exc
+
+    @app.post("/api/agent/run/harvest/accept")
+    async def accept_harvest(id: str = Query(...), kind: str = Query(...), index: int = Query(...)):
+        try:
+            return await run_in_threadpool(service.agents.accept_harvest, id, kind, index)
+        except KeyError as exc:
+            raise HTTPException(404, f"no such proposal {exc}") from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/agent/run/resume")
+    def resume_run(id: str = Query(...)):
+        try:
+            return {"id": service.agents.resume(id)}
+        except KeyError as exc:
+            raise HTTPException(404, "no such run") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.post("/api/agent/run/cancel")
     def cancel_run(id: str = Query(...)):
         return {"cancelled": service.agents.cancel(id)}
+
+    # --- the library: analysis tools and skills, tests, audit flags ----------------
+    @app.get("/api/library")
+    def library():
+        return service.agents.library_view()
+
+    @app.get("/api/library/item")
+    def library_item(kind: str = Query(...), name: str = Query(...)):
+        try:
+            return service.agents.library_item(kind, name)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/library/test")
+    async def test_tool(name: str = Query(...)):
+        try:
+            return await run_in_threadpool(service.agents.test_tool, name)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/library/audit")
+    def audit(kind: str = Query(...), name: str = Query(...), body: dict = Body(...)):
+        try:
+            return service.agents.audit(kind, name, bool(body.get("audited")), str(body.get("note") or ""))
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.delete("/api/library/item")
+    def delete_item(kind: str = Query(...), name: str = Query(...)):
+        try:
+            service.agents.delete_item(kind, name)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        return {"ok": True}
 
     @app.get("/api/agent/file")
     def run_file(id: str = Query(...), path: str = Query(...)):

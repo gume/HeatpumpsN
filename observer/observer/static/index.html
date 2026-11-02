@@ -95,6 +95,7 @@
     <button data-view="proposals">Proposals</button>
     <button data-view="house">House</button>
     <button data-view="agent">Agent</button>
+    <button data-view="library">Library</button>
     <button data-view="settings">Settings</button>
     <button data-view="rules">Rules</button>
   </nav>
@@ -179,10 +180,11 @@
   </section>
 
   <section id="view-agent" class="hidden">
-    <p class="dim">The agent answers questions about the house from the recorded data. It works only through read-only
-      tools (registry, house description, recorded data with a read-only token) and runs the code it writes in a
-      sandbox without network. It never changes anything: proposals are for you to decide. Every run is kept with
-      its steps, code, data and report in <span class="mono">runs/</span> of the data directory.</p>
+    <p class="dim">The agent answers questions about the house from the recorded data. It decides itself which data and
+      time windows it needs: the code it writes runs in a sandbox without network and reads the database through the
+      run's read-only data socket. It uses the library's tools and skills (see Library, with audit flags) and can add
+      new, unaudited ones. It never changes the plant or the database: proposals are for you to decide. Every run is
+      kept with its steps, code, data queries and report in <span class="mono">runs/</span> of the data directory.</p>
     <div class="cards" id="a-cards"></div>
     <div class="two">
       <div class="card">
@@ -191,14 +193,13 @@
           <label>Skill<select id="a-skill"></select></label>
           <p class="dim" id="a-skill-desc" style="margin:0"></p>
           <label>Question or extra instructions<textarea id="a-question" rows="4" placeholder="e.g. Why did the floor circuit heat slowly this morning?"></textarea></label>
-          <label>Time window<input id="a-window" placeholder="-24h"></label>
           <div class="actions"><span class="dim" id="a-msg"></span><button class="btn primary" id="a-start">Start</button></div>
         </div>
       </div>
       <div class="card">
-        <h3 class="sec" style="margin-top:0">Skills and tools</h3>
-        <div id="a-skills"></div>
-        <details style="margin-top:8px"><summary>Tools the agent can call</summary><div id="a-tools"></div></details>
+        <h3 class="sec" style="margin-top:0">What the agent has</h3>
+        <div id="a-lib"></div>
+        <details style="margin-top:8px"><summary>Core tools (the model calls them)</summary><div id="a-tools"></div></details>
         <details style="margin-top:4px"><summary>Sandbox</summary><div id="a-sandbox"></div></details>
       </div>
     </div>
@@ -208,6 +209,21 @@
       <tbody id="a-runs"></tbody>
     </table></div>
     <div id="a-run" style="margin-top:14px"></div>
+  </section>
+
+  <section id="view-library" class="hidden">
+    <p class="dim">Analysis <strong>tools</strong> (code the agent uses in the sandbox, each with purpose, inputs, outputs and
+      tests on synthetic data) and <strong>skills</strong> (recipes: domain knowledge and methods that worked). Package items
+      come with the observer (in git); house items are written by agents into the data directory. <strong>Audited</strong> is
+      your approval; it is bound to the item's content, so any change voids it. The agent sees the flags and says when a
+      result depends on something unaudited.</p>
+    <div class="two">
+      <div><h3 class="sec" style="margin-top:0">Tools</h3><div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Purpose</th><th>Origin</th><th>Tests</th><th>Audited</th></tr></thead><tbody id="l-tools"></tbody></table></div></div>
+      <div><h3 class="sec" style="margin-top:0">Skills</h3><div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Description</th><th>Origin</th><th>Audited</th></tr></thead><tbody id="l-skills"></tbody></table></div></div>
+    </div>
+    <div id="l-item" style="margin-top:14px"></div>
   </section>
 
   <section id="view-settings" class="hidden">
@@ -286,7 +302,7 @@ document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click
 function show(v) {
   view = v;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-  for (const id of ['status', 'signals', 'proposals', 'house', 'agent', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  for (const id of ['status', 'signals', 'proposals', 'house', 'agent', 'library', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
 
@@ -622,13 +638,14 @@ async function loadAgent() {
     card('Run', agent.active ? 'running' : 'idle', agent.active ? esc(agent.active) : `up to ${agent.limits.max_steps} steps · ${Math.round(agent.limits.deadline_s / 60)} min`, agent.active ? 'warn' : ''),
   ].join('');
   const sel = $('#a-skill'), keep = sel.value;
-  sel.innerHTML = '<option value="">(no skill: free question)</option>' + agent.skills.map((s) => `<option value="${esc(s.name)}">${esc(s.title)}</option>`).join('');
+  sel.innerHTML = '<option value="">(no skill: free question, the agent looks for skills itself)</option>' + agent.skills.map((s) => `<option value="${esc(s.name)}">${esc(s.title)}${s.audited ? '' : ' (not audited)'}</option>`).join('');
   sel.value = keep; showSkill();
-  $('#a-skills').innerHTML = agent.skills.map((s) => `<details><summary><strong>${esc(s.title)}</strong> <span class="dim">${esc(s.name)} · ${esc(s.origin)}</span></summary>
-      <p class="dim" style="margin:4px 0">${esc(s.description)}</p>
-      ${s.helpers.length ? `<p style="margin:4px 0">Helpers: ${s.helpers.map((h) => `<span class="chip mono">skill/${esc(h)}</span>`).join('')}</p>` : ''}
-      <div class="md" style="font-size:13px">${md(s.recipe)}</div></details>`).join('');
-  $('#a-tools').innerHTML = agent.tools.map((t) => `<div style="margin:6px 0"><span class="mono" style="color:var(--accent)">${esc(t.name)}</span>
+  const audited = (list) => list.filter((x) => x.audited).length;
+  $('#a-lib').innerHTML = `<p style="margin:0">${agent.tools.length} analysis tools (${audited(agent.tools)} audited) · ${agent.skills.length} skills (${audited(agent.skills)} audited)
+      · <a href="#" id="a-golib">open the Library</a></p>
+      <p class="dim" style="margin:4px 0 0">Code in the sandbox: <span class="mono">from obs import data, tools</span> — data.series(…), tools.load(name).run(…)</p>`;
+  $('#a-golib').addEventListener('click', (e) => { e.preventDefault(); show('library'); });
+  $('#a-tools').innerHTML = agent.core_tools.map((t) => `<div style="margin:6px 0"><span class="mono" style="color:var(--accent)">${esc(t.name)}</span>
       <span class="dim">(${Object.keys(t.parameters.properties || {}).map(esc).join(', ')})</span><div style="font-size:12px">${esc(t.description)}</div></div>`).join('');
   $('#a-sandbox').innerHTML = `<pre>${esc(JSON.stringify(sb, null, 2))}</pre>`;
   $('#a-start').disabled = !agent.ready || !!agent.active;
@@ -636,7 +653,7 @@ async function loadAgent() {
   const runs = await api('/api/agent/runs');
   $('#a-runs').innerHTML = runs.length ? runs.map((r) => `<tr data-run="${esc(r.id)}"><td class="mono">${esc(r.started || r.id.slice(0, 15))}</td>
       <td>${esc(r.skill || '')}${r.skill && r.question ? ': ' : ''}<span class="dim">${esc((r.question || '').slice(0, 90))}</span></td>
-      <td class="${r.status === 'done' ? 'ok' : r.status === 'error' ? 'err' : 'warn'}">${esc(r.status)}</td><td class="num">${r.steps ?? ''}</td>
+      <td class="${r.status === 'done' ? 'ok' : r.status === 'error' ? 'err' : 'warn'}">${esc(r.status)}${r.status === 'paused' ? ' ⏸' : ''}</td><td class="num">${r.steps ?? ''}</td>
       <td class="num">${r.findings || ''}</td><td class="mono">${esc(r.model || '')}</td><td class="num">${r.seconds != null ? Math.round(r.seconds) + ' s' : ''}</td></tr>`).join('')
     : '<tr><td colspan="7" class="dim">No runs yet.</td></tr>';
   if (runOpen) loadRun(runOpen);
@@ -644,13 +661,11 @@ async function loadAgent() {
 function showSkill() {
   const s = agent && agent.skills.find((x) => x.name === $('#a-skill').value);
   $('#a-skill-desc').textContent = s ? s.description : 'The agent decides how to answer your question with the tools.';
-  if (s && s.defaults.window && !$('#a-window').value) $('#a-window').placeholder = s.defaults.window;
 }
 $('#a-skill').addEventListener('change', showSkill);
 $('#a-start').addEventListener('click', async () => {
-  const params = {}; if ($('#a-window').value.trim()) params.window = $('#a-window').value.trim();
   $('#a-start').disabled = true; $('#a-msg').textContent = 'Starting…';
-  try { const r = await api('/api/agent/runs', { method: 'POST', body: JSON.stringify({ skill: $('#a-skill').value, question: $('#a-question').value, params }) });
+  try { const r = await api('/api/agent/runs', { method: 'POST', body: JSON.stringify({ skill: $('#a-skill').value, question: $('#a-question').value }) });
         $('#a-msg').textContent = ''; runOpen = r.id; await loadAgent(); }
   catch (err) { $('#a-msg').textContent = err.message; $('#a-start').disabled = false; }
 });
@@ -658,8 +673,10 @@ $('#a-runs').addEventListener('click', (e) => { const tr = e.target.closest('tr[
 const fileUrl = (id, path) => `/api/agent/file?id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}`;
 function pretty(v) { if (typeof v === 'string') { try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; } } return JSON.stringify(v, null, 2); }
 function stepHtml(id, s) {
-  if (s.kind === 'prompt') return `<div class="step"><div class="h"><strong>Task</strong>${s.helpers && s.helpers.length ? ` · helpers ${s.helpers.map(esc).join(', ')}` : ''}</div>
+  if (s.kind === 'prompt') return `<div class="step"><div class="h"><strong>Task</strong></div>
       <details><summary>prompt sent to the model</summary><pre>${esc(s.text)}</pre></details></div>`;
+  if (s.kind === 'pause') return `<div class="step" style="border-color:var(--warn)"><div class="h"><strong class="warn">Paused</strong> after step ${s.n}</div><div>${esc(s.text)}</div></div>`;
+  if (s.kind === 'resume') return `<div class="step"><div class="h"><strong>Resumed</strong> at step ${s.n}</div><div>${esc(s.text)}</div></div>`;
   if (s.kind === 'model') return s.text ? `<div class="step"><div class="h"><strong>Model</strong> step ${s.n}</div><div class="md" style="font-size:13px">${md(s.text)}</div></div>` : '';
   const a = s.args || {}, r = s.result || {};
   let body = '';
@@ -676,6 +693,31 @@ function stepHtml(id, s) {
   }
   return `<div class="step"><div class="h"><span class="tool">${esc(s.tool)}</span> step ${s.n}${s.seconds != null ? ` · ${s.seconds} s` : ''}${a.purpose ? ` · ${esc(a.purpose)}` : ''}</div>${body}</div>`;
 }
+function harvestHtml(h) {
+  if (!h) return '';
+  const added = (p) => p.added ? `<span class="ok">added ${esc(p.added)}</span>` : '';
+  const tools = h.tools.map((p, i) => `<div class="step"><div class="h"><span class="tool">${esc(p.name)}</span> tool ${added(p)}
+      ${p.added ? '' : `<button class="btn" data-harvest="tools" data-index="${i}" style="margin-left:auto">Add to library (unaudited, tests run)</button>`}</div>
+      <p style="margin:4px 0">${esc(p.purpose)}</p>${p.needs ? `<p class="dim" style="margin:4px 0">Needs: ${esc(p.needs)}</p>` : ''}
+      <p class="dim" style="margin:4px 0">Why: ${esc(p.why || '')}</p>
+      <details><summary>inputs, output, code, tests</summary><pre>${esc(JSON.stringify({ inputs: p.inputs, outputs: p.outputs }, null, 2))}</pre><pre>${esc(p.code)}</pre><pre>${esc(p.tests)}</pre></details></div>`).join('');
+  const skills = h.skills.map((p, i) => `<div class="step"><div class="h"><span class="tool">${esc(p.name)}</span> skill ${added(p)}
+      ${p.added ? '' : `<button class="btn" data-harvest="skills" data-index="${i}" style="margin-left:auto">Add to library (unaudited)</button>`}</div>
+      <p style="margin:4px 0"><strong>${esc(p.title || '')}</strong> ${esc(p.description)}</p><p class="dim" style="margin:4px 0">Why: ${esc(p.why || '')}</p>
+      <details><summary>recipe</summary><div class="md">${md(p.recipe)}</div></details></div>`).join('');
+  return `<h3 class="sec">Reusable tools and skills found in this run</h3>
+    <p class="dim">${esc(h.notes || '')} (${esc(h.model || '')}, ${esc(h.generated || '')})</p>
+    <div class="steps">${tools}${skills || ''}${!tools && !skills ? '<p class="dim">Nothing worth keeping, according to the model.</p>' : ''}</div>`;
+}
+function libUsed(m) {
+  const u = m.library_used || {}, c = m.library_created || [];
+  const flag = (ok) => ok ? '<span class="ok">audited</span>' : '<span class="warn">not audited</span>';
+  const rows = [...Object.entries(u.skills || {}).map(([n, ok]) => `<tr><td>skill</td><td class="mono">${esc(n)}</td><td>${flag(ok)}</td></tr>`),
+                ...Object.entries(u.tools || {}).map(([n, ok]) => `<tr><td>tool</td><td class="mono">${esc(n)}</td><td>${flag(ok)}</td></tr>`),
+                ...c.map((k) => `<tr><td>created</td><td class="mono">${esc(k)}</td><td><span class="warn">new, not audited</span></td></tr>`)];
+  return rows.length || m.data_requests ? `<h3 class="sec">Library and data used</h3><div class="table-wrap"><table><tbody>${rows.join('')}
+    <tr><td>data</td><td colspan="2">${m.data_requests || 0} requests from the sandbox to the data socket (queries.jsonl)</td></tr></tbody></table></div>` : '';
+}
 async function loadRun(id) {
   clearTimeout(runTimer);
   let r; try { r = await api(`/api/agent/run?id=${encodeURIComponent(id)}`); } catch (err) { $('#a-run').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
@@ -686,17 +728,92 @@ async function loadRun(id) {
       <div class="bar" style="margin:0"><strong>${esc(m.skill || 'Question')}</strong><span class="mono dim">${esc(m.id)}</span>
         <span class="${m.status === 'done' ? 'ok' : m.status === 'error' ? 'err' : 'warn'}">${esc(m.status)}</span>
         <span class="dim">${esc(m.model || '')} · ${m.steps ?? 0} steps${m.seconds ? ` · ${Math.round(m.seconds)} s` : ''}${m.usage && m.usage.prompt_tokens ? ` · ${(m.usage.prompt_tokens + m.usage.completion_tokens).toLocaleString()} tokens` : ''}${m.confidence != null ? ` · confidence ${m.confidence}` : ''}</span>
-        ${running ? `<button class="btn danger" id="a-cancel" style="margin-left:auto">Cancel</button>` : ''}</div>
-      ${m.question ? `<p style="margin:6px 0 0">${esc(m.question)}</p>` : ''}${m.error ? `<p class="err">${esc(m.error)}</p>` : ''}
+        ${running ? `<button class="btn danger" id="a-cancel" style="margin-left:auto">Cancel</button>`
+          : `<button class="btn" id="a-harvest" style="margin-left:auto" ${llm.harvest ? '' : 'disabled title="Settings: choose a model for the task harvest"'}>Find tools and skills in this run</button>`}</div>
+      ${m.question ? `<p style="margin:6px 0 0">${esc(m.question)}</p>` : ''}
+      ${m.status === 'paused' ? `<div class="card" style="border-color:var(--warn);margin-top:8px"><strong class="warn">Paused: the LLM is not available</strong>
+        <p style="margin:4px 0">${esc(m.error || '')}</p>
+        <p class="dim" style="margin:4px 0">The work so far is saved (step ${m.steps || 0}). Wait until the quota is back, or choose another model for the task
+          <em>agent</em> in Settings (now: ${esc((agent && agent.model) || 'not set')}), then resume: the run continues from here.</p>
+        <div class="actions"><button class="btn primary" id="a-resume">Resume</button></div></div>`
+        : m.error ? `<p class="err">${esc(m.error)}</p>` : ''}
+      ${(m.models || []).length > 1 ? `<p class="dim" style="margin:4px 0 0">Models used: ${m.models.map(esc).join(' → ')}</p>` : ''}
     </div>
     ${r.report ? `<h3 class="sec">Report</h3><div class="card md">${md(r.report)}</div>` : running ? '<p class="dim">Working… the steps appear below as they happen.</p>' : ''}
     ${(m.findings || []).length ? `<h3 class="sec">Findings</h3><div class="table-wrap"><table><tbody>${m.findings.map((f) => `<tr><td class="${sevCls(f.severity)}">${esc(f.severity)}</td><td>${esc(f.title)}</td><td class="dim">${esc(f.evidence || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${libUsed(m)}
+    ${harvestHtml(r.harvest)}
     ${(m.proposals || []).length ? `<h3 class="sec">Proposals (for you to decide; nothing was changed)</h3><div class="card"><ul>${m.proposals.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
     ${imgs.length ? `<h3 class="sec">Plots</h3><div class="runimgs">${imgs.map((f) => `<a href="${fileUrl(m.id, f.path)}" target="_blank"><img src="${fileUrl(m.id, f.path)}" title="${esc(f.path)}"></a>`).join('')}</div>` : ''}
     <h3 class="sec">Steps</h3><div class="steps">${r.steps.map((s) => stepHtml(m.id, s)).join('')}</div>
     <h3 class="sec">Workspace files</h3><p>${r.files.map((f) => `<a class="chip mono" href="${fileUrl(m.id, f.path)}" target="_blank">${esc(f.path)} <span class="dim">${Math.ceil(f.bytes / 1024)} kB</span></a>`).join('') || '<span class="dim">none</span>'}</p>`;
+  if ($('#a-resume')) $('#a-resume').addEventListener('click', async () => {
+    try { await api(`/api/agent/run/resume?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Resumed.'); loadAgent(); }
+    catch (err) { toast(err.message, 6000); }
+  });
+  if ($('#a-harvest')) $('#a-harvest').addEventListener('click', async () => {
+    $('#a-harvest').disabled = true; $('#a-harvest').textContent = 'Reviewing the run…';
+    try { const h = await api(`/api/agent/run/harvest?id=${encodeURIComponent(id)}`, { method: 'POST' });
+          toast(`${h.tools.length} tool(s), ${h.skills.length} skill(s) proposed.`, 4000); }
+    catch (err) { toast(err.message, 6000); }
+    loadRun(id);
+  });
+  document.querySelectorAll('[data-harvest]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true; b.textContent = 'Adding…';
+    try { const r = await api(`/api/agent/run/harvest/accept?id=${encodeURIComponent(id)}&kind=${b.dataset.harvest}&index=${b.dataset.index}`, { method: 'POST' });
+          toast(b.dataset.harvest === 'tools' ? `Added; tests ${r.tests_passed ? 'passed' : 'FAILED (see Library)'}.` : 'Skill added (unaudited).', 5000); }
+    catch (err) { toast(err.message, 6000); }
+    loadRun(id);
+  }));
   if ($('#a-cancel')) $('#a-cancel').addEventListener('click', async () => { await api(`/api/agent/run/cancel?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Cancelling after the current step.'); });
   if (running && view === 'agent' && runOpen === id) runTimer = setTimeout(() => loadAgent().catch(() => {}), 3000);
+}
+
+// --- library ------------------------------------------------------------------
+let libOpen = null;
+async function loadLibrary() {
+  const lib = await api('/api/library');
+  const auditCell = (i) => i.audited ? '<span class="ok">✓ audited</span>' : '<span class="dim">–</span>';
+  const testCell = (i) => i.tests_passed === true ? '<span class="ok">passed</span>' : i.tests_passed === false ? '<span class="err">failed</span>' : '<span class="dim">not run</span>';
+  $('#l-tools').innerHTML = lib.tools.map((i) => `<tr data-kind="tools" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>
+      <td>${esc((i.purpose || '').slice(0, 140))}</td><td>${esc(i.origin)}</td><td>${testCell(i)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">none</td></tr>';
+  $('#l-skills').innerHTML = lib.skills.map((i) => `<tr data-kind="skills" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>
+      <td>${esc(i.title)}<div class="dim">${esc((i.description || '').slice(0, 140))}</div></td><td>${esc(i.origin)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="4" class="dim">none</td></tr>';
+  if (libOpen) loadItem(libOpen.kind, libOpen.name);
+}
+for (const id of ['#l-tools', '#l-skills']) $(id).addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-name]'); if (tr) { libOpen = { kind: tr.dataset.kind, name: tr.dataset.name }; loadItem(libOpen.kind, libOpen.name); }
+});
+async function loadItem(kind, name) {
+  let i; try { i = await api(`/api/library/item?kind=${kind}&name=${encodeURIComponent(name)}`); } catch (err) { $('#l-item').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
+  const m = i.meta || {};
+  const files = Object.entries(i.files).map(([f, text]) => `<details ${f === 'SKILL.md' ? 'open' : ''}><summary class="mono">${esc(f)}</summary>${f.endsWith('.md') ? `<div class="md">${md(text.replace(/^---[\s\S]*?---/, ''))}</div>` : `<pre style="max-height:420px">${esc(text)}</pre>`}</details>`).join('');
+  $('#l-item').innerHTML = `<div class="card">
+    <div class="bar" style="margin:0"><strong class="mono">${esc(i.name)}</strong><span class="pill">${esc(kind.slice(0, -1))}</span><span class="dim">${esc(i.origin)} · hash ${esc(i.hash)}${m.version ? ` · v${m.version}` : ''}${i.created_by ? ` · by ${esc(i.created_by)}` : ''}</span>
+      ${i.audited ? `<span class="ok">audited ${esc(i.audit.at)}${i.audit.note ? ': ' + esc(i.audit.note) : ''}</span>` : '<span class="warn">not audited</span>'}
+      <span style="margin-left:auto;display:flex;gap:6px">
+        ${kind === 'tools' ? '<button class="btn" id="l-test">Run tests</button>' : ''}
+        ${i.audited ? '<button class="btn" id="l-revoke">Revoke audit</button>' : '<button class="btn primary" id="l-audit">Mark audited</button>'}
+        ${i.origin === 'house' ? '<button class="btn danger" id="l-del">Delete</button>' : ''}</span></div>
+    ${kind === 'tools' ? `<p>${esc(m.purpose || '')}</p>${m.needs ? `<p class="dim">Needs: ${esc(m.needs)}</p>` : ''}
+      <div class="table-wrap"><table><thead><tr><th>Input</th><th>Type</th><th>Description</th></tr></thead><tbody>${(m.inputs || []).map((x) => `<tr><td class="mono">${esc(x.name)}${x.required === false ? '' : ' *'}</td><td>${esc(x.type)}</td><td>${esc(x.description)}${'default' in x ? ` <span class="dim">(default ${esc(JSON.stringify(x.default))})</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
+      <p><strong>Output</strong> (${esc((m.outputs || {}).type)}): ${esc((m.outputs || {}).description)}</p>
+      ${i.test ? `<details ${i.test.passed ? '' : 'open'}><summary>Last test run ${esc(i.test.at)}: <span class="${i.test.passed ? 'ok' : 'err'}">${i.test.passed ? 'passed' : 'failed'}</span></summary><pre>${esc(i.test.output)}</pre></details>` : '<p class="dim">Tests not run for this version.</p>'}`
+      : `<p>${esc(m.description || '')}</p>${(m.tools || []).length ? `<p>Tools: ${m.tools.map((t) => `<span class="chip mono">${esc(t)}</span>`).join('')}</p>` : ''}`}
+    <h3 class="sec">Files</h3>${files}</div>`;
+  const q = `kind=${kind}&name=${encodeURIComponent(name)}`;
+  if ($('#l-test')) $('#l-test').addEventListener('click', async () => { $('#l-test').disabled = true; $('#l-test').textContent = 'Testing…';
+    try { const r = await api(`/api/library/test?name=${encodeURIComponent(name)}`, { method: 'POST' }); toast(r.passed ? 'Tests passed.' : 'Tests FAILED.', 4000); } catch (err) { toast(err.message, 5000); }
+    loadLibrary(); });
+  if ($('#l-audit')) $('#l-audit').addEventListener('click', async () => {
+    const note = prompt('Mark as audited. Optional note (what you checked):', '');
+    if (note === null) return;
+    await api(`/api/library/audit?${q}`, { method: 'POST', body: JSON.stringify({ audited: true, note }) }); toast('Marked audited.'); loadLibrary(); });
+  if ($('#l-revoke')) $('#l-revoke').addEventListener('click', async () => {
+    await api(`/api/library/audit?${q}`, { method: 'POST', body: JSON.stringify({ audited: false }) }); toast('Audit revoked.'); loadLibrary(); });
+  if ($('#l-del')) $('#l-del').addEventListener('click', async () => {
+    if (!confirm(`Delete the house ${kind.slice(0, -1)} ${name}?`)) return;
+    try { await api(`/api/library/item?${q}`, { method: 'DELETE' }); libOpen = null; $('#l-item').innerHTML = ''; toast('Deleted.'); loadLibrary(); } catch (err) { toast(err.message, 5000); } });
 }
 
 async function loadRules() {
@@ -712,6 +829,7 @@ async function refresh() {
     if (view === 'proposals') await loadProposals();
     if (view === 'house' && !houseEditing) await loadHouse();
     if (view === 'agent') await loadAgent();
+    if (view === 'library') await loadLibrary();
     if (view === 'settings') await loadSettings();
     if (view === 'rules') await loadRules();
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }

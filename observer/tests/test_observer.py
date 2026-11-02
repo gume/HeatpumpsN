@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from observer import metadata
 from observer.catalog import Catalog
@@ -169,3 +170,31 @@ def test_lenient_json_and_one_repair_round():
 
     assert chat_json(Fake(), "sys", "question") == {"a": 1, "b": 2}
     assert len(calls) == 2 and "not valid JSON" in calls[1]
+
+
+def test_retry_after_parsing_and_short_429_waits(monkeypatch):
+    import httpx
+
+    from observer.llm import LlmClient, human_duration, retry_after_s
+
+    req = httpx.Request("POST", "http://x/v1/chat/completions")
+    resp = lambda code, text="", headers=None: httpx.Response(code, request=req, text=text, headers=headers or {})
+    assert retry_after_s(resp(429, headers={"Retry-After": "12"})) == 12
+    assert retry_after_s(resp(429, '{"details": [{"retryDelay": "37s"}]}')) == 37
+    assert retry_after_s(resp(429, "Please retry in 6h11m16.555938346s.")) == pytest.approx(22276.56, abs=0.01)
+    assert retry_after_s(resp(429, "Please retry in 21.5s.")) == 21.5
+    assert retry_after_s(resp(429, "quota exceeded")) is None
+    assert human_duration(22276) == "6 h 11 min"
+
+    answers = [resp(429, "Please retry in 20s."), resp(429, "Please retry in 3s."),
+               resp(200, json.dumps({"choices": [{"message": {"content": "ok"}}]}))]
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: answers.pop(0))
+    slept = []
+    client = LlmClient("http://x/v1", "m")
+    client.sleep = slept.append
+    assert client.chat("s", "u") == "ok" and slept == [21, 4]        # short delays: waited and repeated
+
+    answers[:] = [resp(429, "Please retry in 6h11m16s.")]
+    with pytest.raises(httpx.HTTPStatusError):
+        client.chat("s", "u")                                        # long delay: raised at once, no waiting
+    assert slept == [21, 4]

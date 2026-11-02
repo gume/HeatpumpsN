@@ -1,0 +1,16 @@
+name: resample_hold
+version: 1
+purpose: >-
+  Put irregularly sampled signals onto a regular time grid without inventing
+  data across outages: each value is held (zero-order hold) for at most
+  max_hold_s seconds, after that the grid cell is empty (NaN). Sensors that
+  publish only on change (deadband, deduplication) need a hold; a dead node
+  must not be held for hours.
+needs: one or more time series with a DatetimeIndex (any sensors)
+inputs:
+- {name: frame, type: dataframe, description: "time-indexed frame, one column per signal (NaN where a signal has no sample)", required: true}
+- {name: step, type: string, description: "grid step as a pandas offset, e.g. 10s, 1min", required: false, default: 10s}
+- {name: max_hold_s, type: any, description: "seconds a value may be held: one number for all columns or {column: seconds}", required: false, default: 180}
+outputs: {type: dataframe, description: "regular grid (left-labelled) with the same columns; NaN where the last sample is older than max_hold_s"}
+requires: [pandas, numpy]
+author: observer (seed, after floor_simulator/log_analysis common/plantdata.py)
