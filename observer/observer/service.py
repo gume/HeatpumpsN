@@ -51,6 +51,7 @@ class Service:
         self.started = time.time()
         self._agents = None
         self._supervisor = None
+        self.db_total: dict | None = None        # all samples in the database, counted every 15 minutes
         self._db_job: dict | None = None
         from . import __version__
         from .updates import UpdateChecker
@@ -101,9 +102,36 @@ class Service:
             self.ingest.handle(topic, payload, retained)
 
     def _save_loop(self) -> None:
+        self._count_total()
+        minutes = 0
         while not self._stop.wait(60):
             with self.lock:
                 self.ingest.catalog.save()
+            minutes += 1
+            if minutes % 15 == 0:
+                self._count_total()
+
+    def _count_total(self) -> None:
+        """All samples in the database (a full count: done in the background, every 15 minutes)."""
+        if self.writer_kind != "influx":
+            return
+        try:
+            import tempfile
+
+            influx = self._influx(write=False)
+            with tempfile.TemporaryDirectory(prefix="obs-count-") as tmp:
+                p = os.path.join(tmp, "c.csv")
+                influx.query_csv(f'from(bucket: "{influx.bucket}") |> range(start: 0)\n'
+                                 '  |> filter(fn: (r) => r._measurement == "signal")\n'
+                                 '  |> count() |> group() |> sum()\n'
+                                 '  |> map(fn: (r) => ({t: r._value}))', p)
+                with open(p, encoding="utf-8") as fp:
+                    lines = [ln.strip() for ln in fp if ln.strip()]
+                # ",result,table,t" then ",_result,0,<count>"; an empty bucket gives no lines
+                total = int(lines[1].split(",")[-1]) if len(lines) > 1 else 0
+            self.db_total = {"samples": total, "at": time.strftime("%H:%M")}
+        except Exception as exc:              # shown as unknown; ingest is unaffected
+            log.warning("counting the stored samples failed: %s", exc)
 
     # --- the observer's state (registry, house, library, settings) -----------------
     def state_export(self) -> bytes:
@@ -235,7 +263,7 @@ class Service:
                          "messages": self.mqtt.messages if self.mqtt else 0,
                          "last_message_age_s": round(now - self.mqtt.last_message)
                          if self.mqtt and self.mqtt.last_message else None},
-                "storage": {"kind": self.writer_kind, "samples": self.ingest.stored},
+                "storage": {"kind": self.writer_kind, "samples": self.ingest.stored, "total": self.db_total},
                 "signals": {"total": len(self.ingest.catalog.entries), "stored": stored_signals,
                             "unregistered": unregistered},
                 "sources": dict(sorted(sources.items())),

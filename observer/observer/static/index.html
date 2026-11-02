@@ -408,7 +408,10 @@ async function loadStatus() {
   const card = (k, v, sub = '', cls = '') => `<div class="card"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${sub}</div></div>`;
   $('#cards').innerHTML = [
     card('MQTT', s.mqtt.connected ? 'connected' : 'disconnected', `${s.mqtt.messages} messages · last ${age(s.mqtt.last_message_age_s)} ago`, s.mqtt.connected ? 'ok' : 'err'),
-    card('Stored samples', s.storage.samples.toLocaleString(), s.storage.kind === 'influx' ? 'InfluxDB' : 'dry run: nothing is written', s.storage.kind === 'influx' ? '' : 'warn'),
+    s.storage.kind === 'influx'
+      ? card('Stored samples', s.storage.total ? s.storage.total.samples.toLocaleString() : '…',
+             `in InfluxDB${s.storage.total ? ` (counted ${s.storage.total.at})` : ''} · +${s.storage.samples.toLocaleString()} since the start ${age(s.uptime_s)} ago`)
+      : card('Stored samples', '0', 'dry run: nothing is written', 'warn'),
     card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
     card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
     card('Alerts', (s.alerts || {}).open ? `${s.alerts.open} open` : 'none', (s.alerts || {}).open ? `${s.alerts.alarms} alarms · ${s.alerts.warnings} warnings` : 'all checks quiet', (s.alerts || {}).alarms ? 'err' : (s.alerts || {}).open ? 'warn' : 'ok'),
