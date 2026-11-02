@@ -139,9 +139,11 @@ optimisation.
   (circuits, roles, relations), not against one house's signal ids, so they
   can be **shared between houses**; each house maps them through its own
   audited model.
-* Repository layout: package tools and skills in
-  `observer/observer/library/{tools,skills}/<name>/` (git); house items,
-  audit flags and test results in `<OBSERVER_HOME>/library/`; the house's
+* Repository layout: shared tools and skills in their own repository
+  (observer-library: `tools/<name>/`, `skills/<name>/`, `library.yaml` with
+  the library version, changelog, checks); an observer uses it as a library
+  folder or as an imported pack (.tgz). House items, history, packs, audit
+  flags and test results in `<OBSERVER_HOME>/library/`; the house's
   description, knowledge, review and archive in `<OBSERVER_HOME>/house/`,
   never in git.
 
@@ -156,7 +158,7 @@ optimisation.
 | E (first version) | sandbox: bubblewrap (rootless, no network) with the read-only data socket; limits; workspaces, query logs, audit records |
 | F (first version) | agent loop: free questions or skills, own data selection, tool and skill creation, harvest of finished runs, pause/resume on LLM quota; still to come: triggering it from supervision (C) |
 | G | optimisation agent with backtesting against recorded data and the simulator; approval flow for parameter pushes |
-| H | sharing library items between houses (export/import, promotion to the package) |
+| H (first version) | sharing library items between houses: separate library repository, versions, export/import as .tgz packs; still to come: a shared remote and pulling updates |
 
 Prerequisites before G: the portal needs a login (it may then approve
 parameter pushes). The read-only database token exists (agent tools).

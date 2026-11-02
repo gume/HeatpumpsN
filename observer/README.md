@@ -21,8 +21,8 @@ send later is a validated controller parameter set (plan:
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
 | `docker-compose.dev.yml`, scripts | `house/`: your review, owner knowledge, accepted understanding, archive |
-| `observer/library/`: package tools and skills; `observer/sandbox_lib/`: the `obs` library | `data/`: catalog, settings, proposals, log |
-| | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, audit flags, test results |
+| `observer/sandbox_lib/`: the `obs` library for sandboxed code (tools and skills: the separate observer-library repository) | `data/`: catalog, settings, proposals, log |
+| | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, their history, imported packs, audit flags, test results |
 | | `sandbox/venv`: the sandbox's Python environment |
 | | InfluxDB: the Docker volume `observer-influx-dev` |
 
@@ -207,22 +207,30 @@ core tools from any MCP client (`observer mcp`).
   the socket visible; cleared environment; memory and process limits by a
   systemd user scope, CPU time and file size by rlimits, wall-clock timeout.
 * **Library** (`agent/library.py`, Library tab): analysis **tools** (a folder
-  with `tool.yaml`: purpose, the kind of data it needs, typed inputs, output;
-  `tool.py` with `run(...)`; `test_tool.py`: pytest on synthetic data, run in
-  the sandbox) and **skills** (`SKILL.md`: a recipe, domain knowledge or a
-  method that worked). Package items ship in `observer/library/` (git);
-  house items are written into `<OBSERVER_HOME>/library/` by agents
-  (`create_tool`, `save_skill`) or by the harvest. Tools are generic (series,
-  frames, numbers; no signal ids), so they can move to another house.
-  **Audit** is the owner's flag per item, bound to a hash of its files: any
-  change voids it. The agent sees the flags (an index is in its prompt,
+  with `tool.yaml`: version, purpose, the kind of data it needs, typed
+  inputs, output; `tool.py` with `run(...)`; `test_tool.py`: pytest on
+  synthetic data, run in the sandbox) and **skills** (`SKILL.md`: version and
+  a recipe, domain knowledge or a method that worked). The tools and skills
+  themselves are **not in this repository**: they live in their own
+  repository, **observer-library** (`~/Work/observer-library`, versioned,
+  with a changelog and checks). Sources, highest precedence first:
+  1. *house* items in `<OBSERVER_HOME>/library/`, written by agents
+     (`create_tool`, `save_skill`), the harvest or by hand; saving one again
+     raises its version and keeps the previous one in `library/history/`;
+  2. library folders from `agent.library_paths` in config.yaml (e.g. the
+     observer-library checkout; edits are live);
+  3. imported **packs** in `<OBSERVER_HOME>/library/packs/`.
+  **Export/import**: a `.tgz` with `library.yaml` (pack name, version, every
+  item's version and content hash) and `tools/`, `skills/` (portal Library
+  tab or `observer library export|import`). Imports are checked strictly
+  (only `.py/.yaml/.md` under `tools|skills/<name>/`, no links, no `..`,
+  size limits); a newer version of a pack replaces the older one, which is
+  kept. Tools are generic (series, frames, numbers; no signal ids), so they
+  can move to another house. **Audit** is the owner's flag, bound to the
+  content hash: any change voids it, identical content stays audited after an
+  export and re-import. The agent sees the flags (an index is in its prompt,
   loading an unaudited tool prints a warning) and the run records which items
   it used and whether they were audited.
-  Seed tools: `resample_hold`, `debounce_binary`, `on_periods`, `pair_offset`,
-  `setpoint_tracking`, `fopdt_fit`. Skills: `sensor_health`, `heating_start`,
-  `boiler_cycling`, `plant_identification` (the method of
-  `floor_simulator/log_analysis`: data audit, regimes, frozen gates,
-  FIT/TUNE/HOLDOUT, free-run evaluation, honest PASS/FAIL).
 * **Harvest**: the button *Find tools and skills in this run* sends the run
   (code, outputs, report) and the library index to the task *harvest*
   (1-2 requests; a strong model pays off) and lists proposed tools and skills;
@@ -251,7 +259,9 @@ docker exec observer-influx-dev influx auth create --org heatpumpsn \
   --read-bucket <bucket id from `influx bucket list`> --description "observer agent tools: read-only" -t <admin token>
 # put the token into .env as OBSERVER_INFLUX_READ_TOKEN
 .venv/bin/observer sandbox-setup
-.venv/bin/observer library                  # tools and skills with audit and test state
+.venv/bin/observer library                  # sources, tools and skills with versions, audit and test state
+.venv/bin/observer library export -o house.tgz          # house items as a pack (--all, --item tools/NAME)
+.venv/bin/observer library import observer-library-0.2.0.tgz
 .venv/bin/observer test-tool fopdt_fit      # a tool's tests in the sandbox
 .venv/bin/observer agent --skill sensor_health
 .venv/bin/observer agent "Why did the floor circuit heat slowly this morning?"

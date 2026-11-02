@@ -90,9 +90,15 @@ Signals tab writes the entries. The generic starter file is
   (`agent/broker.py`, read-only token `OBSERVER_INFLUX_READ_TOKEN`, every
   request in `queries.jsonl`). Sandbox Python: `<OBSERVER_HOME>/sandbox/venv`
   (`observer sandbox-setup`; pytest is needed for tool tests).
-* Library: package items in `observer/library/{tools,skills}`, house items and
-  `audits.yaml` / `tests.yaml` in `<OBSERVER_HOME>/library/`. Nothing is
-  audited yet: the owner audits in the Library tab.
+* Library: the tools and skills live in their own repository,
+  **`~/Work/observer-library`** (local git, tag v0.2.0, no remote yet;
+  `scripts/check.py`, `scripts/pack.sh`), configured in the data directory's
+  config.yaml as `agent.library_paths`. House items, history, packs,
+  `audits.yaml` / `tests.yaml` in `<OBSERVER_HOME>/library/`. 13 tools
+  (incl. room analysis: temperature_segments, cooling_fit, room_rc_fit,
+  heatup_events, comfort_stats, daily_profile, degree_hours) and 8 skills
+  (incl. room_heat_loss, room_heat_up, room_comfort, emitter_sizing).
+  Nothing is audited yet: the owner audits in the Library tab.
 * Models: all tasks on `gemini-3.5-flash-lite` (owner's choice;
   `gemini-3.8-flash` has 20 requests/day, worth it for *harvest* and
   *house*). Flash-lite follows recipes and the library poorly (it wrote its

@@ -22,7 +22,7 @@ import yaml
 
 from .broker import DataBroker
 from .data import DataSource
-from .library import PACKAGE_DIR, Library
+from .library import Library
 from .runner import Run, execute
 from .sandbox import Limits, Sandbox
 from .tools import Toolbox
@@ -31,7 +31,8 @@ _RUN_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9_-]+$")
 
 
 def make_library(cfg: dict) -> Library:
-    return Library(cfg["paths"]["library"])
+    """House items in the data directory plus the library folders named in agent.library_paths."""
+    return Library(cfg["paths"]["library"], (cfg.get("agent") or {}).get("library_paths") or [])
 
 
 def make_sandbox(cfg: dict, library: Library | None = None) -> Sandbox:
@@ -40,10 +41,8 @@ def make_sandbox(cfg: dict, library: Library | None = None) -> Sandbox:
     runtime = sb.pop("runtime", "bwrap")
     image = sb.pop("image", "python:3.11-slim")
     limits = Limits(**{k: int(v) for k, v in sb.items() if k in Limits.__dataclass_fields__})
-    tool_dirs = {"package": os.path.join(PACKAGE_DIR, "tools")}
-    if library is not None:
-        tool_dirs["house"] = os.path.join(library.house_dir, "tools")
-    return Sandbox(cfg["paths"]["sandbox_venv"], runtime, limits, image, tool_dirs)
+    return Sandbox(cfg["paths"]["sandbox_venv"], runtime, limits, image,
+                   library.tool_mounts if library is not None else None)
 
 
 def make_data(cfg: dict) -> DataSource | None:
@@ -117,10 +116,32 @@ class AgentManager:
 
     # --- the library ---------------------------------------------------------------------
     def library_view(self) -> dict:
-        return {kind: [i.summary() for i in self.library.items(kind).values()] for kind in ("tools", "skills")}
+        return {"sources": [s.view() for s in self.library.sources()],
+                **{kind: [i.summary() for i in self.library.items(kind).values()] for kind in ("tools", "skills")}}
 
     def library_item(self, kind: str, name: str) -> dict:
-        return self.library.get(kind, name).detail()
+        item = self.library.get(kind, name)
+        return {**item.detail(), "history": [{k: v for k, v in h.items() if k != "files"}
+                                             for h in self.library.history(kind, name)]}
+
+    def export_library(self, selection: str = "house", items: list | None = None, name: str = "",
+                       version: str = "") -> tuple[str, bytes]:
+        """(file name, .tgz): selection house | all | items ([[kind, name], ...])."""
+        if selection == "all":
+            chosen = [(k, n) for k in ("tools", "skills") for n in self.library.items(k)]
+        elif selection == "items":
+            chosen = [(str(k), str(n)) for k, n in items or []]
+        else:
+            chosen = None
+        name = name or ("house-export" if selection == "house" else "library-export")
+        version = version or time.strftime("%Y.%m.%d-%H%M")
+        return f"{name}-{version}.tgz", self.library.export(chosen, name, version)
+
+    def import_library(self, data: bytes) -> dict:
+        return self.library.import_archive(data)
+
+    def remove_pack(self, name: str) -> None:
+        self.library.remove_pack(name)
 
     def test_tool(self, name: str) -> dict:
         return self.library.run_tests(name, self.sandbox)

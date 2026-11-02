@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 _RELATIVE = re.compile(r"^-\d{1,5}(s|m|h|d|w)$")
-_EVERY = re.compile(r"^\d{1,4}(s|m|h|d)$")
+_EVERY = re.compile(r"^(\d{1,4})(s|m|min|h|d)$")
 AGGREGATES = ("mean", "min", "max", "last", "first", "count")
 MAX_RAW_POINTS = 50_000
 
@@ -39,9 +39,10 @@ def flux_every(value: str) -> str | None:
     value = (value or "raw").strip()
     if value == "raw":
         return None
-    if not _EVERY.match(value):
-        raise ValueError(f"every {value!r}: use 'raw' or a window like 30s, 1m, 15m, 1h")
-    return value
+    m = _EVERY.match(value)
+    if not m:
+        raise ValueError(f"every {value!r}: use 'raw' or a window like 30s, 1m (or 1min), 15m, 1h")
+    return m.group(1) + ("m" if m.group(2) == "min" else m.group(2))    # pandas' "min" is Flux's "m"
 
 
 @dataclass

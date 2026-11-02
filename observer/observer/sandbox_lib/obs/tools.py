@@ -8,12 +8,10 @@ Loading an unaudited tool prints a warning on stderr and is recorded in the
 run: say in the report when a result depends on one.
 """
 import importlib.util
-import os
 import sys
 
 from ._client import call as _call
 
-_ROOTS = {"package": "/opt/obs/tools/package", "house": "/opt/obs/tools/house"}
 _loaded = {}
 
 
@@ -28,7 +26,7 @@ def load(name):
     info = index.get(name)
     if info is None:
         raise KeyError(f"no tool {name!r}; available: {', '.join(sorted(index))}")
-    path = os.path.join(_ROOTS[info["origin"]], name, "tool.py")
+    path = info["path"]
     spec = importlib.util.spec_from_file_location(f"obs_tool_{name}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

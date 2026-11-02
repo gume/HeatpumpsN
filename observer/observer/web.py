@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -222,6 +222,34 @@ def create_app(service: Service) -> FastAPI:
             return service.agents.library_item(kind, name)
         except (KeyError, ValueError) as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/library/export")
+    def export_library(selection: str = Query("house"), name: str = Query(""), version: str = Query(""),
+                       items: str = Query("")):
+        """items: kind/name,kind/name for selection=items."""
+        chosen = [i.split("/", 1) for i in items.split(",") if "/" in i]
+        try:
+            fname, data = service.agents.export_library(selection, chosen, name, version)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return Response(data, media_type="application/gzip",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+    @app.post("/api/library/import")
+    async def import_library(request: Request):
+        data = await request.body()
+        try:
+            return service.agents.import_library(data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/api/library/pack")
+    def remove_pack(name: str = Query(...)):
+        try:
+            service.agents.remove_pack(name)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"ok": True}
 
     @app.post("/api/library/test")
     async def test_tool(name: str = Query(...)):

@@ -5,8 +5,8 @@ no root anywhere. Each run sees only
 
 * ``/usr`` and the sandbox's own Python environment, read-only;
 * the run's workspace at ``/work``, read-write (data files, plots, notes);
-* the ``obs`` client library (``/opt/obs/lib``) and the tool library
-  (``/opt/obs/tools/package`` and ``/house``), read-only;
+* the ``obs`` client library (``/opt/obs/lib``) and the tool folders of
+  every library source (``/opt/obs/tools/<source>``), read-only;
 * the run's data socket (``/run/obs/data.sock``, ``OBS_SOCKET``): the only
   way out, to the observer's read-only data service (``broker.py``);
 * an empty ``/tmp``, ``/proc`` and a minimal ``/dev``;
@@ -78,16 +78,22 @@ def _files(root: str) -> dict[str, float]:
 
 class Sandbox:
     def __init__(self, venv: str, runtime: str = "bwrap", limits: Limits | None = None,
-                 image: str = "python:3.11-slim", tool_dirs: dict[str, str] | None = None):
+                 image: str = "python:3.11-slim", tool_mounts=None):
         self.venv = os.path.abspath(venv)
         self.runtime = runtime
         self.limits = limits or Limits()
         self.image = image
-        # Read-only mounts: the obs client library and the tool library.
-        self.mounts = {LIB_DIR: "/opt/obs/lib"}
-        for origin, path in (tool_dirs or {}).items():
-            if path and os.path.isdir(path):
-                self.mounts[os.path.abspath(path)] = f"/opt/obs/tools/{origin}"
+        # Read-only mounts: the obs client library and, from `tool_mounts()` at
+        # run time (sources change when packs are imported), the tool folders.
+        self.tool_mounts = tool_mounts
+
+    @property
+    def mounts(self) -> dict[str, str]:
+        out = {LIB_DIR: "/opt/obs/lib"}
+        for host, target in ((self.tool_mounts() if callable(self.tool_mounts) else self.tool_mounts) or {}).items():
+            if host and os.path.isdir(host):
+                out[os.path.abspath(host)] = target
+        return out
 
     # --- environment ---------------------------------------------------------------
     @property

@@ -213,15 +213,23 @@
 
   <section id="view-library" class="hidden">
     <p class="dim">Analysis <strong>tools</strong> (code the agent uses in the sandbox, each with purpose, inputs, outputs and
-      tests on synthetic data) and <strong>skills</strong> (recipes: domain knowledge and methods that worked). Package items
-      come with the observer (in git); house items are written by agents into the data directory. <strong>Audited</strong> is
-      your approval; it is bound to the item's content, so any change voids it. The agent sees the flags and says when a
-      result depends on something unaudited.</p>
+      tests on synthetic data) and <strong>skills</strong> (recipes: domain knowledge and methods that worked), from several
+      sources: <em>house</em> items (written by agents and the harvest, in the data directory) come first, then library folders
+      (e.g. a git checkout of a shared library), then imported packs. Every item has a version. <strong>Audited</strong> is your
+      approval, bound to the item's content: any change voids it, identical content stays audited wherever it comes from.</p>
+    <h3 class="sec" style="margin-top:0">Sources</h3>
+    <div class="table-wrap"><table><thead><tr><th>Source</th><th>Kind</th><th>Version</th><th>Location</th><th></th></tr></thead><tbody id="l-sources"></tbody></table></div>
+    <div class="bar" style="margin-top:8px">
+      <button class="btn" id="l-export-house">Export house items (.tgz)</button>
+      <button class="btn" id="l-export-all">Export everything (.tgz)</button>
+      <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">Import a pack (.tgz)<input type="file" id="l-import" accept=".tgz,.tar.gz,.tar" style="display:none"></label>
+      <span class="dim" id="l-msg"></span>
+    </div>
     <div class="two">
       <div><h3 class="sec" style="margin-top:0">Tools</h3><div class="table-wrap"><table>
-        <thead><tr><th>Name</th><th>Purpose</th><th>Origin</th><th>Tests</th><th>Audited</th></tr></thead><tbody id="l-tools"></tbody></table></div></div>
+        <thead><tr><th>Name</th><th>Purpose</th><th>Source</th><th>Ver.</th><th>Tests</th><th>Audited</th></tr></thead><tbody id="l-tools"></tbody></table></div></div>
       <div><h3 class="sec" style="margin-top:0">Skills</h3><div class="table-wrap"><table>
-        <thead><tr><th>Name</th><th>Description</th><th>Origin</th><th>Audited</th></tr></thead><tbody id="l-skills"></tbody></table></div></div>
+        <thead><tr><th>Name</th><th>Description</th><th>Source</th><th>Ver.</th><th>Audited</th></tr></thead><tbody id="l-skills"></tbody></table></div></div>
     </div>
     <div id="l-item" style="margin-top:14px"></div>
   </section>
@@ -775,32 +783,54 @@ async function loadLibrary() {
   const lib = await api('/api/library');
   const auditCell = (i) => i.audited ? '<span class="ok">✓ audited</span>' : '<span class="dim">–</span>';
   const testCell = (i) => i.tests_passed === true ? '<span class="ok">passed</span>' : i.tests_passed === false ? '<span class="err">failed</span>' : '<span class="dim">not run</span>';
+  const src = (i) => `${esc(i.source_label)}${i.shadows.length ? ` <span class="dim" title="also in ${esc(i.shadows.join(', '))}">+${i.shadows.length}</span>` : ''}`;
+  $('#l-sources').innerHTML = lib.sources.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.kind)}</td><td>${esc(x.version || '')}</td>
+      <td class="mono">${esc(x.root)}</td><td>${x.kind === 'pack' ? `<button class="btn danger" data-rmpack="${esc(x.id.slice(5))}">Remove</button>` : ''}</td></tr>`).join('');
   $('#l-tools').innerHTML = lib.tools.map((i) => `<tr data-kind="tools" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>
-      <td>${esc((i.purpose || '').slice(0, 140))}</td><td>${esc(i.origin)}</td><td>${testCell(i)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">none</td></tr>';
+      <td>${esc((i.purpose || '').slice(0, 140))}</td><td>${src(i)}</td><td>${esc(i.version)}</td><td>${testCell(i)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">none</td></tr>';
   $('#l-skills').innerHTML = lib.skills.map((i) => `<tr data-kind="skills" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>
-      <td>${esc(i.title)}<div class="dim">${esc((i.description || '').slice(0, 140))}</div></td><td>${esc(i.origin)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="4" class="dim">none</td></tr>';
+      <td>${esc(i.title)}<div class="dim">${esc((i.description || '').slice(0, 140))}</div></td><td>${src(i)}</td><td>${esc(i.version)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="5" class="dim">none</td></tr>';
+  document.querySelectorAll('[data-rmpack]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`Remove the pack ${b.dataset.rmpack}?`)) return;
+    try { await api(`/api/library/pack?name=${encodeURIComponent(b.dataset.rmpack)}`, { method: 'DELETE' }); toast('Pack removed.'); loadLibrary(); }
+    catch (err) { toast(err.message, 5000); }
+  }));
   if (libOpen) loadItem(libOpen.kind, libOpen.name);
 }
 for (const id of ['#l-tools', '#l-skills']) $(id).addEventListener('click', (e) => {
   const tr = e.target.closest('tr[data-name]'); if (tr) { libOpen = { kind: tr.dataset.kind, name: tr.dataset.name }; loadItem(libOpen.kind, libOpen.name); }
+});
+$('#l-export-house').addEventListener('click', () => { location.href = '/api/library/export?selection=house'; });
+$('#l-export-all').addEventListener('click', () => { location.href = '/api/library/export?selection=all'; });
+$('#l-import').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#l-msg').textContent = `Importing ${f.name}…`;
+  try { const r = await fetch('/api/library/import', { method: 'POST', body: await f.arrayBuffer(), headers: { 'Content-Type': 'application/gzip' } });
+        const d = await r.json(); if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        $('#l-msg').textContent = `Installed pack ${d.pack} ${d.version || ''}: ${d.items.length} items (unaudited unless their content was audited before).`; }
+  catch (err) { $('#l-msg').textContent = err.message; }
+  e.target.value = ''; loadLibrary();
 });
 async function loadItem(kind, name) {
   let i; try { i = await api(`/api/library/item?kind=${kind}&name=${encodeURIComponent(name)}`); } catch (err) { $('#l-item').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
   const m = i.meta || {};
   const files = Object.entries(i.files).map(([f, text]) => `<details ${f === 'SKILL.md' ? 'open' : ''}><summary class="mono">${esc(f)}</summary>${f.endsWith('.md') ? `<div class="md">${md(text.replace(/^---[\s\S]*?---/, ''))}</div>` : `<pre style="max-height:420px">${esc(text)}</pre>`}</details>`).join('');
   $('#l-item').innerHTML = `<div class="card">
-    <div class="bar" style="margin:0"><strong class="mono">${esc(i.name)}</strong><span class="pill">${esc(kind.slice(0, -1))}</span><span class="dim">${esc(i.origin)} · hash ${esc(i.hash)}${m.version ? ` · v${m.version}` : ''}${i.created_by ? ` · by ${esc(i.created_by)}` : ''}</span>
+    <div class="bar" style="margin:0"><strong class="mono">${esc(i.name)}</strong><span class="pill">${esc(kind.slice(0, -1))}</span><span class="dim">v${esc(i.version)} · ${esc(i.source_label)} · hash ${esc(i.hash)}${i.created_by ? ` · by ${esc(i.created_by)}` : ''}${m.based_on ? ` · based on ${esc(m.based_on)}` : ''}</span>
       ${i.audited ? `<span class="ok">audited ${esc(i.audit.at)}${i.audit.note ? ': ' + esc(i.audit.note) : ''}</span>` : '<span class="warn">not audited</span>'}
       <span style="margin-left:auto;display:flex;gap:6px">
         ${kind === 'tools' ? '<button class="btn" id="l-test">Run tests</button>' : ''}
         ${i.audited ? '<button class="btn" id="l-revoke">Revoke audit</button>' : '<button class="btn primary" id="l-audit">Mark audited</button>'}
+        <a class="btn" href="/api/library/export?selection=items&name=${encodeURIComponent(i.name)}&version=v${esc(i.version)}&items=${kind}/${encodeURIComponent(i.name)}">Export</a>
         ${i.origin === 'house' ? '<button class="btn danger" id="l-del">Delete</button>' : ''}</span></div>
+    ${i.shadows.length ? `<p class="dim">Takes precedence over the same name in: ${i.shadows.map(esc).join(', ')}</p>` : ''}
     ${kind === 'tools' ? `<p>${esc(m.purpose || '')}</p>${m.needs ? `<p class="dim">Needs: ${esc(m.needs)}</p>` : ''}
       <div class="table-wrap"><table><thead><tr><th>Input</th><th>Type</th><th>Description</th></tr></thead><tbody>${(m.inputs || []).map((x) => `<tr><td class="mono">${esc(x.name)}${x.required === false ? '' : ' *'}</td><td>${esc(x.type)}</td><td>${esc(x.description)}${'default' in x ? ` <span class="dim">(default ${esc(JSON.stringify(x.default))})</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
       <p><strong>Output</strong> (${esc((m.outputs || {}).type)}): ${esc((m.outputs || {}).description)}</p>
       ${i.test ? `<details ${i.test.passed ? '' : 'open'}><summary>Last test run ${esc(i.test.at)}: <span class="${i.test.passed ? 'ok' : 'err'}">${i.test.passed ? 'passed' : 'failed'}</span></summary><pre>${esc(i.test.output)}</pre></details>` : '<p class="dim">Tests not run for this version.</p>'}`
       : `<p>${esc(m.description || '')}</p>${(m.tools || []).length ? `<p>Tools: ${m.tools.map((t) => `<span class="chip mono">${esc(t)}</span>`).join('')}</p>` : ''}`}
-    <h3 class="sec">Files</h3>${files}</div>`;
+    <h3 class="sec">Files</h3>${files}
+    ${(i.history || []).length ? `<h3 class="sec">Earlier versions (house)</h3><p>${i.history.map((h) => `<span class="chip">${esc(h.version)} · ${esc(h.updated || '')} · ${esc(h.hash)}</span>`).join('')}</p>` : ''}</div>`;
   const q = `kind=${kind}&name=${encodeURIComponent(name)}`;
   if ($('#l-test')) $('#l-test').addEventListener('click', async () => { $('#l-test').disabled = true; $('#l-test').textContent = 'Testing…';
     try { const r = await api(`/api/library/test?name=${encodeURIComponent(name)}`, { method: 'POST' }); toast(r.passed ? 'Tests passed.' : 'Tests FAILED.', 4000); } catch (err) { toast(err.message, 5000); }

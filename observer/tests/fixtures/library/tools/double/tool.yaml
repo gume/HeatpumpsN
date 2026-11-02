@@ -1,0 +1,7 @@
+name: double
+version: 3
+purpose: Doubles a number (test fixture).
+needs: a number
+inputs:
+- {name: x, type: number, description: "the number", required: true}
+outputs: {type: number, description: "2x"}

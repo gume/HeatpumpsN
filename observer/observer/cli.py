@@ -15,7 +15,11 @@ settings, proposals). The repository holds only code, docs and defaults.
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
 
   sandbox-setup            create the sandbox's Python environment (numpy, pandas, scipy, matplotlib)
-  library                  list the analysis tools and skills (audit and test state)
+  library [list]           the library sources, tools and skills (version, audit and test state)
+  library export [--all | --item KIND/NAME ...] [--name N] [--version V] [-o FILE.tgz]
+                           house items (default), all items or chosen ones as a .tgz pack
+  library import FILE.tgz  install a pack (strictly checked; a previous version is kept)
+  library remove-pack NAME
   test-tool NAME           run a library tool's tests in the sandbox
   agent    [--skill NAME] [QUESTION ...]   one agent run in the foreground; the record goes to runs/
   mcp                      the agent tools as an MCP server (stdio)
@@ -257,12 +261,35 @@ def cmd_library(cfg: dict, args) -> None:
     from .agent.manager import make_library
 
     lib = make_library(cfg)
+    if args.action == "export":
+        chosen = [tuple(i.split("/", 1)) for i in args.item] if args.item else \
+            ([(k, n) for k in ("tools", "skills") for n in lib.items(k)] if args.all else None)
+        name = args.name or ("library-export" if chosen else "house-export")
+        version = args.version or time.strftime("%Y.%m.%d-%H%M")
+        data = lib.export(chosen, name, version)
+        out = args.output or f"{name}-{version}.tgz"
+        with open(out, "wb") as fp:
+            fp.write(data)
+        print(f"{out}: {len(data)} bytes")
+        return
+    if args.action == "import":
+        with open(args.file, "rb") as fp:
+            r = lib.import_archive(fp.read())
+        print(f"pack {r['pack']} {r['version']}: {len(r['items'])} items")
+        return
+    if args.action == "remove-pack":
+        lib.remove_pack(args.file)
+        print("removed")
+        return
+    print("SOURCES (highest precedence first)")
+    for s in lib.sources():
+        print(f"  {s.id:28s} {s.kind:5s} {s.version:10s} {s.root}")
     for kind in ("tools", "skills"):
         print(kind.upper())
         for i in lib.items(kind).values():
             s = i.summary()
             tests = {None: "  ", True: "T+", False: "T-"}[s.get("tests_passed")] if kind == "tools" else "  "
-            print(f"  {'A' if s['audited'] else '-'} {tests} {i.name:22s} [{i.origin}] "
+            print(f"  {'A' if s['audited'] else '-'} {tests} {i.name:22s} v{i.version:<3} [{i.source.id}] "
                   f"{(s.get('purpose') or s.get('description') or '')[:90]}")
     print("A = audited by the owner, T+/T- = tests passed/failed for the current version")
 
@@ -335,7 +362,14 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--all", action="store_true")
     p.add_argument("--min-confidence", type=float, default=0.7)
     sub.add_parser("sandbox-setup")
-    sub.add_parser("library")
+    p = sub.add_parser("library")
+    p.add_argument("action", nargs="?", default="list", choices=["list", "export", "import", "remove-pack"])
+    p.add_argument("file", nargs="?", default=None, help="archive to import, or pack name to remove")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--item", action="append", default=[], help="KIND/NAME, e.g. tools/on_periods")
+    p.add_argument("--name", default="")
+    p.add_argument("--version", default="")
+    p.add_argument("-o", "--output", default="")
     p = sub.add_parser("test-tool")
     p.add_argument("name")
     p = sub.add_parser("agent")

@@ -40,6 +40,10 @@ llm:
 # runs in a rootless sandbox without network (`observer sandbox-setup` once).
 agent:
   read_token_env: OBSERVER_INFLUX_READ_TOKEN
+  # Library folders (git checkouts of shared tool/skill libraries), highest
+  # precedence first; house items in the data directory always come first,
+  # imported packs last.
+  library_paths: []       # e.g. [~/Work/observer-library]
   max_steps: 25
   deadline_s: 1800      # strong (thinking) models need 1-2 min per step
   sandbox:

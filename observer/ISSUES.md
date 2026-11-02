@@ -37,10 +37,17 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    supervision (phase C) and scheduled skills are open; old runs are never
    deleted (decide a retention). A paused run is only visible in the portal:
    notify the owner (HA notification over MQTT) once alerts exist.
-11. **Library**: promoting a house item to the package (git) is a manual
-    copy; tools have no dependency declaration beyond `requires` (the sandbox
-    has numpy, pandas, scipy, matplotlib); a tool cannot call another tool
-    except through `obs.tools` at run time.
+11. **Library**: bringing a house item into the observer-library repository
+    is manual (export, unpack, raise the version, changelog, check, commit);
+    the repository has no remote yet. Tools have no dependency declaration
+    beyond `requires` (the sandbox has numpy, pandas, scipy, matplotlib); a
+    tool calls another only through `obs.tools` at run time.
+12. **Room analysis needs data**: free-cooling fits on ~15 h are weak
+    (r2 < 0.3, daytime gains and the ACs dominate); several nights are
+    needed. Four BLE room sensors (David, Sport, Bathroom TF, AA) report too
+    rarely for 5-minute grids (12-45 samples in 15 h): fix the reception or
+    analyse on a coarser grid. Heating-related room skills (heat-up,
+    emitter sizing) wait for the radiator circuits to run.
 10. **Git history** still contains the old `observer/registry.yaml` with this
    house's sensor ids and room names (before the data directory existed). Not
    secret; removing it would need a history rewrite.
