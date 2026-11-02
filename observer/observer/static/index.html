@@ -21,9 +21,19 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
   header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
-           flex-wrap: wrap; }
+           flex-wrap: nowrap; position: sticky; top: 0; z-index: 20; background: var(--bg); }
+  header h1 { white-space: nowrap; flex: 0 0 auto; }
+  header nav { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  header nav button { flex: 0 0 auto; white-space: nowrap; }
+  #mq { white-space: nowrap; flex: 0 0 auto; }
+  @media (max-width: 760px) {
+    header { gap: 8px; padding: 8px 10px; }
+    header h1 { font-size: 14px; }
+    #ver, #mq, header h1 .long { display: none; }
+  }
+  #l-item, #a-run, #upd { scroll-margin-top: 72px; }    /* scrolled-to panels stay below the fixed menu */
   header h1 { font-size: 16px; margin: 0; } header h1 b { color: var(--brand); }
-  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  nav { display: flex; gap: 4px; }
   nav button { background: none; border: 1px solid transparent; color: var(--muted); padding: 6px 12px; border-radius: 8px;
                cursor: pointer; font: inherit; }
   nav button.active { background: var(--panel-2); border-color: var(--line); color: var(--text); }
@@ -88,7 +98,7 @@
 </head>
 <body>
 <header>
-  <h1><b>●</b> HeatpumpsN Observer <span id="ver" class="dim" style="font-size:12px;font-weight:400"></span></h1>
+  <h1><b>●</b> <span class="long">HeatpumpsN</span> Observer <span id="ver" class="dim" style="font-size:12px;font-weight:400"></span></h1>
   <nav>
     <button data-view="status" class="active">Status</button>
     <button data-view="alerts">Alerts <span id="alert-badge"></span></button>
@@ -357,7 +367,10 @@ const selected = new Set();
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
 function show(v) {
   view = v;
-  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+  document.querySelectorAll('nav button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === v);
+    if (b.dataset.view === v) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });   // narrow screens scroll the tabs
+  });
   for (const id of ['status', 'alerts', 'signals', 'proposals', 'house', 'agent', 'library', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
