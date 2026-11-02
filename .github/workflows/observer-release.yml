@@ -1,0 +1,47 @@
+# Release of the observer: push a tag observer-v<version> (scripts/release.sh --tag).
+# Runs the tests, builds the deploy bundle and publishes a GitHub Release with it.
+name: observer release
+
+on:
+  push:
+    tags: ["observer-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: observer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Version matches the tag
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          test "observer-v$version" = "$GITHUB_REF_NAME" || { echo "pyproject version $version does not match $GITHUB_REF_NAME"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          pip install -q -e ".[dev]"
+          python -m pytest -q
+      - name: Bundle
+        run: |
+          name="heatpumpsn-observer-$VERSION"
+          mkdir -p "dist/$name"
+          git -C "$GITHUB_WORKSPACE" archive HEAD:observer -- observer pyproject.toml README.md CHANGELOG.md Dockerfile .dockerignore deploy | tar -x -C "dist/$name"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          awk "/^## $VERSION/{f=1;next} /^## /{f=0} f" CHANGELOG.md > dist/notes.md
+      - name: Image builds
+        run: docker build -t heatpumpsn-observer:$VERSION .
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/heatpumpsn-observer-$VERSION.tar.gz" \
+            --title "Observer $VERSION" --notes-file dist/notes.md

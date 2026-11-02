@@ -49,7 +49,10 @@ def create_app(service: Service) -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "mqtt": bool(service.mqtt and service.mqtt.connected), "storage": service.writer_kind}
+        from . import __version__
+
+        return {"ok": True, "version": __version__, "mqtt": bool(service.mqtt and service.mqtt.connected),
+                "storage": service.writer_kind}
 
     @app.get("/")
     def index():

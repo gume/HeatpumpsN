@@ -10,3 +10,4 @@ __pycache__/
 # guard against stray copies from older layouts.
 /registry.yaml
 /house/
+/dist/

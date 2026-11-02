@@ -88,7 +88,7 @@
 </head>
 <body>
 <header>
-  <h1><b>●</b> HeatpumpsN Observer</h1>
+  <h1><b>●</b> HeatpumpsN Observer <span id="ver" class="dim" style="font-size:12px;font-weight:400"></span></h1>
   <nav>
     <button data-view="status" class="active">Status</button>
     <button data-view="signals">Signals</button>
@@ -339,6 +339,8 @@ function show(v) {
 async function loadStatus() {
   const s = await api('/api/status');
   llm = s.llm || {};
+  document.title = `HeatpumpsN Observer ${s.version || ''}`;
+  $('#ver').textContent = s.version ? `v${s.version}` : '';
   $('#mq').innerHTML = s.mqtt.host ? `MQTT <span class="${s.mqtt.connected ? 'ok' : 'err'}">${s.mqtt.connected ? 'connected' : 'disconnected'}</span> · ${esc(s.mqtt.host)}:${s.mqtt.port}` : 'MQTT off';
   if (view !== 'status') return;
   const card = (k, v, sub = '', cls = '') => `<div class="card"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${sub}</div></div>`;

@@ -198,7 +198,10 @@ class Service:
                     unregistered += 1
             for s in sources.values():
                 s["age_s"] = round(now - s["last_seen"]) if s["last_seen"] else None
+            from . import __version__
+
             return {
+                "version": __version__,
                 "uptime_s": round(now - self.started),
                 "mqtt": {"connected": bool(self.mqtt and self.mqtt.connected),
                          "host": self.mqtt.host if self.mqtt else None,

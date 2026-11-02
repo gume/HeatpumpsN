@@ -62,6 +62,11 @@ class Result:
                 "stdout": self.stdout, "stderr": self.stderr, "new_files": self.new_files}
 
 
+def _user_systemd() -> bool:
+    """systemd-run --user needs a running user manager (not in containers or CI runners)."""
+    return bool(shutil.which("systemd-run")) and os.path.exists(f"/run/user/{os.getuid()}/systemd/private")
+
+
 def _tail(text: str, limit: int = OUTPUT_LIMIT) -> str:
     return text if len(text) <= limit else f"... ({len(text) - limit} characters cut)\n" + text[-limit:]
 
@@ -114,7 +119,7 @@ class Sandbox:
             problems.append(f"{self.runtime} is not installed")
         if self.runtime == "bwrap" and not os.path.exists(self.python):
             problems.append("sandbox environment missing: run `observer sandbox-setup`")
-        cgroup = self.runtime == "bwrap" and bool(shutil.which("systemd-run"))
+        cgroup = self.runtime == "bwrap" and _user_systemd()
         return {"runtime": self.runtime, "ready": not problems, "problems": problems, "venv": self.venv,
                 "network": "none", "limits": self.limits.__dict__,
                 "memory_limit": "cgroup (systemd user scope)" if cgroup else
@@ -158,7 +163,7 @@ class Sandbox:
               self.python, "-s", "-B", f"/work/{script}"]
         rl = ["prlimit", f"--cpu={lim.cpu_s}", f"--fsize={lim.file_mb * 1024 * 1024}",
               f"--nofile={lim.open_files}", "--core=0"]
-        if shutil.which("systemd-run"):
+        if _user_systemd():
             scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect",
                      "-p", f"MemoryMax={lim.memory_mb}M", "-p", "MemorySwapMax=0", "-p", f"TasksMax={lim.tasks}"]
             return scope + rl + ["--"] + bw

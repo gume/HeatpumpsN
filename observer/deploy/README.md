@@ -1,5 +1,13 @@
 # Deploying the observer (release)
 
+**Making a release** (development machine): raise `version` in
+`pyproject.toml`, add a CHANGELOG entry, commit, then
+
+```bash
+scripts/release.sh --tag            # tests, dist/heatpumpsn-observer-<version>.tar.gz, tag observer-v<version>
+git push origin observer-v<version> # GitHub Actions: tests, bundle, image build, GitHub Release with the bundle
+```
+
 Two containers: **InfluxDB 2.7** (the recorded samples) and the **observer**
 (ingest from the home MQTT broker, portal, house understanding, library,
 exports). Development keeps running on the development machine; the release
@@ -8,10 +16,17 @@ observer's state by export/import.
 
 ## 1. Install
 
+A release is the bundle `heatpumpsn-observer-<version>.tar.gz`: the observer
+package, the Dockerfile, this `deploy/` folder, README and CHANGELOG. Get it
+from the GitHub release (`observer-v<version>`; for a private repository with
+`gh release download observer-v0.2.0 -R gume/HeatpumpsN`) or copy it from
+the development machine (`observer/dist/`, built by `scripts/release.sh`).
+
 On the release machine (Docker with the compose plugin):
 
 ```bash
-git clone <HeatpumpsN repository> && cd HeatpumpsN/observer/deploy   # only observer/ is needed
+tar xzf heatpumpsn-observer-0.2.0.tar.gz
+cd heatpumpsn-observer-0.2.0/deploy
 cp env.example .env
 # fill in .env: INFLUX_ADMIN_PASSWORD and INFLUX_ADMIN_TOKEN (openssl rand -hex 32),
 # OBSERVER_MQTT_HOST/PORT (the home broker), OBSERVER_PORTAL_PASSWORD, TZ
@@ -78,8 +93,13 @@ docker compose exec observer observer db import /data/exports/observer-20261102-
 
 ## 4. Operate
 
-* **Update**: `git pull && docker compose up -d --build` (data stays in the
-  volumes `heatpumpsn-observer_influx-data`, `_influx-config`, `_observer-data`).
+* **Update** to a new release: unpack the new bundle next to the old one,
+  copy `.env` over (`cp ../../heatpumpsn-observer-0.2.0/deploy/.env .`) and
+  run `docker compose up -d --build` in its `deploy/`. The compose project
+  name is fixed (`heatpumpsn-observer`), so the new containers use the same
+  volumes (`heatpumpsn-observer_influx-data`, `_influx-config`,
+  `_observer-data`): the data and the state stay. The portal header and
+  `/healthz` show the running version. Read the CHANGELOG first.
 * **Backup**: Status tab → Export, or
   `docker compose exec observer observer db export` (the file lands in
   `/data/exports/`; `docker compose cp observer:/data/exports/<file> .`).

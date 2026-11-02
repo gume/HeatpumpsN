@@ -305,7 +305,16 @@ def test_agent_loop_forces_finish_at_the_step_limit(tmp_path):
     assert meta["status"] == "done" and llm.seen[1][1] == ["finish"]
 
 
-needs_bwrap = pytest.mark.skipif(not shutil.which("bwrap") or not shutil.which("prlimit"), reason="bwrap missing")
+def _bwrap_works() -> bool:
+    import subprocess
+    if not shutil.which("bwrap") or not shutil.which("prlimit"):
+        return False
+    probe = subprocess.run(["bwrap", "--unshare-all", "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib64", "/lib64",
+                            "--symlink", "usr/lib", "/lib", "/usr/bin/true"], capture_output=True)
+    return probe.returncode == 0
+
+
+needs_bwrap = pytest.mark.skipif(not _bwrap_works(), reason="bwrap missing or user namespaces not allowed")
 
 
 @needs_bwrap
