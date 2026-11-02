@@ -79,14 +79,21 @@ Signals tab writes the entries. The generic starter file is
   integration is removed.
 
 
+### 1.9 Release deployment (2026-11-02)
+
+`observer/Dockerfile`, `observer/deploy/` (compose, env.example, README with
+the migration steps). Tested on this machine as a separate compose project
+(removed afterwards, with its volumes). The owner deploys it on another
+machine and moves state and history there with the state and database
+export/import; development continues here. Agent runs do not work in the
+container yet (sandbox).
+
 ### 2.0 Database export and import (2026-11-02)
 
 `observer/dbarchive.py`; Status tab and `observer db export|import`. One
 Parquet+zstd file (~2 bytes/sample), import writes only samples whose
-(signal, field, timestamp) is missing, never deletes. A test bucket
-`observer_import_test` (retention 1 h, empties itself) was created in the dev
-InfluxDB for the round-trip check; it can stay or be removed with the owner's
-agreement.
+(signal, field, timestamp) is missing, never deletes. (The round-trip test
+bucket was removed on the owner's request.)
 
 ### 2.1 Agent, sandbox, data socket, library (2026-11-02)
 

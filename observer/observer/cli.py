@@ -5,7 +5,8 @@ OBSERVER_HOME (default ~/.local/share/heatpumpsn-observer): config.yaml, .env,
 registry.yaml, house/ (description, model, notes, archive) and data/ (catalog,
 settings, proposals). The repository holds only code, docs and defaults.
 
-  init     [--home PATH]   create the data directory from the defaults
+  init     [--home PATH] [--profile dev|release]   create the data directory from the defaults
+  influx-setup             create the read-only InfluxDB token if missing (idempotent)
 
   serve    [--dry-run] [--host H] [--port P]   ingest + web portal (http://H:P/), the normal way to run it
   listen   [--seconds N]   collect for N s (default 120): update the catalog, store nothing
@@ -14,6 +15,8 @@ settings, proposals). The repository holds only code, docs and defaults.
   propose  [--limit N]     ask the LLM to describe unregistered signals -> proposals.yaml
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
 
+  state export [FILE.tgz] | state import FILE.tgz
+                           registry, house understanding, library, settings, context (not secrets, not data)
   db export [-o FILE] [--start T] [--stop T]   recorded samples into one compact Parquet file
   db import FILE [--dry-run]                   add the samples the database does not have (never deletes)
 
@@ -53,14 +56,15 @@ def observer_home() -> str:
         os.environ.get("OBSERVER_HOME") or "~/.local/share/heatpumpsn-observer"))
 
 
-def cmd_init(home: str) -> None:
+def cmd_init(home: str, profile: str = "dev") -> None:
     """Create the data directory; files that already exist are left alone."""
     import shutil
 
     os.makedirs(os.path.join(home, "data"), exist_ok=True)
     os.makedirs(os.path.join(home, "house", "archive"), exist_ok=True)
     created = []
-    for src, dst in (("config.example.yaml", "config.yaml"), ("env.example", ".env"),
+    config = "config.release.yaml" if profile == "release" else "config.example.yaml"
+    for src, dst in ((config, "config.yaml"), ("env.example", ".env"),
                      ("registry.yaml", "registry.yaml")):
         target = os.path.join(home, dst)
         if not os.path.exists(target):
@@ -88,6 +92,24 @@ def load_env(path: str) -> None:
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+ENV_OVERRIDES = (("OBSERVER_MQTT_HOST", "mqtt", "host", str), ("OBSERVER_MQTT_PORT", "mqtt", "port", int),
+                 ("OBSERVER_MQTT_USER", "mqtt", "username", str),
+                 ("OBSERVER_INFLUX_URL", "influx", "url", str), ("OBSERVER_INFLUX_ORG", "influx", "org", str),
+                 ("OBSERVER_INFLUX_BUCKET", "influx", "bucket", str))
+
+
+def apply_env_overrides(cfg: dict) -> None:
+    """Machine-specific settings from the environment win over config.yaml (docker compose)."""
+    for var, section, key, conv in ENV_OVERRIDES:
+        if os.environ.get(var, "").strip():
+            cfg.setdefault(section, {})[key] = conv(os.environ[var].strip())
+    if os.environ.get("OBSERVER_MQTT_PASSWORD"):
+        cfg.setdefault("mqtt", {})["password_env"] = "OBSERVER_MQTT_PASSWORD"
+    if "OBSERVER_MQTT_TOPIC_PREFIX" in os.environ:
+        prefix = os.environ["OBSERVER_MQTT_TOPIC_PREFIX"].strip()
+        cfg.setdefault("mqtt", {}).update(topic_prefix=prefix, subscribe=[prefix + "#"])
+
+
 def load_config(path: str) -> dict:
     if not os.path.exists(path):
         sys.exit(f"no configuration at {path}: run `observer init` (data directory: OBSERVER_HOME)")
@@ -96,6 +118,7 @@ def load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as fp:
         cfg = yaml.safe_load(fp) or {}
     cfg["llm"] = cfg.get("llm") or {}   # providers come from .env, models from the Settings page
+    apply_env_overrides(cfg)
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
@@ -106,6 +129,7 @@ def load_config(path: str) -> dict:
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
     paths["house_dir"] = os.path.dirname(paths["house_dir"])   # a folder: house/
+    cfg["config_path"] = os.path.abspath(path)
     old_draft = os.path.join(os.path.dirname(paths["house_draft"]), "house_proposal.yaml")
     if os.path.exists(old_draft) and not os.path.exists(paths["house_draft"]):
         os.replace(old_draft, paths["house_draft"])             # the draft's former name
@@ -350,6 +374,63 @@ def cmd_db(cfg: dict, args) -> None:
     print(json.dumps(r, indent=1))
 
 
+def cmd_influx_setup(cfg: dict, args) -> None:
+    """Create the read-only token for the agent tools and exports, if missing (idempotent)."""
+    import httpx
+
+    i = cfg.get("influx") or {}
+    url, org, bucket = i.get("url", "").rstrip("/"), i.get("org", ""), i.get("bucket", "")
+    admin = os.environ.get(i.get("token_env", "INFLUX_TOKEN"), "")
+    var = (cfg.get("agent") or {}).get("read_token_env", "OBSERVER_INFLUX_READ_TOKEN")
+    current = os.environ.get(var, "")
+    if current:
+        r = httpx.post(f"{url}/api/v2/query", params={"org": org}, headers={"Authorization": f"Token {current}",
+                       "Content-Type": "application/vnd.flux"},
+                       content=f'from(bucket: "{bucket}") |> range(start: -1m) |> limit(n: 1)', timeout=30)
+        if r.status_code == 200:
+            print(f"{var}: present and valid")
+            return
+        print(f"{var}: not valid here (HTTP {r.status_code}), creating a new one")
+    if not admin:
+        sys.exit("influx-setup needs the write/admin token (INFLUX_TOKEN)")
+    h = {"Authorization": f"Token {admin}"}
+    orgs = httpx.get(f"{url}/api/v2/orgs", params={"org": org}, headers=h, timeout=30).json().get("orgs") or []
+    buckets = httpx.get(f"{url}/api/v2/buckets", params={"name": bucket, "org": org}, headers=h,
+                        timeout=30).json().get("buckets") or []
+    if not orgs or not buckets:
+        sys.exit(f"InfluxDB at {url}: org {org!r} or bucket {bucket!r} not found")
+    org_id, bucket_id = orgs[0]["id"], buckets[0]["id"]
+    r = httpx.post(f"{url}/api/v2/authorizations", headers=h, timeout=30, json={
+        "orgID": org_id, "description": "observer: read-only (agent tools, exports)",
+        "permissions": [{"action": "read", "resource": {"type": "buckets", "id": bucket_id, "orgID": org_id}}]})
+    r.raise_for_status()
+    token = r.json()["token"]
+    env_path = os.path.join(os.path.dirname(os.path.abspath(args.config)), ".env")
+    lines = open(env_path, encoding="utf-8").read().splitlines() if os.path.exists(env_path) else []
+    lines = [ln for ln in lines if not ln.strip().startswith(f"{var}=")] + [f"{var}={token}"]
+    with open(env_path, "w", encoding="utf-8") as fp:
+        fp.write("\n".join(lines) + "\n")
+    os.chmod(env_path, 0o600)
+    print(f"{var}: created (read access to bucket {bucket}) and stored in {env_path}")
+
+
+def cmd_state(cfg: dict, args) -> None:
+    from .state import export_state, import_state
+
+    if args.action == "export":
+        out = args.file or time.strftime("observer-state-%Y%m%d-%H%M%S.tgz")
+        data = export_state(cfg)
+        with open(out, "wb") as fp:
+            fp.write(data)
+        print(f"{out}: {len(data)} bytes")
+    else:
+        if not args.file:
+            sys.exit("state import FILE")
+        with open(args.file, "rb") as fp:
+            print(import_state(cfg, fp.read(), cfg["config_path"]))
+        print("restart a running observer (it reads the state at start)")
+
+
 def cmd_mcp(cfg: dict, args) -> None:
     from .agent.mcp_server import serve
 
@@ -367,6 +448,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("init")
     p.add_argument("--home", default=None)
+    p.add_argument("--profile", choices=["dev", "release"], default="dev",
+                   help="release: the configuration for docker compose (mqtt.home, influxdb:8086)")
     p = sub.add_parser("serve")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--host", default=None)
@@ -399,6 +482,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--skill", default=None)
     p.add_argument("question", nargs="*")
     sub.add_parser("mcp")
+    sub.add_parser("influx-setup")
+    p = sub.add_parser("state")
+    p.add_argument("action", choices=["export", "import"])
+    p.add_argument("file", nargs="?", default=None)
     p = sub.add_parser("db")
     p.add_argument("action", choices=["export", "import"])
     p.add_argument("file", nargs="?", default=None)
@@ -410,13 +497,14 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if args.command == "init":
-        cmd_init(os.path.abspath(os.path.expanduser(args.home)) if args.home else observer_home())
+        cmd_init(os.path.abspath(os.path.expanduser(args.home)) if args.home else observer_home(), args.profile)
         return
     cfg = load_config(args.config)
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
      "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "library": cmd_library, "test-tool": cmd_test_tool,
      "agent": cmd_agent,
-     "mcp": cmd_mcp, "db": cmd_db}[args.command](cfg, args)
+     "mcp": cmd_mcp, "db": cmd_db, "influx-setup": cmd_influx_setup,
+     "state": cmd_state}[args.command](cfg, args)
 
 
 if __name__ == "__main__":

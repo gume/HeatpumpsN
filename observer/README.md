@@ -269,6 +269,19 @@ docker exec observer-influx-dev influx auth create --org heatpumpsn \
 uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
 ```
 
+## Deployment (release)
+
+`deploy/docker-compose.yml` runs InfluxDB and the observer (image from
+`Dockerfile`); settings in `deploy/.env` (`deploy/env.example`). Step by step,
+including moving the state and the history from the development observer:
+[`deploy/README.md`](deploy/README.md). The release configuration takes the
+machine-specific settings from the environment (`OBSERVER_MQTT_HOST`,
+`_PORT`, `_USER`, `_PASSWORD`, `_TOPIC_PREFIX`, `OBSERVER_INFLUX_URL`,
+`_ORG`, `_BUCKET`); `observer influx-setup` creates the read-only token; a
+portal password (`OBSERVER_PORTAL_PASSWORD`, HTTP Basic) protects everything
+but `/healthz`. `observer state export|import` moves registry, catalog, house
+understanding, house library, settings and context between observers.
+
 ## Database export and import
 
 The recorded samples can be taken out of InfluxDB and brought back as **one

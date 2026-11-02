@@ -1,0 +1,94 @@
+# Deploying the observer (release)
+
+Two containers: **InfluxDB 2.7** (the recorded samples) and the **observer**
+(ingest from the home MQTT broker, portal, house understanding, library,
+exports). Development keeps running on the development machine; the release
+machine starts collecting on its own and receives the history and the
+observer's state by export/import.
+
+## 1. Install
+
+On the release machine (Docker with the compose plugin):
+
+```bash
+git clone <HeatpumpsN repository> && cd HeatpumpsN/observer/deploy   # only observer/ is needed
+cp env.example .env
+# fill in .env: INFLUX_ADMIN_PASSWORD and INFLUX_ADMIN_TOKEN (openssl rand -hex 32),
+# OBSERVER_MQTT_HOST/PORT (the home broker), OBSERVER_PORTAL_PASSWORD, TZ
+docker compose up -d --build
+docker compose ps            # both healthy after about a minute
+docker compose logs observer # "MQTT connected", "OBSERVER_INFLUX_READ_TOKEN: created"
+```
+
+On the first start InfluxDB creates the org and the bucket (unlimited
+retention), and the observer creates `/data` from the release configuration
+(`observer/defaults/config.release.yaml`) and its own **read-only token**.
+Collection starts at once with the generic registry rules.
+
+The portal is published on `127.0.0.1:8090`: reach it with an SSH tunnel
+(`ssh -L 8090:127.0.0.1:8090 <machine>`), or set `OBSERVER_BIND=0.0.0.0`
+together with `OBSERVER_PORTAL_PASSWORD` (HTTP Basic, user
+`OBSERVER_PORTAL_USER`). The portal can change the registry and import data:
+never expose it without the password.
+
+## 2. Bring the observer's state and the history
+
+On the **development** observer (portal, Status tab, "Database export and import"):
+
+1. **Export state (.tgz)**: registry (which signals are stored and what they
+   mean), catalog, house understanding (review, owner knowledge, accepted
+   versions, draft), house library items, audit flags, model settings, the
+   house context. No secrets, no recorded data.
+2. **Export** (database): one Parquet file with all recorded samples
+   (about 2 bytes per sample), downloadable from the list.
+
+On the **release** observer (same section):
+
+1. **Import state…**: replaces registry, house, library and settings (the
+   previous files go to `/data/backup/<time>/`); the ingest uses the new
+   registry at once.
+2. **Import a file…** with *dry run* unchecked: writes the samples the
+   release database does not have. Samples already present (same signal,
+   same timestamp) are skipped, so the overlap with what the release machine
+   has collected meanwhile, or a second import, never duplicates anything.
+   Nothing is deleted.
+
+The same works from the command line inside the container:
+
+```bash
+docker compose cp observer-state.tgz observer:/data/exports/
+docker compose exec observer observer state import /data/exports/observer-state.tgz
+docker compose cp observer-20261102-153653.parquet observer:/data/exports/
+docker compose exec observer observer db import /data/exports/observer-20261102-153653.parquet
+```
+
+## 3. Optional
+
+* **LLM**: `OBSERVER_LLM_BASE_URL` / `OBSERVER_LLM_KEY` in `.env` (a proxy on
+  the Docker host: `http://host.docker.internal:<port>/v1`), then the models
+  per task on the Settings page.
+* **Library**: build a pack in the observer-library repository
+  (`scripts/pack.sh`) and import it on the Library tab.
+* **Agent runs** are not available in the container yet: the sandbox
+  (bubblewrap) needs user namespaces, which Docker's default security profile
+  blocks, and the sandbox's Python environment is not in the image. Data
+  collection, the portal, the house understanding and the LLM tasks
+  (descriptions, house understanding, harvest proposals) work; running a
+  tool's tests needs the sandbox too.
+
+## 4. Operate
+
+* **Update**: `git pull && docker compose up -d --build` (data stays in the
+  volumes `heatpumpsn-observer_influx-data`, `_influx-config`, `_observer-data`).
+* **Backup**: Status tab → Export, or
+  `docker compose exec observer observer db export` (the file lands in
+  `/data/exports/`; `docker compose cp observer:/data/exports/<file> .`).
+  A state export alongside keeps the registry and the house understanding.
+* **InfluxDB UI**: `http://127.0.0.1:8086`, user `INFLUX_ADMIN_USER`.
+* **Never** run `docker compose down -v` on the release machine: `-v`
+  deletes the volumes, i.e. all recorded data.
+
+Checked on the development machine with a separate test project: first
+start (setup, read token, MQTT, storing), state import (102 stored signals
+from the development registry), import of 1,003,897 samples, a second
+import writing 0, restart with everything kept.

@@ -1,0 +1,70 @@
+# HeatpumpsN observer, release: InfluxDB + the observer.
+#
+#   cp env.example .env        # fill in the passwords, tokens and the broker
+#   docker compose up -d --build
+#
+# Everything persistent is in three named volumes (prefixed with the project
+# name): influx-data (the recorded samples), influx-config, observer-data
+# (/data: config, registry, house understanding, library, runs, exports).
+# Ports are published on 127.0.0.1 by default; set OBSERVER_BIND=0.0.0.0 in
+# .env to reach the portal from the network (then set a portal password).
+name: heatpumpsn-observer
+
+services:
+  influxdb:
+    image: influxdb:2.7.12
+    restart: unless-stopped
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup          # only on the very first start (empty volume)
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-observer}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?set INFLUX_ADMIN_PASSWORD in .env}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-heatpumpsn}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-observer}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_ADMIN_TOKEN:?set INFLUX_ADMIN_TOKEN in .env}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - influx-data:/var/lib/influxdb2
+      - influx-config:/etc/influxdb2
+    ports:
+      - "${INFLUX_BIND:-127.0.0.1}:${INFLUX_PORT:-8086}:8086"   # InfluxDB UI and API (optional)
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  observer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.2.0}
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
+      OBSERVER_INFLUX_URL: http://influxdb:8086
+      OBSERVER_INFLUX_ORG: ${INFLUX_ORG:-heatpumpsn}
+      OBSERVER_INFLUX_BUCKET: ${INFLUX_BUCKET:-observer}
+      OBSERVER_MQTT_HOST: ${OBSERVER_MQTT_HOST:-mqtt.home}
+      OBSERVER_MQTT_PORT: ${OBSERVER_MQTT_PORT:-1883}
+      OBSERVER_MQTT_USER: ${OBSERVER_MQTT_USER:-}
+      OBSERVER_MQTT_PASSWORD: ${OBSERVER_MQTT_PASSWORD:-}
+      OBSERVER_MQTT_TOPIC_PREFIX: ${OBSERVER_MQTT_TOPIC_PREFIX:-}
+      OBSERVER_PORTAL_USER: ${OBSERVER_PORTAL_USER:-admin}
+      OBSERVER_PORTAL_PASSWORD: ${OBSERVER_PORTAL_PASSWORD:-}
+      OBSERVER_LLM_BASE_URL: ${OBSERVER_LLM_BASE_URL:-}
+      OBSERVER_LLM_KEY: ${OBSERVER_LLM_KEY:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - observer-data:/data
+    ports:
+      - "${OBSERVER_BIND:-127.0.0.1}:${OBSERVER_PORT:-8090}:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # a broker or LLM proxy on the Docker host
+
+volumes:
+  influx-data:
+  influx-config:
+  observer-data:

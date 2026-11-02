@@ -123,6 +123,12 @@
         <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;align-self:flex-end">Import a file…<input type="file" id="db-import" accept=".parquet" style="display:none"></label>
       </div>
       <div id="db-job" style="margin:6px 0"></div>
+      <p class="dim" style="margin:8px 0 4px">The observer's <strong>state</strong> (registry, house understanding, library, model
+        settings, house context; no secrets, no recorded data) moves separately: export here, import on the other observer
+        (it replaces those files there and keeps the old ones in <span class="mono">backup/</span>).</p>
+      <div class="bar"><a class="btn" href="/api/state/export">Export state (.tgz)</a>
+        <label class="btn">Import state…<input type="file" id="state-import" accept=".tgz,.tar.gz" style="display:none"></label>
+        <span class="dim" id="state-msg"></span></div>
       <div class="table-wrap"><table><thead><tr><th>Export file</th><th class="num">Size</th><th>Created</th><th></th></tr></thead><tbody id="db-files"></tbody></table></div>
     </div>
   </section>
@@ -373,6 +379,15 @@ async function loadDb() {
     await api(`/api/db/file?name=${encodeURIComponent(b.dataset.dbdel)}`, { method: 'DELETE' }); loadDb();
   }));
 }
+$('#state-import').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  if (!confirm(`Import the state ${f.name}? Registry, house, library and settings of this observer are replaced (the old files are kept in backup/).`)) { e.target.value = ''; return; }
+  try { const r = await fetch('/api/state/import', { method: 'POST', body: f }); const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        $('#state-msg').textContent = `Imported ${d.files} files (exported ${d.exported})${d.backup ? '; previous state in ' + d.backup : ''}.`; }
+  catch (err) { $('#state-msg').textContent = err.message; }
+  e.target.value = '';
+});
 const isoOrNull = (v) => v ? new Date(v).toISOString() : null;
 $('#db-export').addEventListener('click', async () => {
   try { await api('/api/db/export', { method: 'POST', body: JSON.stringify({ start: isoOrNull($('#db-start').value), stop: isoOrNull($('#db-stop').value) }) }); }

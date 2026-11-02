@@ -54,16 +54,9 @@ agent:
     tasks: 64
     file_mb: 200
 
-# What the LLM (and later the reports) know about the house.
+# What the LLM, the house understanding and the agent know about the house
+# before any review: a few lines on the building, the heat source, the
+# circuits and the rooms. The House tab refines it.
 context: |
-  Three-storey house: TF top floor, MF middle floor, BF bottom floor, plus an attic.
-  Gas condensing boiler (Buderus/Bosch EMS bus, read by EMS-ESP) with a DHW buffer tank.
-  Heating distribution controller (HeatpumpsN, ESP32): three circuits fed by the boiler.
-    - Radiator circuit 1 = MF (middle floor), pump 1, unmixed, boiler supply temperature.
-    - Radiator circuit 2 = TF (top floor), pump 2, unmixed, boiler supply temperature.
-    - Floor heating = BF (bottom floor), pump 3 / floor pump, 3-way motorised mixer.
-  The controller derives the boiler heat call from the three circuit demands from Home Assistant.
-  MixerMeter: a BMI160 rotary encoder on the floor mixer valve (independent position).
-  EMS-ESP DS18B20 sensors measure forward (fwd) and return (back) of each circuit.
-  Room temperature/humidity sensors (BLE, via Home Assistant Statestream) in the rooms.
-  Zigbee2MQTT devices: mostly lights, switches, buttons, motion sensors, plugs.
+  (Describe the house here: floors, heat source, heating circuits and what
+  they serve, controller, important sensors.)

@@ -20,6 +20,36 @@ STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 def create_app(service: Service) -> FastAPI:
     app = FastAPI(title="HeatpumpsN observer", docs_url="/api/docs", redoc_url=None)
+    user = os.environ.get("OBSERVER_PORTAL_USER", "admin")
+    password = os.environ.get("OBSERVER_PORTAL_PASSWORD", "")
+
+    if password:
+        import base64
+        import hmac
+
+        from fastapi.responses import PlainTextResponse
+
+        @app.middleware("http")
+        async def basic_auth(request: Request, call_next):
+            """HTTP Basic authentication for everything but /healthz, when a portal password is set."""
+            if request.url.path != "/healthz":
+                ok = False
+                header = request.headers.get("authorization", "")
+                if header.lower().startswith("basic "):
+                    try:
+                        u, _, p = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+                        ok = hmac.compare_digest(u.encode(), user.encode()) & hmac.compare_digest(p.encode(),
+                                                                                              password.encode())
+                    except (ValueError, UnicodeDecodeError):
+                        ok = False
+                if not ok:
+                    return PlainTextResponse("login required", status_code=401,
+                                             headers={"WWW-Authenticate": 'Basic realm="observer", charset="UTF-8"'})
+            return await call_next(request)
+
+    @app.get("/healthz")
+    def healthz():
+        return {"ok": True, "mqtt": bool(service.mqtt and service.mqtt.connected), "storage": service.writer_kind}
 
     @app.get("/")
     def index():
@@ -102,6 +132,24 @@ def create_app(service: Service) -> FastAPI:
             return service.archived(stamp)
         except KeyError as exc:
             raise HTTPException(404, "no such archived version") from exc
+
+    # --- the observer's state ------------------------------------------------------
+    @app.get("/api/state/export")
+    def state_export():
+        import time as _t
+
+        data = service.state_export()
+        name = _t.strftime("observer-state-%Y%m%d-%H%M%S.tgz")
+        return Response(data, media_type="application/gzip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.post("/api/state/import")
+    async def state_import(request: Request):
+        data = await request.body()
+        try:
+            return await run_in_threadpool(service.state_import, data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     # --- database export / import ------------------------------------------------
     @app.get("/api/db")

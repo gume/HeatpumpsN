@@ -1,0 +1,63 @@
+# Release configuration (docker compose): written to /data/config.yaml on the
+# first start (`observer init --profile release`). Secrets and the machine-
+# specific settings come from environment variables (deploy/.env).
+
+mqtt:
+  host: mqtt.home        # environment OBSERVER_MQTT_HOST wins
+  port: 1883             # OBSERVER_MQTT_PORT
+  topic_prefix: ""       # OBSERVER_MQTT_TOPIC_PREFIX (e.g. "mirror/" behind a bridge)
+  subscribe: ["#"]
+  # username: observer
+  # password_env: OBSERVER_MQTT_PASSWORD
+
+statestream_base: ha_state  # HA MQTT Statestream base topic
+
+influx:
+  url: http://influxdb:8086   # the compose service; OBSERVER_INFLUX_URL wins
+  org: heatpumpsn
+  bucket: observer
+  token_env: INFLUX_TOKEN
+
+web:
+  host: 0.0.0.0           # inside the container; the compose file decides what is published
+  port: 8090
+
+paths:
+  catalog: data/catalog.json
+  registry: registry.yaml
+  proposals: data/proposals.yaml
+
+# Optional: any OpenAI-compatible endpoint (Ollama, LiteLLM, a hosted API).
+# Usually set in .env: OBSERVER_LLM_BASE_URL, OBSERVER_LLM_MODEL, OBSERVER_LLM_KEY.
+llm:
+  base_url: ""            # .env wins: e.g. http://ollama-host:11434/v1
+  model: ""               # .env wins: e.g. qwen2.5:14b
+  api_key_env: OBSERVER_LLM_KEY   # empty for Ollama
+  timeout_s: 300
+
+# Agent runs (portal Agent tab, `observer agent`, `observer mcp`). The model is
+# chosen on the Settings page (task "agent"); the database is read with the
+# read-only token OBSERVER_INFLUX_READ_TOKEN from .env. Code the agent writes
+# runs in a rootless sandbox without network (`observer sandbox-setup` once).
+agent:
+  read_token_env: OBSERVER_INFLUX_READ_TOKEN
+  # Library folders (git checkouts of shared tool/skill libraries), highest
+  # precedence first; house items in the data directory always come first,
+  # imported packs last.
+  library_paths: []       # e.g. [~/Work/observer-library]
+  max_steps: 25
+  deadline_s: 1800      # strong (thinking) models need 1-2 min per step
+  sandbox:
+    runtime: bwrap        # bwrap (rootless, default) | podman | docker
+    wall_s: 120           # per code run
+    cpu_s: 120
+    memory_mb: 1024
+    tasks: 64
+    file_mb: 200
+
+# What the LLM, the house understanding and the agent know about the house
+# before any review: a few lines on the building, the heat source, the
+# circuits and the rooms. The House tab refines it.
+context: |
+  (Describe the house here: floors, heat source, heating circuits and what
+  they serve, controller, important sensors.)

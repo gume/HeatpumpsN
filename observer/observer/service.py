@@ -79,6 +79,30 @@ class Service:
             with self.lock:
                 self.ingest.catalog.save()
 
+    # --- the observer's state (registry, house, library, settings) -----------------
+    def state_export(self) -> bytes:
+        from .state import export_state
+
+        with self.lock:
+            self.ingest.catalog.save()
+        return export_state(self.cfg)
+
+    def state_import(self, data: bytes) -> dict:
+        """Replace registry, catalog, house, library and settings; the old ones go to backup/."""
+        from .registry import Registry
+        from .catalog import Catalog
+        from .settings import Settings
+        from .state import import_state
+
+        with self.lock:
+            result = import_state(self.cfg, data, self.cfg["config_path"])
+            paths = self.cfg["paths"]
+            self.ingest.registry = Registry(paths["registry"])
+            self.ingest.catalog = Catalog(paths["catalog"])
+            self.settings = Settings(paths["settings"], float((self.cfg.get("llm") or {}).get("timeout_s", 300)))
+            self._agents = None                      # the library is read again on first use
+        return result
+
     # --- database export / import (background jobs) ---------------------------------
     def _influx(self, write: bool):
         from .dbarchive import Influx
