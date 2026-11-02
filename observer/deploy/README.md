@@ -87,12 +87,35 @@ docker compose exec observer observer db import /data/exports/observer-20261102-
   asset, e.g.
   `https://github.com/gume/observer-library/releases/download/v0.2.0/observer-library-0.2.0.tgz`
   (or `docker compose exec observer observer library import <url>`).
-* **Agent runs** are not available in the container yet: the sandbox
-  (bubblewrap) needs user namespaces, which Docker's default security profile
-  blocks, and the sandbox's Python environment is not in the image. Data
-  collection, the portal, the house understanding and the LLM tasks
-  (descriptions, house understanding, harvest proposals) work; running a
-  tool's tests needs the sandbox too.
+* **LLM providers**: `OBSERVER_LLM_BASE_URL` / `OBSERVER_LLM_KEY` (and
+  `OBSERVER_LLM_2_BASE_URL` / `_KEY` … up to 9) in `deploy/.env`, then
+  `docker compose up -d`; they appear on the Settings page, where the model
+  per task is chosen. "localhost" inside the container is the container
+  itself: a proxy on the Docker host is `http://host.docker.internal:<port>/v1`,
+  on another machine its address (and it must listen there, not only on
+  127.0.0.1).
+* **Agent sandbox** (agent runs, tool tests): the image contains bubblewrap
+  and the sandbox's Python environment, but Docker's default security
+  profiles forbid the namespaces bubblewrap creates. Allow them for the
+  observer container with the extra compose file:
+
+  ```bash
+  echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.sandbox.yml' >> .env
+  docker compose up -d
+  docker compose exec observer observer sandbox-check
+  ```
+
+  `sandbox-check` must end with `sandbox OK` and report `network: none`, no
+  visible `.env`, no tokens and an enforced memory limit. What it costs: the
+  observer container runs without Docker's seccomp and AppArmor profiles
+  (still as a non-root user, without extra capabilities); every piece of
+  agent code runs inside bubblewrap without network, sees only its workspace
+  and read-only libraries, and is limited in memory, processes, CPU time and
+  file size. `OBSERVER_MEM_LIMIT` (default 3g) caps the whole container. On
+  hosts that forbid unprivileged user namespaces altogether (some kernels'
+  `kernel.unprivileged_userns_clone=0` or Ubuntu's AppArmor restriction),
+  `sandbox-check` says so; data collection and everything else work
+  regardless.
 
 ## 4. Operate
 

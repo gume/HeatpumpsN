@@ -91,3 +91,14 @@ def test_portal_password(tmp_path, monkeypatch):
     auth = lambda u, p: {"Authorization": "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()}
     assert client.get("/api/status", headers=auth("admin", "wrong")).status_code == 401
     assert client.get("/api/status", headers=auth("admin", "s3cret")).status_code == 200
+
+
+def test_empty_environment_does_not_hide_the_env_file(tmp_path, monkeypatch):
+    from observer.cli import load_env
+
+    (tmp_path / ".env").write_text("OBSERVER_LLM_BASE_URL=http://proxy:4000/v1\nOBSERVER_LLM_KEY=k\n")
+    monkeypatch.setenv("OBSERVER_LLM_BASE_URL", "")              # what compose passes when deploy/.env is silent
+    monkeypatch.setenv("OBSERVER_LLM_KEY", "from-compose")
+    load_env(str(tmp_path / ".env"))
+    assert os.environ["OBSERVER_LLM_BASE_URL"] == "http://proxy:4000/v1"
+    assert os.environ["OBSERVER_LLM_KEY"] == "from-compose"      # a real value from the environment still wins

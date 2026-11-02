@@ -21,6 +21,7 @@ settings, proposals). The repository holds only code, docs and defaults.
   db import FILE [--dry-run]                   add the samples the database does not have (never deletes)
 
   sandbox-setup            create the sandbox's Python environment (numpy, pandas, scipy, matplotlib)
+  sandbox-check            probe the sandbox: isolation, network, secrets, memory limit
   library [list]           the library sources, tools and skills (version, audit and test state)
   library export [--all | --item KIND/NAME ...] [--name N] [--version V] [-o FILE.tgz]
                            house items (default), all items or chosen ones as a .tgz pack
@@ -81,7 +82,11 @@ def cmd_init(home: str, profile: str = "dev") -> None:
 
 
 def load_env(path: str) -> None:
-    """KEY=VALUE lines from a .env file into the environment (existing variables win)."""
+    """KEY=VALUE lines from a .env file into the environment.
+
+    A variable already set in the environment wins, unless it is empty: docker
+    compose passes every listed variable, empty when deploy/.env leaves it out,
+    and that must not hide the value in the data directory's .env."""
     if not os.path.exists(path):
         return
     with open(path, encoding="utf-8") as fp:
@@ -90,7 +95,9 @@ def load_env(path: str) -> None:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+            key = key.strip()
+            if not os.environ.get(key):
+                os.environ[key] = value.strip().strip('"').strip("'")
 
 
 ENV_OVERRIDES = (("OBSERVER_MQTT_HOST", "mqtt", "host", str), ("OBSERVER_MQTT_PORT", "mqtt", "port", int),
@@ -130,6 +137,8 @@ def load_config(path: str) -> dict:
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
     paths["house_dir"] = os.path.dirname(paths["house_dir"])   # a folder: house/
+    if os.environ.get("OBSERVER_SANDBOX_VENV"):                # the container image brings its own
+        paths["sandbox_venv"] = os.environ["OBSERVER_SANDBOX_VENV"]
     cfg["config_path"] = os.path.abspath(path)
     old_draft = os.path.join(os.path.dirname(paths["house_draft"]), "house_proposal.yaml")
     if os.path.exists(old_draft) and not os.path.exists(paths["house_draft"]):
@@ -284,6 +293,39 @@ def cmd_sandbox_setup(cfg: dict, args) -> None:
                    "except OSError:\n    print('network: none')\n", os.path.join(sb.venv, "..", "probe"), "probe")
     print(probe.stdout.strip() or probe.stderr.strip())
     print(sb.status())
+
+
+def cmd_sandbox_check(cfg: dict, args) -> None:
+    """Run probes inside the sandbox and report what the code there can and cannot do."""
+    import tempfile
+
+    from .agent.manager import make_sandbox
+
+    sb = make_sandbox(cfg)
+    st = sb.status()
+    print(f"runtime {st['runtime']}, environment {st['venv']}, memory limit by {st['memory_limit']}")
+    if not st["ready"]:
+        sys.exit("NOT READY: " + "; ".join(st["problems"]))
+    secret = os.path.join(os.path.dirname(cfg["config_path"]), ".env")
+    probe = (
+        "import os, socket, sys\n"
+        "import numpy, pandas, scipy, matplotlib\n"
+        "print('python', sys.version.split()[0], '| numpy', numpy.__version__, '| pandas', pandas.__version__)\n"
+        "try:\n    socket.create_connection(('1.1.1.1', 53), 3); print('NETWORK: OPEN (not isolated)')\n"
+        "except OSError as e:\n    print('network: none', '(' + str(e) + ')')\n"
+        f"print('data directory .env visible:', os.path.exists({secret!r}))\n"
+        "print('tokens in the environment:', [k for k in os.environ if 'TOKEN' in k or 'KEY' in k] or 'none')\n")
+    with tempfile.TemporaryDirectory(prefix="obs-check-") as ws:
+        r = sb.run(probe, ws, "check")
+        print(r.stdout.strip())
+        if r.exit_code != 0:
+            print(r.stderr.strip()[-2000:])
+            sys.exit("SANDBOX FAILED: bubblewrap could not start or the probe failed. In docker, start with "
+                     "docker-compose.sandbox.yml (see deploy/README.md).")
+        mem = sb.run(f"b = bytearray({(sb.limits.memory_mb + 768) * 1024 * 1024}); print('NOT LIMITED')", ws, "mem")
+        print("memory limit:", "enforced" if mem.exit_code != 0 else "NOT ENFORCED")
+        print("/proc:", "own" if sb.with_proc else "none (the container refuses a /proc mount; not needed)")
+    print("sandbox OK")
 
 
 def cmd_library(cfg: dict, args) -> None:
@@ -483,6 +525,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--all", action="store_true")
     p.add_argument("--min-confidence", type=float, default=0.7)
     sub.add_parser("sandbox-setup")
+    sub.add_parser("sandbox-check")
     p = sub.add_parser("library")
     p.add_argument("action", nargs="?", default="list", choices=["list", "export", "import", "remove-pack"])
     p.add_argument("file", nargs="?", default=None, help="archive to import, or pack name to remove")
@@ -517,7 +560,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     cfg = load_config(args.config)
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
-     "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "library": cmd_library, "test-tool": cmd_test_tool,
+     "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "sandbox-check": cmd_sandbox_check, "library": cmd_library, "test-tool": cmd_test_tool,
      "agent": cmd_agent,
      "mcp": cmd_mcp, "db": cmd_db, "influx-setup": cmd_influx_setup,
      "state": cmd_state, "updates": cmd_updates}[args.command](cfg, args)

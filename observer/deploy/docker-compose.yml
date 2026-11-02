@@ -37,11 +37,12 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.3.0}
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.3.1}
     restart: unless-stopped
     depends_on:
       influxdb:
         condition: service_healthy
+    env_file: .env                                # every setting, e.g. OBSERVER_LLM_2_BASE_URL, OBSERVER_GITHUB_TOKEN
     environment:
       INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
       OBSERVER_INFLUX_URL: http://influxdb:8086

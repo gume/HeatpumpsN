@@ -1,0 +1,18 @@
+# Agent sandbox (optional): lets the observer start bubblewrap for agent-written code.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d
+#   (or COMPOSE_FILE=docker-compose.yml:docker-compose.sandbox.yml in .env)
+#
+# bubblewrap needs to create user, mount, network and PID namespaces. Docker's
+# default seccomp and AppArmor profiles forbid that, so this file switches them
+# off for the observer container. In exchange, every piece of agent code runs
+# inside bubblewrap: no network, only its workspace and read-only libraries,
+# no tokens, resource limits. The container keeps its other protections (non-root
+# user, no added capabilities, no privileged mode). Check with:
+#   docker compose exec observer observer sandbox-check
+services:
+  observer:
+    mem_limit: ${OBSERVER_MEM_LIMIT:-3g}          # backstop for the whole container (observer + sandboxed code)
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined

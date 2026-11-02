@@ -13,7 +13,7 @@ Plans: `plans/master_plan.md` (observer role, P4), `plans/observer_node.md`
 | **Identification from live data** (node §9.2, master P4): transport delay from pulse events, valve characteristic f(pos, T_boiler, T_return), gradient statistics | **missing as an automated job**; tools exist (`fopdt_fit`, `plant_identification` skill), the offline work in `floor_simulator/log_analysis` did it once on HA history |
 | **Parameter generation, validation on held-out data, push** (node §9.3, master 9.9, phase G) | **missing**: no backtest against recorded data/simulator, no approval flow, no signed push to the controller's `cmd/mpc/params` (the firmware side exists) |
 | Parameter versioning with rollback (node §9.4) | missing (depends on the push) |
-| Tool layer, sandbox, agents (phases D–F) | first version done; agents are started by hand, not by supervision; **not available in the release container** (sandbox) |
+| Tool layer, sandbox, agents (phases D–F) | first version done; agents are started by hand, not by supervision; in the release container with `docker-compose.sandbox.yml` (0.3.1) |
 | Sharing skills between houses (phase H) | separate repository, versions, packs done; no remote, no update pull |
 | Portal login (prerequisite for approvals) | HTTP Basic password done; no roles (a read-only user) |
 | Old HA history (one year) into the observer | **missing**: a converter from `analysis/heatpumps.duckdb` / HA InfluxDB to the export format (signal mapping) would let `db import` take it |

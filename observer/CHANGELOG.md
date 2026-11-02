@@ -4,6 +4,22 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## 0.3.1 - 2026-11-02
+
+* LLM providers set in the data directory's `.env` were hidden by the empty
+  variables docker compose passes: an empty environment variable no longer
+  wins over `.env`. The compose file passes the whole `deploy/.env` to the
+  observer, so providers 2-9 (`OBSERVER_LLM_<n>_BASE_URL/KEY`) and
+  `OBSERVER_GITHUB_TOKEN` arrive too.
+* Agent sandbox in the container: the image brings bubblewrap and the
+  sandbox's Python environment (numpy, pandas, scipy, matplotlib, pytest);
+  `deploy/docker-compose.sandbox.yml` allows the namespaces it needs
+  (seccomp and AppArmor unconfined for the observer container, memory cap
+  for the container). The sandbox runs without its own /proc where the
+  container refuses that mount, sees the dynamic linker's cache, and limits
+  memory by address space without systemd.
+* `observer sandbox-check`: network, secrets, memory limit, packages.
+
 ## 0.3.0 - 2026-11-02
 
 * Update check: the observer looks at the GitHub releases of the observer

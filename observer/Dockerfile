@@ -9,6 +9,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin observer \
  && mkdir -p /data && chown observer:observer /data
 
+# The agent sandbox: bubblewrap and the sandbox's own Python environment. It
+# works only when the container may create namespaces (docker-compose.sandbox.yml).
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap \
+ && rm -rf /var/lib/apt/lists/* \
+ && python -m venv /opt/sandbox/venv \
+ && /opt/sandbox/venv/bin/pip install --no-cache-dir numpy pandas scipy matplotlib pytest pyyaml \
+ && rm -rf /root/.cache
+ENV OBSERVER_SANDBOX_VENV=/opt/sandbox/venv
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY observer ./observer

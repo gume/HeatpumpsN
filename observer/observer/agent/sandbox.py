@@ -91,6 +91,9 @@ class Sandbox:
         # Read-only mounts: the obs client library and, from `tool_mounts()` at
         # run time (sources change when packs are imported), the tool folders.
         self.tool_mounts = tool_mounts
+        # Containers often refuse a fresh /proc mount (Docker masks parts of its
+        # /proc); the sandbox then runs without /proc, which Python does not need.
+        self.with_proc = True
 
     @property
     def mounts(self) -> dict[str, str]:
@@ -121,6 +124,7 @@ class Sandbox:
             problems.append("sandbox environment missing: run `observer sandbox-setup`")
         cgroup = self.runtime == "bwrap" and _user_systemd()
         return {"runtime": self.runtime, "ready": not problems, "problems": problems, "venv": self.venv,
+                "proc": "own /proc" if self.with_proc else "no /proc (container)",
                 "network": "none", "limits": self.limits.__dict__,
                 "memory_limit": "cgroup (systemd user scope)" if cgroup else
                 ("container" if self.runtime != "bwrap" else "address-space rlimit"),
@@ -153,11 +157,18 @@ class Sandbox:
             binds += ["--bind", socket_dir, "/run/obs"]
             env += ["--setenv", "OBS_SOCKET", "/run/obs/data.sock"]
         bw = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
-              *binds, "--ro-bind-try", "/etc/fonts", "/etc/fonts", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+              *binds, "--ro-bind-try", "/etc/fonts", "/etc/fonts",
+              # the dynamic linker's cache: Pythons in /usr/local (e.g. Docker images) find libpython through it
+              "--ro-bind-try", "/etc/ld.so.cache", "/etc/ld.so.cache",
+              *(["--proc", "/proc"] if self.with_proc else []),
+              "--dev", "/dev", "--tmpfs", "/tmp",
               "--bind", workspace, "/work", "--chdir", "/work",
               "--setenv", "HOME", "/work", "--setenv", "PATH", f"{self.venv}/bin:/usr/bin",
               "--setenv", "MPLBACKEND", "Agg", "--setenv", "MPLCONFIGDIR", "/tmp",
               "--setenv", "PYTHONDONTWRITEBYTECODE", "1", *env,
+              # few thread pools and malloc arenas: less reserved address space under an address-space limit
+              "--setenv", "OPENBLAS_NUM_THREADS", "2", "--setenv", "OMP_NUM_THREADS", "2",
+              "--setenv", "MALLOC_ARENA_MAX", "2",
               # -s -B (no user site, no bytecode); the environment is already
               # cleared, so PYTHONPATH is ours and -I is not needed.
               self.python, "-s", "-B", f"/work/{script}"]
@@ -167,7 +178,9 @@ class Sandbox:
             scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect",
                      "-p", f"MemoryMax={lim.memory_mb}M", "-p", "MemorySwapMax=0", "-p", f"TasksMax={lim.tasks}"]
             return scope + rl + ["--"] + bw
-        return rl + [f"--as={lim.memory_mb * 1024 * 1024 * 4}", f"--nproc={lim.tasks}", "--"] + bw
+        # Without a systemd user manager (containers): address-space limit as the memory
+        # guard; RLIMIT_NPROC counts all threads of the user, the observer's included.
+        return rl + [f"--as={(lim.memory_mb + 512) * 1024 * 1024}", f"--nproc={max(lim.tasks, 512)}", "--"] + bw
 
     def _container(self, workspace: str, script: str, socket_dir: str | None = None) -> list[str]:
         lim = self.limits
@@ -210,6 +223,9 @@ class Sandbox:
             out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             err = (exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")) + \
                 f"\nkilled: wall-clock limit of {self.limits.wall_s} s"
+        if self.runtime == "bwrap" and self.with_proc and "Can't mount proc" in err:
+            self.with_proc = False                   # once per process: retry without /proc
+            return self.run(code, workspace, name, socket_dir)
         if code_ in (137, -9) and not timed_out:
             err += f"\nkilled: probably the memory limit ({self.limits.memory_mb} MB)"
         after = _files(workspace)
