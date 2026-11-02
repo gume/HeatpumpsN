@@ -198,3 +198,17 @@ def test_retry_after_parsing_and_short_429_waits(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         client.chat("s", "u")                                        # long delay: raised at once, no waiting
     assert slept == [21, 4]
+
+    slept.clear()
+    answers[:] = [resp(429, "You exceeded your current quota: requests per day limit exceeded")]
+    with pytest.raises(httpx.HTTPStatusError):
+        client.chat("s", "u")                                        # quota used up: no retries
+    assert slept == []
+    answers[:] = [resp(429, "The model is overloaded. Please try again later."), resp(503, "busy"),
+                  resp(200, json.dumps({"choices": [{"message": {"content": "ok"}}]}))]
+    assert client.chat("s", "u") == "ok" and slept == [5, 10]       # busy: short waits, then it worked
+    slept.clear()
+    answers[:] = [resp(429, "Too many requests")] * 5
+    with pytest.raises(httpx.HTTPStatusError):
+        client.chat("s", "u")
+    assert slept == [5, 10, 20, 30]                                  # limited: four waits, then give up

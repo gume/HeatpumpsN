@@ -69,6 +69,16 @@ def retry_after_s(response) -> float | None:
     return _duration_s(m.group(1)) if m else None
 
 
+_QUOTA_WORDS = ("exceeded your current quota", "per day", "perday", "billing", "limit: 0", "daily")
+
+
+def quota_exhausted(response) -> bool:
+    """A 429 that means the plan's quota is used up (retrying soon is pointless),
+    as opposed to a busy or overloaded provider."""
+    text = (response.text or "").lower()
+    return any(w in text for w in _QUOTA_WORDS)
+
+
 def human_duration(seconds: float) -> str:
     if seconds < 90:
         return f"{seconds:.0f} s"
@@ -94,25 +104,29 @@ class LlmClient:
     RETRY_STATUS = (429, 500, 502, 503, 504)
     MAX_SHORT_WAIT_S = 60          # a 429 that asks for at most this long is waited out
     MAX_SHORT_WAITS = 5
+    BUSY_WAITS_S = (5, 10, 20, 30)  # busy / overloaded / unreachable: short waits, then give up
     sleep = staticmethod(time.sleep)
 
     def _post(self, body: dict, attempts: int = 3) -> dict:
         """POST /chat/completions with retries.
 
-        429 with a stated delay of at most a minute: wait it and repeat (up to
-        MAX_SHORT_WAITS times); a longer stated delay is raised at once (the
-        caller pauses); no stated delay: backoff like other transient errors."""
+        * 429 with a stated delay of at most a minute: wait it and repeat (up to
+          MAX_SHORT_WAITS times); a longer stated delay is raised at once;
+        * 429 meaning the quota is used up (per day, billing): raised at once;
+        * 429 "busy" (or saying nothing), 5xx, timeouts, lost connections: the
+          short waits of BUSY_WAITS_S, then raised.
+        A raised error pauses an agent run (see agent/runner.py)."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        attempt = short_waits = 0
+        busy = short_waits = 0
         while True:
             try:
                 r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
                                timeout=self.timeout_s)
             except (httpx.TimeoutException, httpx.TransportError):
-                attempt += 1
-                if attempt >= attempts:
+                if busy >= len(self.BUSY_WAITS_S):
                     raise
-                self.sleep(10 * attempt)
+                self.sleep(self.BUSY_WAITS_S[busy])
+                busy += 1
                 continue
             if r.status_code == 429:
                 delay = retry_after_s(r)
@@ -122,13 +136,15 @@ class LlmClient:
                         self.sleep(delay + 1)
                         continue
                     r.raise_for_status()                      # long wait: let the caller pause
+                if quota_exhausted(r):
+                    r.raise_for_status()                      # used up: retrying soon is pointless
             if r.status_code not in self.RETRY_STATUS:
                 r.raise_for_status()
                 return r.json()
-            attempt += 1
-            if attempt >= attempts:
+            if busy >= len(self.BUSY_WAITS_S):
                 r.raise_for_status()
-            self.sleep(10 * attempt)
+            self.sleep(self.BUSY_WAITS_S[busy])
+            busy += 1
 
     def chat(self, system: str, user: str, attempts: int = 3) -> str:
         """One chat completion; transient errors (overload, rate limit) are retried."""

@@ -227,12 +227,18 @@ core tools from any MCP client (`observer mcp`).
   (code, outputs, report) and the library index to the task *harvest*
   (1-2 requests; a strong model pays off) and lists proposed tools and skills;
   *Add to library* saves one (unaudited, a tool's tests run at once).
-* **Pause and resume**: the conversation is saved after every step. A 429
-  whose stated delay (Retry-After header, Google's `retryDelay`, or "retry in
-  …" in the message) is at most a minute is waited out and repeated
-  automatically (up to 5 times). A longer delay, other provider errors or an
-  unreachable endpoint (after the retries) **pause** the run instead of
-  failing it; the run view says when the provider expects the quota back.
+* **Pause and resume**: the conversation is saved after every step. LLM
+  errors are handled by kind:
+  * 429 **with** a stated delay (Retry-After header, Google's `retryDelay`,
+    or "retry in …" in the message): up to a minute is waited out and the
+    request repeated (up to 5 times); a longer delay pauses the run at once;
+  * 429 **without** time information: if the message says the quota is used
+    up ("per day", "billing", "limit: 0") the run pauses at once; otherwise
+    (busy, overloaded, too many requests) short waits of 5, 10, 20, 30 s and
+    repeats, then the run pauses; the same for 5xx errors and an unreachable
+    endpoint.
+  A paused run is not failed; the run view says why and, when known, when
+  the provider expects the quota back.
   *Resume* continues from the saved step with the model now set for the task
   *agent*, so you can wait or switch the model.
 * **Runs**: one at a time, at most 25 model steps and 30 minutes.
