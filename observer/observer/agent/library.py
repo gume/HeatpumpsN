@@ -111,7 +111,7 @@ class Item:
         if self.kind == "tools":
             out.update(purpose=self.meta.get("purpose", ""), needs=self.meta.get("needs", ""),
                        inputs=self.meta.get("inputs", []), outputs=self.meta.get("outputs", {}),
-                       tests_passed=self.tests_passed)
+                       tests_description=self.meta.get("tests") or [], tests_passed=self.tests_passed)
         else:
             out.update(title=self.meta.get("title", self.name), description=self.meta.get("description", ""),
                        tools=self.meta.get("tools") or [])
@@ -282,7 +282,8 @@ class Library:
         return out
 
     def save_tool(self, name: str, purpose: str, inputs: list, outputs: dict, code: str, tests: str,
-                  needs: str = "", author: str = "", requires: list | None = None) -> Item:
+                  needs: str = "", author: str = "", requires: list | None = None,
+                  tests_description: list | None = None) -> Item:
         if not NAME.match(name or ""):
             raise ValueError("name: lower case letters, digits and _, 2-41 characters, starting with a letter")
         if not purpose.strip():
@@ -306,6 +307,7 @@ class Library:
         manifest = {"name": name, "version": 1, "purpose": purpose.strip(), "needs": needs.strip(),
                     "inputs": clean_inputs, "outputs": {"type": outputs.get("type", "any"),
                                                         "description": str(outputs["description"])},
+                    **({"tests": [str(t) for t in tests_description]} if tests_description else {}),
                     "requires": requires or [], "author": author, "created": now}
         folder = os.path.join(self.house_dir, "tools", name)
         with self._lock:
@@ -370,22 +372,26 @@ class Library:
         return self.get(kind, name)
 
     # --- tests --------------------------------------------------------------------------
-    def run_tests(self, name: str, sandbox) -> dict:
-        """Run the tool's tests in the sandbox on a copy of its folder; the result is kept per hash."""
-        item = self.get("tools", name)
+    @staticmethod
+    def test_files(name: str, files: dict[str, str], sandbox) -> dict:
+        """Run the tests of tool files (not necessarily saved) in the sandbox."""
         with tempfile.TemporaryDirectory(prefix="obs-test-") as ws:
             target = os.path.join(ws, name)
             os.makedirs(target)
-            for fname, content in item.text.items():
+            for fname, content in files.items():
                 with open(os.path.join(target, fname), "w", encoding="utf-8") as fp:
                     fp.write(content)
             code = ("import sys, pytest\n"
                     f"sys.exit(pytest.main(['-q', '-p', 'no:cacheprovider', '--no-header', '-rf', {name!r}]))\n")
             r = sandbox.run(code, ws, f"test_{name}")
-        result = {"passed": r.exit_code == 0, "name": name, "version": item.version,
-                  "at": time.strftime("%Y-%m-%d %H:%M"),
-                  "output": (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()[-6000:],
-                  "timed_out": r.timed_out}
+        return {"passed": r.exit_code == 0, "name": name, "at": time.strftime("%Y-%m-%d %H:%M"),
+                "output": (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()[-6000:],
+                "timed_out": r.timed_out}
+
+    def run_tests(self, name: str, sandbox) -> dict:
+        """Run the tool's tests in the sandbox on a copy of its folder; the result is kept per hash."""
+        item = self.get("tools", name)
+        result = {**self.test_files(name, item.text, sandbox), "version": item.version}
         with self._lock:
             tests = self._state("tests.yaml")
             tests[item.hash] = result

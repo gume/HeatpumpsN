@@ -474,7 +474,9 @@ Propose nothing rather than something weak. Answer only with JSON:
 {"tools": [{"name": "snake_case", "purpose": "...", "needs": "...",
             "inputs": [{"name", "type": "series|dataframe|number|integer|string|boolean|list|dict|timestamp|any",
                         "description", "required": true}],
-            "outputs": {"type", "description"}, "code": "...", "tests": "...", "why": "what in the run it comes from"}],
+            "outputs": {"type", "description"},
+            "tests_description": ["one plain sentence per test: what it checks, e.g. 'an off-gap shorter than min_off_s is merged'"],
+            "code": "...", "tests": "...", "why": "what in the run it comes from"}],
  "skills": [{"name": "snake_case", "title", "description", "recipe": "Markdown", "tools": ["names"],
              "why": "..."}],
  "notes": "one or two sentences about the run's method"}"""
@@ -491,6 +493,43 @@ def harvest_run(client: LlmClient, digest: dict, library: dict) -> dict:
     tools = [t for t in data.get("tools") or [] if isinstance(t, dict) and name_ok.match(str(t.get("name", "")))
              and "def run(" in str(t.get("code", "")) and "def test_" in str(t.get("tests", ""))
              and isinstance(t.get("outputs"), dict) and t.get("purpose")]
+    for t in tools:
+        desc = [str(d).strip() for d in t.get("tests_description") or [] if str(d).strip()]
+        if not desc:      # from the test function names: test_merges_short_gaps -> "merges short gaps"
+            desc = [n.replace("_", " ") for n in re.findall(r"def test_(\w+)", t["tests"])]
+        t["tests_description"] = desc
     skills = [k for k in data.get("skills") or [] if isinstance(k, dict) and name_ok.match(str(k.get("name", "")))
               and k.get("recipe") and k.get("description")]
     return {"tools": tools, "skills": skills, "notes": str(data.get("notes") or "")}
+
+
+TOOL_WRITER_SYSTEM = """You write one analysis tool for a home heating observer from its
+description. The tool runs in a sandbox with numpy, pandas and scipy, and must
+be universal: generic inputs (pandas Series with a DatetimeIndex, DataFrames,
+numbers), never one house's signal ids.
+
+You get the description: name, purpose, the data it needs, the inputs (name,
+type, description, required, default), the output, and the tests as plain
+sentences. Previous code may be given: keep what still fits the description.
+
+Write
+* "code": a Python module with a function run(...) whose parameters are
+  exactly the inputs, in that order, with the defaults given; it returns the
+  output described. Small, readable, no I/O, no network.
+* "tests": a pytest module (`from tool import run`) with one test function per
+  test sentence, in the same order, on synthetic data, checking results
+  numerically.
+
+Answer only with JSON: {"code": "...", "tests": "..."}"""
+
+
+def write_tool(client: LlmClient, spec: dict, code: str = "", tests: str = "") -> dict:
+    """Code and tests for a tool description (the tool editor's "write code from the description")."""
+    keys = ("name", "purpose", "needs", "inputs", "outputs", "tests_description")
+    user = json.dumps({"description": {k: spec.get(k) for k in keys}, "previous_code": code or None,
+                       "previous_tests": tests or None}, ensure_ascii=False, indent=1)
+    data = chat_json(client, TOOL_WRITER_SYSTEM, user)
+    if not isinstance(data, dict) or "def run(" not in str(data.get("code", "")) \
+            or "def test_" not in str(data.get("tests", "")):
+        raise ValueError("the answer has no run() function or no tests")
+    return {"code": data["code"].rstrip() + "\n", "tests": data["tests"].rstrip() + "\n"}

@@ -286,25 +286,53 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such run") from exc
 
-    @app.post("/api/agent/run/harvest")
-    async def harvest(id: str = Query(...)):
+    # --- harvest: proposals of tools and skills from a run, and their editors ------
+    def _proposal_call(fn, *args):
         try:
-            return await run_in_threadpool(service.agents.harvest, id)
+            return fn(*args)
         except KeyError as exc:
-            raise HTTPException(404, "no such run") from exc
-        except RuntimeError as exc:
+            raise HTTPException(404, f"no such run or proposal {exc}") from exc
+        except (ValueError, RuntimeError) as exc:
             raise HTTPException(400, str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(502, f"LLM request failed: {exc}") from exc
+
+    @app.post("/api/agent/run/harvest")
+    def harvest(id: str = Query(...)):
+        """Start the harvest in the background; poll GET /api/agent/run/harvest."""
+        return _proposal_call(service.agents.start_harvest, id)
+
+    @app.get("/api/agent/run/harvest")
+    def harvest_status(id: str = Query(...)):
+        return _proposal_call(service.agents.harvest_result, id)
+
+    @app.get("/api/library/proposals")
+    def proposals():
+        return service.agents.proposals()
+
+    @app.get("/api/library/proposal")
+    def proposal(run: str = Query(...), kind: str = Query(...), index: int = Query(...)):
+        return _proposal_call(lambda: service.agents.proposal(run, kind, index)[1])
+
+    @app.put("/api/library/proposal")
+    def update_proposal(run: str = Query(...), kind: str = Query(...), index: int = Query(...),
+                        body: dict = Body(...)):
+        return _proposal_call(service.agents.update_proposal, run, kind, index, body)
+
+    @app.post("/api/library/proposal/write")
+    def write_tool(run: str = Query(...), index: int = Query(...)):
+        return _proposal_call(service.agents.start_write_tool, run, index)
+
+    @app.post("/api/library/proposal/test")
+    async def test_proposal(run: str = Query(...), index: int = Query(...)):
+        return await run_in_threadpool(_proposal_call, service.agents.test_proposal, run, index)
+
+    @app.post("/api/library/proposal/dismiss")
+    def dismiss_proposal(run: str = Query(...), kind: str = Query(...), index: int = Query(...)):
+        _proposal_call(service.agents.dismiss_proposal, run, kind, index)
+        return {"ok": True}
 
     @app.post("/api/agent/run/harvest/accept")
     async def accept_harvest(id: str = Query(...), kind: str = Query(...), index: int = Query(...)):
-        try:
-            return await run_in_threadpool(service.agents.accept_harvest, id, kind, index)
-        except KeyError as exc:
-            raise HTTPException(404, f"no such proposal {exc}") from exc
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        return await run_in_threadpool(_proposal_call, service.agents.accept_harvest, id, kind, index)
 
     @app.post("/api/agent/run/resume")
     def resume_run(id: str = Query(...)):

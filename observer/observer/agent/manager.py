@@ -65,6 +65,7 @@ class AgentManager:
         self.max_steps, self.deadline_s = int(a.get("max_steps", 25)), float(a.get("deadline_s", 1800))
         self._lock = threading.Lock()
         self._active: tuple[str, threading.Event] | None = None
+        self._jobs: dict[str, dict] = {}
 
     # --- views -------------------------------------------------------------------
     def toolbox(self, workspace: str, author: str = "") -> Toolbox:
@@ -176,7 +177,59 @@ class AgentManager:
             digest["steps"] = digest["steps"][:2] + digest["steps"][3:]     # drop from the middle, keep the ends
         return digest
 
+    # Harvest proposals live in the run's harvest.yaml. Each proposal has a state
+    # (pending, added, dismissed); the editors save drafts into it. A tool
+    # proposal's code is "stale" once its description was edited: it must be
+    # written again from the description before it can be accepted.
+    TOOL_SPEC = ("name", "purpose", "needs", "inputs", "outputs", "tests_description")
+    SKILL_FIELDS = ("name", "title", "description", "recipe", "tools")
+
+    def _job(self, key: str, kind: str, model: str, work) -> dict:
+        """Run `work()` in the background; the job (state, timing, error) is kept for the portal."""
+        with self._lock:
+            job = self._jobs.get(key)
+            if job and job["state"] == "running":
+                raise RuntimeError(f"{job['kind']} is still running (since {job['started']})")
+            job = {"kind": kind, "state": "running", "model": model, "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "t0": time.time()}
+            self._jobs[key] = job
+
+        def run():
+            try:
+                work()
+                job["state"] = "done"
+            except Exception as exc:            # shown in the portal
+                job.update(state="error", error=f"{type(exc).__name__}: {exc}")
+            job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            job["seconds"] = round(time.time() - job["t0"], 1)
+
+        threading.Thread(target=run, name=f"job-{key}", daemon=True).start()
+        return self.job(key)
+
+    def job(self, key: str) -> dict | None:
+        job = self._jobs.get(key)
+        if job is None:
+            return None
+        out = {k: v for k, v in job.items() if k != "t0"}
+        if job["state"] == "running":
+            out["elapsed_s"] = round(time.time() - job["t0"])
+        return out
+
+    def _harvest_path(self, run_id: str) -> str:
+        return os.path.join(self._run(run_id).folder, "harvest.yaml")
+
+    def _save_harvest(self, run_id: str, h: dict) -> None:
+        path = self._harvest_path(run_id)
+        with open(path + ".tmp", "w", encoding="utf-8") as fp:
+            yaml.safe_dump(h, fp, sort_keys=False, allow_unicode=True, width=100)
+        os.replace(path + ".tmp", path)
+
+    @staticmethod
+    def _state(p: dict) -> str:
+        return p.get("state") or ("added" if p.get("added") else "pending")
+
     def harvest(self, run_id: str, client=None) -> dict:
+        """Ask the model for reusable tools and skills in a run (blocking; the portal uses start_harvest)."""
         from ..llm import harvest_run
 
         run = self._run(run_id)
@@ -190,38 +243,148 @@ class AgentManager:
         out.update(generated=time.strftime("%Y-%m-%d %H:%M"), model=getattr(client, "model", ""))
         for kind in ("tools", "skills"):
             for p in out[kind]:
-                p["added"] = None
-        with open(os.path.join(run.folder, "harvest.yaml"), "w", encoding="utf-8") as fp:
-            yaml.safe_dump(out, fp, sort_keys=False, allow_unicode=True, width=100)
+                p.update(state="pending", added=None)
+                if kind == "tools":
+                    p["code_stale"] = False
+        self._save_harvest(run_id, out)
         return out
 
+    def start_harvest(self, run_id: str) -> dict:
+        self._run(run_id)
+        client = self.service.settings.client("harvest")
+        if client is None:
+            raise RuntimeError("no LLM configured for the task 'harvest' (Settings)")
+        return self._job(f"harvest:{run_id}", "harvest", client.model, lambda: self.harvest(run_id, client))
+
     def harvest_result(self, run_id: str) -> dict | None:
-        path = os.path.join(self._run(run_id).folder, "harvest.yaml")
-        if not os.path.exists(path):
+        path = self._harvest_path(run_id)
+        h = None
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fp:
+                h = yaml.safe_load(fp)
+            for kind in ("tools", "skills"):
+                for p in h.get(kind) or []:
+                    p["state"] = self._state(p)
+                    if kind == "tools" and not p.get("tests_description"):     # proposals from before 0.3.2
+                        p["tests_description"] = [n.replace("_", " ")
+                                                  for n in re.findall(r"def test_(\w+)", p.get("tests") or "")]
+        job = self.job(f"harvest:{run_id}")
+        if h is None and job is None:
             return None
-        with open(path, encoding="utf-8") as fp:
-            return yaml.safe_load(fp)
+        return {**(h or {"tools": [], "skills": []}), "job": job}
+
+    def proposal(self, run_id: str, kind: str, index: int) -> tuple[dict, dict]:
+        h = self.harvest_result(run_id)
+        if not h or kind not in ("tools", "skills") or not 0 <= index < len(h.get(kind) or []):
+            raise KeyError(f"{kind}[{index}]")
+        h.pop("job", None)
+        p = h[kind][index]
+        p["job"] = self.job(f"code:{run_id}:{index}") if kind == "tools" else None
+        return h, p
+
+    def proposals(self) -> list[dict]:
+        """Pending proposals of all runs (the Library tab's inbox)."""
+        out = []
+        for name in sorted(os.listdir(self.runs_dir), reverse=True):
+            path = os.path.join(self.runs_dir, name, "harvest.yaml")
+            if not (_RUN_ID.match(name) and os.path.exists(path)):
+                continue
+            with open(path, encoding="utf-8") as fp:
+                h = yaml.safe_load(fp) or {}
+            for kind in ("tools", "skills"):
+                for i, p in enumerate(h.get(kind) or []):
+                    if self._state(p) == "pending":
+                        out.append({"run": name, "kind": kind, "index": i, "name": p.get("name"),
+                                    "summary": p.get("purpose") if kind == "tools" else p.get("title") or p.get("description"),
+                                    "edited": bool(p.get("edited")), "generated": h.get("generated"),
+                                    "model": h.get("model")})
+        return out
+
+    def update_proposal(self, run_id: str, kind: str, index: int, fields: dict) -> dict:
+        """Save an editor's draft. Editing a tool's description makes its code stale."""
+        h, p = self.proposal(run_id, kind, index)
+        p.pop("job", None)
+        if self._state(p) != "pending":
+            raise ValueError(f"this proposal is {self._state(p)}")
+        allowed = self.TOOL_SPEC if kind == "tools" else self.SKILL_FIELDS
+        changed = False
+        for k in allowed:
+            if k in fields and fields[k] != p.get(k):
+                p[k] = fields[k]
+                changed = True
+        if changed:
+            p["edited"] = True
+            if kind == "tools":
+                p.update(code_stale=True, test=None)
+        self._save_harvest(run_id, h)
+        return self.proposal(run_id, kind, index)[1]
+
+    def start_write_tool(self, run_id: str, index: int) -> dict:
+        """Let the model write code and tests from the (edited) description, then run the tests."""
+        from ..agent.library import Library
+        from ..llm import write_tool
+
+        self.proposal(run_id, "tools", index)
+        client = self.service.settings.client("harvest")
+        if client is None:
+            raise RuntimeError("no LLM configured for the task 'harvest' (Settings)")
+
+        def work():
+            h, p = self.proposal(run_id, "tools", index)
+            p.pop("job", None)
+            out = write_tool(client, p, p.get("code", ""), p.get("tests", ""))
+            p.update(code=out["code"], tests=out["tests"], code_stale=False, written_by=client.model,
+                     written=time.strftime("%Y-%m-%d %H:%M"))
+            p["test"] = Library.test_files(p["name"], {"tool.py": p["code"], "test_tool.py": p["tests"]}, self.sandbox) \
+                if self.sandbox.status()["ready"] else None
+            self._save_harvest(run_id, h)
+
+        return self._job(f"code:{run_id}:{index}", "write code", client.model, work)
+
+    def test_proposal(self, run_id: str, index: int) -> dict:
+        from ..agent.library import Library
+
+        h, p = self.proposal(run_id, "tools", index)
+        p.pop("job", None)
+        if p.get("code_stale"):
+            raise ValueError("the code does not match the edited description: write it again first")
+        if not self.sandbox.status()["ready"]:
+            raise RuntimeError("sandbox not ready: " + "; ".join(self.sandbox.status()["problems"]))
+        p["test"] = Library.test_files(p["name"], {"tool.py": p["code"], "test_tool.py": p["tests"]}, self.sandbox)
+        self._save_harvest(run_id, h)
+        return p["test"]
+
+    def dismiss_proposal(self, run_id: str, kind: str, index: int) -> None:
+        h, p = self.proposal(run_id, kind, index)
+        p.pop("job", None)
+        p["state"] = "dismissed"
+        self._save_harvest(run_id, h)
 
     def accept_harvest(self, run_id: str, kind: str, index: int) -> dict:
-        """Add one proposal to the house library (unaudited); a tool's tests run at once."""
-        run = self._run(run_id)
-        h = self.harvest_result(run_id)
-        if not h or kind not in ("tools", "skills") or not 0 <= index < len(h[kind]):
-            raise KeyError(f"{kind}[{index}]")
-        p = h[kind][index]
-        author = f"harvest of run {run.id}"
+        """Add one proposal (with the editor's changes) to the house library, unaudited."""
+        h, p = self.proposal(run_id, kind, index)
+        p.pop("job", None)
+        if self._state(p) != "pending":
+            raise ValueError(f"this proposal is {self._state(p)}")
+        author = f"harvest of run {run_id}"
         if kind == "tools":
+            if p.get("code_stale"):
+                raise ValueError("the description was edited: write the code from it first")
             self.library.save_tool(p["name"], p["purpose"], p.get("inputs") or [], p["outputs"], p["code"],
-                                   p["tests"], p.get("needs", ""), author=author)
-            test = self.library.run_tests(p["name"], self.sandbox)
+                                   p["tests"], p.get("needs", ""), author=author,
+                                   tests_description=p.get("tests_description") or [])
+            test = self.library.run_tests(p["name"], self.sandbox) if self.sandbox.status()["ready"] \
+                else {"passed": None, "output": "sandbox not ready: tests not run"}
             result = {"name": p["name"], "tests_passed": test["passed"], "test_output": test["output"][-3000:]}
         else:
-            self.library.save_skill(p["name"], p.get("title", ""), p["description"], p["recipe"], p.get("tools"),
+            tools = p.get("tools") or []
+            if isinstance(tools, str):
+                tools = [t.strip() for t in tools.split(",") if t.strip()]
+            self.library.save_skill(p["name"], p.get("title", ""), p["description"], p["recipe"], tools,
                                     author=author)
             result = {"name": p["name"]}
-        p["added"] = time.strftime("%Y-%m-%d %H:%M")
-        with open(os.path.join(run.folder, "harvest.yaml"), "w", encoding="utf-8") as fp:
-            yaml.safe_dump(h, fp, sort_keys=False, allow_unicode=True, width=100)
+        p.update(state="added", added=time.strftime("%Y-%m-%d %H:%M"))
+        self._save_harvest(run_id, h)
         return result
 
     # --- starting and stopping ------------------------------------------------------------

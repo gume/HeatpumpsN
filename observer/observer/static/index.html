@@ -241,7 +241,9 @@
       sources: <em>house</em> items (written by agents and the harvest, in the data directory) come first, then library folders
       (e.g. a git checkout of a shared library), then imported packs. Every item has a version. <strong>Audited</strong> is your
       approval, bound to the item's content: any change voids it, identical content stays audited wherever it comes from.</p>
-    <h3 class="sec" style="margin-top:0">Sources</h3>
+    <h3 class="sec" style="margin-top:0">Proposed by agent runs</h3>
+    <div id="l-proposals" style="margin-bottom:12px"></div>
+    <h3 class="sec">Sources</h3>
     <div class="table-wrap"><table><thead><tr><th>Source</th><th>Kind</th><th>Version</th><th>Location</th><th></th></tr></thead><tbody id="l-sources"></tbody></table></div>
     <div class="bar" style="margin-top:8px">
       <button class="btn" id="l-export-house">Export house items (.tgz)</button>
@@ -832,19 +834,19 @@ function stepHtml(id, s) {
 }
 function harvestHtml(h) {
   if (!h) return '';
-  const added = (p) => p.added ? `<span class="ok">added ${esc(p.added)}</span>` : '';
-  const tools = h.tools.map((p, i) => `<div class="step"><div class="h"><span class="tool">${esc(p.name)}</span> tool ${added(p)}
-      ${p.added ? '' : `<button class="btn" data-harvest="tools" data-index="${i}" style="margin-left:auto">Add to library (unaudited, tests run)</button>`}</div>
-      <p style="margin:4px 0">${esc(p.purpose)}</p>${p.needs ? `<p class="dim" style="margin:4px 0">Needs: ${esc(p.needs)}</p>` : ''}
-      <p class="dim" style="margin:4px 0">Why: ${esc(p.why || '')}</p>
-      <details><summary>inputs, output, code, tests</summary><pre>${esc(JSON.stringify({ inputs: p.inputs, outputs: p.outputs }, null, 2))}</pre><pre>${esc(p.code)}</pre><pre>${esc(p.tests)}</pre></details></div>`).join('');
-  const skills = h.skills.map((p, i) => `<div class="step"><div class="h"><span class="tool">${esc(p.name)}</span> skill ${added(p)}
-      ${p.added ? '' : `<button class="btn" data-harvest="skills" data-index="${i}" style="margin-left:auto">Add to library (unaudited)</button>`}</div>
-      <p style="margin:4px 0"><strong>${esc(p.title || '')}</strong> ${esc(p.description)}</p><p class="dim" style="margin:4px 0">Why: ${esc(p.why || '')}</p>
-      <details><summary>recipe</summary><div class="md">${md(p.recipe)}</div></details></div>`).join('');
-  return `<h3 class="sec">Reusable tools and skills found in this run</h3>
-    <p class="dim">${esc(h.notes || '')} (${esc(h.model || '')}, ${esc(h.generated || '')})</p>
-    <div class="steps">${tools}${skills || ''}${!tools && !skills ? '<p class="dim">Nothing worth keeping, according to the model.</p>' : ''}</div>`;
+  const j = h.job;
+  let status = '';
+  if (j && j.state === 'running') status = `<p class="warn">Reviewing the run with ${esc(j.model)}… ${j.elapsed_s} s (a strong model can take minutes; you can leave this page)</p>`;
+  else if (j && j.state === 'error') status = `<p class="err">The review failed after ${j.seconds} s: ${esc(j.error)}</p>`;
+  const items = [...(h.tools || []).map((p, i) => ({ ...p, kind: 'tools', index: i })), ...(h.skills || []).map((p, i) => ({ ...p, kind: 'skills', index: i }))];
+  const badge = (st) => st === 'added' ? '<span class="ok">added</span>' : st === 'dismissed' ? '<span class="dim">dismissed</span>' : '<span class="warn">to review</span>';
+  const list = items.length ? `<div class="table-wrap"><table><tbody>${items.map((p) => `<tr data-prop="${esc(h.run_id || '')}" >
+      <td>${p.kind === 'tools' ? 'tool' : 'skill'}</td><td class="mono">${esc(p.name)}</td>
+      <td>${esc(p.kind === 'tools' ? p.purpose : (p.title || p.description))}<div class="dim">${esc(p.why || '')}</div></td>
+      <td>${badge(p.state)}</td><td>${p.state === 'pending' ? `<button class="btn" data-open-kind="${p.kind}" data-open-index="${p.index}">Open</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+    : (h.generated ? '<p class="dim">Nothing worth keeping, according to the model.</p>' : '');
+  return `<h3 class="sec">Reusable tools and skills found in this run</h3>${status}
+    ${h.generated ? `<p class="dim">${esc(h.notes || '')} (${esc(h.model || '')}, ${esc(h.generated)})</p>` : ''}${list}`;
 }
 function libUsed(m) {
   const u = m.library_used || {}, c = m.library_created || [];
@@ -889,21 +891,17 @@ async function loadRun(id) {
     catch (err) { toast(err.message, 6000); }
   });
   if ($('#a-harvest')) $('#a-harvest').addEventListener('click', async () => {
-    $('#a-harvest').disabled = true; $('#a-harvest').textContent = 'Reviewing the run…';
-    try { const h = await api(`/api/agent/run/harvest?id=${encodeURIComponent(id)}`, { method: 'POST' });
-          toast(`${h.tools.length} tool(s), ${h.skills.length} skill(s) proposed.`, 4000); }
+    $('#a-harvest').disabled = true;
+    try { await api(`/api/agent/run/harvest?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Review started.'); }
     catch (err) { toast(err.message, 6000); }
     loadRun(id);
   });
-  document.querySelectorAll('[data-harvest]').forEach((b) => b.addEventListener('click', async () => {
-    b.disabled = true; b.textContent = 'Adding…';
-    try { const r = await api(`/api/agent/run/harvest/accept?id=${encodeURIComponent(id)}&kind=${b.dataset.harvest}&index=${b.dataset.index}`, { method: 'POST' });
-          toast(b.dataset.harvest === 'tools' ? `Added; tests ${r.tests_passed ? 'passed' : 'FAILED (see Library)'}.` : 'Skill added (unaudited).', 5000); }
-    catch (err) { toast(err.message, 6000); }
-    loadRun(id);
-  }));
+  document.querySelectorAll('[data-open-kind]').forEach((b) => b.addEventListener('click', () =>
+    openProposal(id, b.dataset.openKind, +b.dataset.openIndex)));
   if ($('#a-cancel')) $('#a-cancel').addEventListener('click', async () => { await api(`/api/agent/run/cancel?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Cancelling after the current step.'); });
-  if (running && view === 'agent' && runOpen === id) runTimer = setTimeout(() => loadAgent().catch(() => {}), 3000);
+  const harvesting = r.harvest && r.harvest.job && r.harvest.job.state === 'running';
+  if ($('#a-harvest') && harvesting) { $('#a-harvest').disabled = true; $('#a-harvest').textContent = 'Reviewing…'; }
+  if ((running || harvesting) && view === 'agent' && runOpen === id) runTimer = setTimeout(() => loadAgent().catch(() => {}), 3000);
 }
 
 // --- library ------------------------------------------------------------------
@@ -924,10 +922,12 @@ async function loadLibrary() {
     try { await api(`/api/library/pack?name=${encodeURIComponent(b.dataset.rmpack)}`, { method: 'DELETE' }); toast('Pack removed.'); loadLibrary(); }
     catch (err) { toast(err.message, 5000); }
   }));
-  if (libOpen) loadItem(libOpen.kind, libOpen.name);
+  loadProposals().catch(() => {});
+  if (propOpen) loadProposal();
+  else if (libOpen) loadItem(libOpen.kind, libOpen.name);
 }
 for (const id of ['#l-tools', '#l-skills']) $(id).addEventListener('click', (e) => {
-  const tr = e.target.closest('tr[data-name]'); if (tr) { libOpen = { kind: tr.dataset.kind, name: tr.dataset.name }; loadItem(libOpen.kind, libOpen.name); }
+  const tr = e.target.closest('tr[data-name]'); if (tr) { propOpen = null; libOpen = { kind: tr.dataset.kind, name: tr.dataset.name }; loadItem(libOpen.kind, libOpen.name); }
 });
 $('#l-export-house').addEventListener('click', () => { location.href = '/api/library/export?selection=house'; });
 $('#l-export-all').addEventListener('click', () => { location.href = '/api/library/export?selection=all'; });
@@ -940,6 +940,151 @@ $('#l-import').addEventListener('change', async (e) => {
   catch (err) { $('#l-msg').textContent = err.message; }
   e.target.value = ''; loadLibrary();
 });
+// --- proposals and their editors ------------------------------------------------
+let propOpen = null, propTimer = null;
+const TYPES = ['series', 'dataframe', 'number', 'integer', 'string', 'boolean', 'list', 'dict', 'timestamp', 'any'];
+async function loadProposals() {
+  const list = await api('/api/library/proposals');
+  $('#l-proposals').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Kind</th><th>Name</th><th>Summary</th><th>From run</th><th></th></tr></thead><tbody>${list.map((p) => `<tr>
+      <td>${p.kind === 'tools' ? 'tool' : 'skill'}</td><td class="mono">${esc(p.name)}${p.edited ? ' <span class="dim">(edited)</span>' : ''}</td>
+      <td>${esc((p.summary || '').slice(0, 140))}</td><td class="mono dim">${esc(p.run)}<br>${esc(p.model || '')}</td>
+      <td><button class="btn" data-pr="${esc(p.run)}" data-pk="${p.kind}" data-pi="${p.index}">Open</button></td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="dim">No proposals waiting. Use "Find tools and skills in this run" on a finished agent run.</p>';
+  document.querySelectorAll('[data-pr]').forEach((b) => b.addEventListener('click', () => openProposal(b.dataset.pr, b.dataset.pk, +b.dataset.pi)));
+}
+$('#l-item').addEventListener('click', (e) => {           // row removal in the tool editor
+  if (e.target.classList.contains('in-del')) e.target.closest('tr').remove();
+  if (e.target.classList.contains('t-del')) e.target.closest('.t-row').remove();
+});
+let propScroll = false;
+function openProposal(run, kind, index) {
+  propOpen = { run, kind, index }; libOpen = null; propScroll = true;
+  if (view !== 'library') show('library'); else loadProposal();
+}
+const propQ = () => `run=${encodeURIComponent(propOpen.run)}&kind=${propOpen.kind}&index=${propOpen.index}`;
+function inputRow(x = {}) {
+  return `<tr class="in-row"><td><input class="in-name mono" value="${esc(x.name || '')}" size="14"></td>
+    <td><select class="in-type">${TYPES.map((t) => `<option ${t === (x.type || 'any') ? 'selected' : ''}>${t}</option>`).join('')}</select></td>
+    <td><input class="in-desc" value="${esc(x.description || '')}" style="width:100%"></td>
+    <td style="text-align:center"><input type="checkbox" class="in-req" ${x.required === false ? '' : 'checked'}></td>
+    <td><input class="in-def mono" value="${'default' in x ? esc(JSON.stringify(x.default)) : ''}" size="8" placeholder="—"></td>
+    <td><button class="btn in-del" title="remove">×</button></td></tr>`;
+}
+function testRow(t = '') {
+  return `<div class="t-row" style="display:flex;gap:6px;margin:3px 0"><input class="t-text" value="${esc(t)}" style="flex:1"><button class="btn t-del" title="remove">×</button></div>`;
+}
+function readEditor(kind) {
+  if (kind === 'skills') {
+    return { name: $('#e-name').value.trim(), title: $('#e-title').value.trim(), description: $('#e-desc').value.trim(),
+             tools: $('#e-tools').value.split(',').map((x) => x.trim()).filter(Boolean), recipe: $('#e-recipe').value };
+  }
+  const inputs = [...document.querySelectorAll('.in-row')].map((r) => {
+    const x = { name: r.querySelector('.in-name').value.trim(), type: r.querySelector('.in-type').value,
+                description: r.querySelector('.in-desc').value.trim(), required: r.querySelector('.in-req').checked };
+    const d = r.querySelector('.in-def').value.trim();
+    if (d) { try { x.default = JSON.parse(d); } catch { x.default = d; } }
+    return x;
+  }).filter((x) => x.name);
+  return { name: $('#e-name').value.trim(), purpose: $('#e-purpose').value.trim(), needs: $('#e-needs').value.trim(), inputs,
+           outputs: { type: $('#e-otype').value, description: $('#e-odesc').value.trim() },
+           tests_description: [...document.querySelectorAll('.t-text')].map((t) => t.value.trim()).filter(Boolean) };
+}
+async function saveProposal() {
+  return api(`/api/library/proposal?${propQ()}`, { method: 'PUT', body: JSON.stringify(readEditor(propOpen.kind)) });
+}
+async function loadProposal() {
+  clearTimeout(propTimer);
+  if (!propOpen) return;
+  let p; try { p = await api(`/api/library/proposal?${propQ()}`); } catch (err) { $('#l-item').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
+  const kind = propOpen.kind, pending = p.state === 'pending';
+  const head = `<div class="bar" style="margin:0"><strong>${kind === 'tools' ? 'Tool' : 'Skill'} proposal</strong>
+      <span class="dim">from run <span class="mono">${esc(propOpen.run)}</span>${p.edited ? ' · edited' : ''}</span>
+      ${pending ? '' : `<span class="${p.state === 'added' ? 'ok' : 'dim'}">${esc(p.state)}</span>`}
+      <button class="btn" id="e-close" style="margin-left:auto">Close</button></div>
+    ${p.why ? `<p class="dim" style="margin:4px 0">Why: ${esc(p.why)}</p>` : ''}`;
+  const actions = pending ? `<div class="actions" style="margin-top:10px">
+      <span class="dim" id="e-msg"></span>
+      <button class="btn danger" id="e-dismiss">Dismiss</button><button class="btn" id="e-save">Save draft</button>
+      ${kind === 'tools' ? '<button class="btn" id="e-write">Write code from the description</button><button class="btn" id="e-test">Run tests</button>' : ''}
+      <button class="btn primary" id="e-accept">Accept into the library</button></div>` : '';
+  if (kind === 'skills') {
+    $('#l-item').innerHTML = `<div class="card">${head}
+      <div class="grid2" style="margin-top:8px"><label>Name<input id="e-name" class="mono" value="${esc(p.name)}"></label>
+        <label>Title<input id="e-title" value="${esc(p.title || '')}"></label></div>
+      <label style="margin-top:8px">Description<textarea id="e-desc" rows="2">${esc(p.description || '')}</textarea></label>
+      <label style="margin-top:8px">Library tools it uses (comma separated)<input id="e-tools" class="mono" value="${esc((p.tools || []).join(', '))}"></label>
+      <div class="bar" style="margin:10px 0 4px"><strong style="font-size:13px">Recipe (Markdown)</strong>
+        <button class="btn" id="e-preview" style="margin-left:auto">Preview</button></div>
+      <textarea id="e-recipe" rows="22" style="width:100%;font-family:var(--mono);font-size:12px">${esc(p.recipe || '')}</textarea>
+      <div id="e-recipe-view" class="md card hidden"></div>
+      ${actions}</div>`;
+    $('#e-preview').addEventListener('click', () => {
+      const v = $('#e-recipe-view'), t = $('#e-recipe'), on = v.classList.contains('hidden');
+      if (on) v.innerHTML = md(t.value);
+      v.classList.toggle('hidden', !on); t.classList.toggle('hidden', on); $('#e-preview').textContent = on ? 'Edit' : 'Preview';
+    });
+  } else {
+    const j = p.job, writing = j && j.state === 'running';
+    const codeState = writing ? `<p class="warn">Writing code and tests with ${esc(j.model)}… ${j.elapsed_s} s</p>`
+      : j && j.state === 'error' ? `<p class="err">Writing the code failed: ${esc(j.error)}</p>`
+      : p.code_stale ? '<p class="warn">The description was changed: the code does not match it yet. Use "Write code from the description".</p>'
+      : `<p class="ok" style="margin:4px 0">The code matches the description${p.written ? ` (written by ${esc(p.written_by)}, ${esc(p.written)})` : ' (as proposed)'}.</p>`;
+    const test = p.test ? `<details ${p.test.passed ? '' : 'open'}><summary>Tests ${esc(p.test.at)}: <span class="${p.test.passed ? 'ok' : 'err'}">${p.test.passed ? 'passed' : 'FAILED'}</span></summary><pre>${esc(p.test.output)}</pre></details>`
+      : '<p class="dim" style="margin:4px 0">Tests not run yet.</p>';
+    $('#l-item').innerHTML = `<div class="card">${head}
+      <div class="grid2" style="margin-top:8px"><label>Name<input id="e-name" class="mono" value="${esc(p.name)}"></label>
+        <label>Data it needs (in generic terms)<input id="e-needs" value="${esc(p.needs || '')}"></label></div>
+      <label style="margin-top:8px">Goal: what it is for and how it works<textarea id="e-purpose" rows="3">${esc(p.purpose || '')}</textarea></label>
+      <h3 class="sec">Inputs</h3>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Required</th><th>Default</th><th></th></tr></thead>
+        <tbody id="e-inputs">${(p.inputs || []).map(inputRow).join('')}</tbody></table></div>
+      <button class="btn" id="e-add-in" style="margin-top:6px">Add input</button>
+      <h3 class="sec">Output</h3>
+      <div style="display:flex;gap:8px"><select id="e-otype">${TYPES.map((t) => `<option ${t === ((p.outputs || {}).type || 'any') ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <input id="e-odesc" value="${esc((p.outputs || {}).description || '')}" style="flex:1"></div>
+      <h3 class="sec">Tests (one sentence each: what is checked)</h3>
+      <div id="e-tests">${(p.tests_description || []).map(testRow).join('')}</div>
+      <button class="btn" id="e-add-t" style="margin-top:6px">Add test</button>
+      <h3 class="sec">Code</h3>${codeState}${test}
+      <details><summary class="dim">Generated code and tests (read-only)</summary><pre style="max-height:400px">${esc(p.code || '')}</pre><pre style="max-height:400px">${esc(p.tests || '')}</pre></details>
+      ${actions}</div>`;
+    $('#e-add-in').addEventListener('click', () => $('#e-inputs').insertAdjacentHTML('beforeend', inputRow()));
+    $('#e-add-t').addEventListener('click', () => $('#e-tests').insertAdjacentHTML('beforeend', testRow()));
+    if ($('#e-write')) $('#e-write').disabled = writing;
+    if ($('#e-accept')) $('#e-accept').disabled = writing || p.code_stale;
+    if ($('#e-test')) $('#e-test').disabled = writing || p.code_stale;
+    if (writing) propTimer = setTimeout(() => { if (view === 'library' && propOpen) loadProposal(); }, 3000);
+  }
+  if (propScroll) { propScroll = false; $('#l-item').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  $('#e-close').addEventListener('click', () => { propOpen = null; $('#l-item').innerHTML = ''; });
+  if (!pending) return;
+  const msg = (t) => { if ($('#e-msg')) $('#e-msg').textContent = t; };
+  $('#e-save').addEventListener('click', async () => { try { await saveProposal(); toast('Draft saved.'); loadProposal(); loadProposals(); } catch (err) { msg(err.message); } });
+  $('#e-dismiss').addEventListener('click', async () => {
+    if (!confirm('Dismiss this proposal?')) return;
+    await api(`/api/library/proposal/dismiss?${propQ()}`, { method: 'POST' }); propOpen = null; $('#l-item').innerHTML = ''; loadLibrary();
+  });
+  if ($('#e-write')) $('#e-write').addEventListener('click', async () => {
+    try { await saveProposal(); await api(`/api/library/proposal/write?run=${encodeURIComponent(propOpen.run)}&index=${propOpen.index}`, { method: 'POST' }); loadProposal(); }
+    catch (err) { msg(err.message); }
+  });
+  if ($('#e-test')) $('#e-test').addEventListener('click', async () => {
+    msg('Running the tests in the sandbox…');
+    try { const r = await api(`/api/library/proposal/test?run=${encodeURIComponent(propOpen.run)}&index=${propOpen.index}`, { method: 'POST' }); toast(r.passed ? 'Tests passed.' : 'Tests FAILED.', 4000); loadProposal(); }
+    catch (err) { msg(err.message); }
+  });
+  $('#e-accept').addEventListener('click', async () => {
+    try {
+      const saved = await saveProposal();
+      if (kind === 'tools' && saved.code_stale) { msg('The description was changed: write the code from it first.'); loadProposal(); return; }
+      if (kind === 'tools' && saved.test && !saved.test.passed && !confirm('The tests failed. Accept anyway (unaudited)?')) return;
+      const r = await api(`/api/agent/run/harvest/accept?id=${encodeURIComponent(propOpen.run)}&kind=${kind}&index=${propOpen.index}`, { method: 'POST' });
+      toast(kind === 'tools' ? `Added to the library; tests ${r.tests_passed ? 'passed' : r.tests_passed === false ? 'FAILED' : 'not run'}.` : 'Skill added to the library (unaudited).', 5000);
+      const name = saved.name; propOpen = null; libOpen = { kind, name }; loadLibrary();
+    } catch (err) { msg(err.message); }
+  });
+}
+
 async function loadItem(kind, name) {
   let i; try { i = await api(`/api/library/item?kind=${kind}&name=${encodeURIComponent(name)}`); } catch (err) { $('#l-item').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
   const m = i.meta || {};
@@ -956,6 +1101,7 @@ async function loadItem(kind, name) {
     ${kind === 'tools' ? `<p>${esc(m.purpose || '')}</p>${m.needs ? `<p class="dim">Needs: ${esc(m.needs)}</p>` : ''}
       <div class="table-wrap"><table><thead><tr><th>Input</th><th>Type</th><th>Description</th></tr></thead><tbody>${(m.inputs || []).map((x) => `<tr><td class="mono">${esc(x.name)}${x.required === false ? '' : ' *'}</td><td>${esc(x.type)}</td><td>${esc(x.description)}${'default' in x ? ` <span class="dim">(default ${esc(JSON.stringify(x.default))})</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
       <p><strong>Output</strong> (${esc((m.outputs || {}).type)}): ${esc((m.outputs || {}).description)}</p>
+      ${(m.tests || []).length ? `<p><strong>Tests</strong></p><ul>${m.tests.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
       ${i.test ? `<details ${i.test.passed ? '' : 'open'}><summary>Last test run ${esc(i.test.at)}: <span class="${i.test.passed ? 'ok' : 'err'}">${i.test.passed ? 'passed' : 'failed'}</span></summary><pre>${esc(i.test.output)}</pre></details>` : '<p class="dim">Tests not run for this version.</p>'}`
       : `<p>${esc(m.description || '')}</p>${(m.tools || []).length ? `<p>Tools: ${m.tools.map((t) => `<span class="chip mono">${esc(t)}</span>`).join('')}</p>` : ''}`}
     <h3 class="sec">Files</h3>${files}

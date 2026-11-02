@@ -24,7 +24,7 @@ TASKS = {
     "propose": "Describe undescribed signals (bulk proposals)",
     "house": "House description and model (benefits from a strong model)",
     "agent": "Agent runs: skills and questions with tools (benefits from a strong model)",
-    "harvest": "Find reusable tools and skills in a finished run (1-2 requests; benefits from a strong model)",
+    "harvest": "Find tools and skills in a run, write tools from their description (benefits from a strong model)",
 }
 MAX_SLOTS = 9
 

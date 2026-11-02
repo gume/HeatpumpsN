@@ -405,7 +405,7 @@ def test_harvest_proposes_and_adds_to_the_library(tmp_path):
     assert any(t["name"] == "double" for t in seen[0]["library"]["tools"])
     m.accept_harvest(run.id, "skills", 0)
     assert m.library.get("skills", "doubling").meta["author"] == f"harvest of run {run.id}"
-    assert m.run(run.id)["harvest"]["skills"][0]["added"]
+    assert m.run(run.id)["harvest"]["skills"][0]["state"] == "added"
     with pytest.raises(KeyError):
         m.accept_harvest(run.id, "tools", 5)
 
@@ -440,3 +440,90 @@ def test_quota_pause_and_resume_with_another_model(tmp_path):
     assert (folder / "report.md").read_text().startswith("done after the pause")
     kinds = [s["kind"] for s in Run(str(folder)).steps()]
     assert "pause" in kinds and "resume" in kinds
+
+
+def test_proposal_editors_flow(tmp_path):
+    import time as _time
+
+    from observer.agent.manager import AgentManager
+    from observer.agent.sandbox import Result
+
+    class Llm:
+        model = "strong"
+
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, system, user):
+            self.calls.append(json.loads(user))
+            if "previous_code" in self.calls[-1]:                       # the tool writer
+                spec = self.calls[-1]["description"]
+                return json.dumps({"code": "def run(x, factor=3):\n    return x * factor\n",
+                                   "tests": "from tool import run\n\n\ndef test_triples():\n    assert run(2) == 6\n"})
+            return json.dumps({"tools": [{"name": "double", "purpose": "Doubles", "needs": "a number",
+                                          "inputs": [{"name": "x", "type": "number", "description": "n"}],
+                                          "outputs": {"type": "number", "description": "2x"},
+                                          "code": TOOL_CODE, "tests": TOOL_TESTS}],
+                               "skills": [{"name": "doubling", "title": "Doubling", "description": "d",
+                                           "recipe": "1. double", "tools": ["double"]}], "notes": "n"})
+
+    llm = Llm()
+
+    class Settings:
+        def client(self, task):
+            return llm
+
+    class Svc(FakeService):
+        settings = Settings()
+
+    class FakeSandbox:
+        def status(self):
+            return {"ready": True, "problems": []}
+
+        def run(self, code, workspace, name="", socket_dir=None):
+            return Result(0, "1 passed", "", 0.1)
+
+    m = AgentManager(Svc(), {"paths": {"runs": str(tmp_path / "runs"), "library": str(tmp_path / "lib"),
+                                       "sandbox_venv": str(tmp_path / "none")}})
+    m.sandbox = FakeSandbox()
+    folder = tmp_path / "runs" / "20261102-010101-question"
+    folder.mkdir(parents=True)
+    Run(str(folder)).save_meta({"status": "done", "question": "q"})
+    run = "20261102-010101-question"
+
+    def wait(key):
+        for _ in range(100):
+            j = m.job(key)
+            if j and j["state"] != "running":
+                return j
+            _time.sleep(0.05)
+        raise AssertionError("job did not finish")
+
+    assert m.start_harvest(run)["state"] == "running"                   # returns at once
+    assert wait(f"harvest:{run}")["state"] == "done"
+    h = m.harvest_result(run)
+    assert h["tools"][0]["tests_description"] == ["double"]                # derived from the test names
+    assert [p["name"] for p in m.proposals()] == ["double", "doubling"]
+
+    # Editing the description makes the code stale; accepting is refused until it is written again.
+    p = m.update_proposal(run, "tools", 0, {"purpose": "Triples", "tests_description": ["triples a number"],
+                                            "outputs": {"type": "number", "description": "3x"}})
+    assert p["code_stale"] and p["edited"]
+    with pytest.raises(ValueError, match="write the code"):
+        m.accept_harvest(run, "tools", 0)
+    with pytest.raises(ValueError):
+        m.test_proposal(run, 0)
+    m.start_write_tool(run, 0)
+    assert wait(f"code:{run}:0")["state"] == "done"
+    p = m.proposal(run, "tools", 0)[1]
+    assert not p["code_stale"] and "factor=3" in p["code"] and p["test"]["passed"]
+    assert llm.calls[-1]["description"]["tests_description"] == ["triples a number"]
+    m.accept_harvest(run, "tools", 0)
+    item = m.library.get("tools", "double")
+    assert item.meta["purpose"] == "Triples" and item.meta["tests"] == ["triples a number"]
+    # The skill: edited recipe, then dismissed; nothing is pending afterwards.
+    m.update_proposal(run, "skills", 0, {"recipe": "1. double it twice"})
+    m.dismiss_proposal(run, "skills", 0)
+    assert m.proposals() == [] and m.harvest_result(run)["skills"][0]["state"] == "dismissed"
+    with pytest.raises(ValueError):
+        m.update_proposal(run, "skills", 0, {"recipe": "x"})

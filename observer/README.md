@@ -233,9 +233,13 @@ core tools from any MCP client (`observer mcp`).
   loading an unaudited tool prints a warning) and the run records which items
   it used and whether they were audited.
 * **Harvest**: the button *Find tools and skills in this run* sends the run
-  (code, outputs, report) and the library index to the task *harvest*
-  (1-2 requests; a strong model pays off) and lists proposed tools and skills;
-  *Add to library* saves one (unaudited, a tool's tests run at once).
+  (code, outputs, report) and the library index to the task *harvest* (1-2
+  requests; a strong model pays off) in the background. The proposals wait in
+  the Library tab and open in editors: skills as Markdown recipes; tools as
+  descriptions only (goal, data needed, inputs, output, tests as sentences),
+  never as code. An edited tool description makes the code stale; *Write
+  code from the description* has the model write code and tests, which run
+  in the sandbox. Accept puts the item into the house library, unaudited.
 * **Pause and resume**: the conversation is saved after every step. LLM
   errors are handled by kind:
   * 429 **with** a stated delay (Retry-After header, Google's `retryDelay`,

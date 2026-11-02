@@ -4,6 +4,25 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## Unreleased
+
+* Harvest ("Find tools and skills in this run") runs in the background: the
+  run view shows how long the model has been working, the error if it
+  fails, and the proposals when it is done. It no longer looks stuck with a
+  slow (thinking) model.
+* Proposals wait in the Library tab (*Proposed by agent runs*) and open in
+  editors:
+  * skill editor: name, title, description, the tools it uses, the recipe as
+    Markdown with a preview;
+  * tool editor without code: goal, the data it needs, the inputs as a
+    table, the output, and the tests as plain sentences. Changing the
+    description marks the code as out of date; *Write code from the
+    description* lets the model (task *harvest*) write code and tests,
+    which then run in the sandbox. The generated code is shown read-only.
+  * Save draft, Accept into the library (unaudited), Dismiss.
+* Tool manifests keep the test sentences (`tests` in tool.yaml); the
+  Library tab shows them.
+
 ## 0.3.1 - 2026-11-02
 
 * LLM providers set in the data directory's `.env` were hidden by the empty
