@@ -256,29 +256,41 @@ class Service:
                     break
         return polish(client, signal, draft, facts, self.cfg.get("context", ""), related)
 
-    # --- the reviewed house description -----------------------------------------------
-    # observer/house/ (in git): description.md and model.yaml (the audited
-    # version), notes.md (the owner's review notes, always editable),
-    # archive/<time>/ (every audited version with the notes of that moment).
-    # The proposal waits in data/house_proposal.yaml until it is accepted.
+    # --- the house understanding -------------------------------------------------------
+    # In the data directory's house/ (never in git):
+    #   notes.md        your review: free text, always editable
+    #   knowledge.md    owner knowledge: facts from your reviews that are not in
+    #                   the data, consolidated by the LLM (accepted version)
+    #   description.md, model.yaml   the accepted house understanding
+    #   archive/<time>/ every accepted version: knowledge, understanding, the
+    #                   review it came from, review.yaml (questions, model used)
+    # The draft (knowledge + understanding) waits in data/house_draft.yaml.
     def _house(self, name: str) -> str:
         return os.path.join(self.cfg["paths"]["house_dir"], name)
 
     def _read(self, path: str) -> str:
         return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
 
+    def _draft(self) -> dict | None:
+        path = self.cfg["paths"]["house_draft"]
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as fp:
+            return yaml.safe_load(fp)
+
+    def _save_draft(self, draft: dict) -> None:
+        with open(self.cfg["paths"]["house_draft"], "w", encoding="utf-8") as fp:
+            yaml.safe_dump(draft, fp, sort_keys=False, allow_unicode=True, width=100)
+
     def house(self) -> dict:
         archive_dir = self._house("archive")
         archive = sorted(os.listdir(archive_dir), reverse=True) if os.path.isdir(archive_dir) else []
-        proposal = None
-        if os.path.exists(self.cfg["paths"]["house_proposal"]):
-            with open(self.cfg["paths"]["house_proposal"], encoding="utf-8") as fp:
-                proposal = yaml.safe_load(fp)
         model_text = self._read(self._house("model.yaml"))
         return {"current": {"description": self._read(self._house("description.md")),
+                            "knowledge": self._read(self._house("knowledge.md")),
                             "model": yaml.safe_load(model_text) if model_text else None,
-                            "audited": archive[0] if archive else None},
-                "proposal": proposal, "notes": self._read(self._house("notes.md")), "archive": archive}
+                            "accepted": archive[0] if archive else None},
+                "draft": self._draft(), "notes": self._read(self._house("notes.md")), "archive": archive}
 
     def save_notes(self, text: str) -> None:
         os.makedirs(self.cfg["paths"]["house_dir"], exist_ok=True)
@@ -286,7 +298,7 @@ class Service:
             fp.write(text.rstrip() + "\n" if text.strip() else "")
 
     def house_inputs(self) -> tuple[dict, dict]:
-        """(described signals, candidates): what the description is built from."""
+        """(described signals, candidates): what the understanding is built from."""
         with self.lock:
             described, candidates = {}, {}
             for sig, e in self.ingest.catalog.entries.items():
@@ -299,54 +311,83 @@ class Service:
                                        "device": e.meta.get("device"), "last": e.last_value}
         return described, dict(list(sorted(candidates.items()))[:200])
 
-    def generate_house(self, client=None) -> dict:
-        from .llm import build_house_description
+    def generate_house(self, client=None, from_draft_knowledge: bool = False) -> dict:
+        """A new draft: the review merged into the owner knowledge, then the understanding.
+
+        With from_draft_knowledge the draft's (possibly edited) knowledge is kept
+        and only the understanding is built again."""
+        from .llm import build_house_description, consolidate_knowledge
 
         client = client or self.settings.client("house")
         if client is None:
-            raise RuntimeError("no LLM configured for the house description (Settings)")
+            raise RuntimeError("no LLM configured for the house understanding (Settings)")
+        previous = self._draft() or {}
+        accepted_knowledge = self._read(self._house("knowledge.md"))
+        review = self._read(self._house("notes.md"))
+        context = self.cfg.get("context", "")
+        if from_draft_knowledge:
+            if not previous.get("knowledge_md"):
+                raise FileNotFoundError("no draft knowledge")
+            knowledge = {"knowledge_md": previous["knowledge_md"], "changes": previous.get("knowledge_changes", []),
+                         "edited": previous.get("knowledge_edited", False)}
+        elif review.strip():
+            last_questions = previous.get("questions") or (self._accepted_review().get("questions") or [])
+            knowledge = consolidate_knowledge(client, context, accepted_knowledge, review, last_questions)
+        else:
+            knowledge = {"knowledge_md": accepted_knowledge, "changes": []}
         described, candidates = self.house_inputs()
-        out = build_house_description(client, self.cfg.get("context", ""), described, candidates,
-                                      self._read(self._house("notes.md")), self._read(self._house("description.md")))
-        out["generated"] = time.strftime("%Y-%m-%d %H:%M")
-        out["model_name"] = getattr(client, "model", "")
-        with open(self.cfg["paths"]["house_proposal"], "w", encoding="utf-8") as fp:
-            yaml.safe_dump(out, fp, sort_keys=False, allow_unicode=True, width=100)
-        return out
+        out = build_house_description(client, context, described, candidates, knowledge["knowledge_md"],
+                                      self._read(self._house("description.md")))
+        draft = {"generated": time.strftime("%Y-%m-%d %H:%M"), "model_name": getattr(client, "model", ""),
+                 "knowledge_md": knowledge["knowledge_md"], "knowledge_changes": knowledge["changes"],
+                 "knowledge_edited": bool(knowledge.get("edited")), **out}
+        self._save_draft(draft)
+        return draft
 
-    def edit_proposal(self, description: str) -> None:
-        path = self.cfg["paths"]["house_proposal"]
-        if not os.path.exists(path):
-            raise FileNotFoundError("no proposal")
-        with open(path, encoding="utf-8") as fp:
-            proposal = yaml.safe_load(fp)
-        proposal["description_md"] = description
-        proposal["edited"] = True
-        with open(path, "w", encoding="utf-8") as fp:
-            yaml.safe_dump(proposal, fp, sort_keys=False, allow_unicode=True, width=100)
+    def _accepted_review(self) -> dict:
+        archive = self.house()["archive"]
+        if not archive:
+            return {}
+        text = self._read(self._house(os.path.join("archive", archive[0], "review.yaml")))
+        return yaml.safe_load(text) or {} if text else {}
 
-    def accept_house(self) -> str:
-        """The proposal becomes the audited version; it is archived with the current notes."""
-        path = self.cfg["paths"]["house_proposal"]
-        if not os.path.exists(path):
-            raise FileNotFoundError("no proposal")
-        with open(path, encoding="utf-8") as fp:
-            proposal = yaml.safe_load(fp)
+    def edit_draft(self, description: str | None = None, knowledge: str | None = None) -> None:
+        draft = self._draft()
+        if draft is None:
+            raise FileNotFoundError("no draft")
+        if description is not None:
+            draft["description_md"] = description
+            draft["edited"] = True
+        if knowledge is not None:
+            draft["knowledge_md"] = knowledge
+            draft["knowledge_edited"] = True
+        self._save_draft(draft)
+
+    def accept_house(self, clear_review: bool = False) -> str:
+        """The draft becomes the accepted understanding; archived with its knowledge and the review."""
+        draft = self._draft()
+        if draft is None:
+            raise FileNotFoundError("no draft")
         stamp = time.strftime("%Y-%m-%d_%H%M%S")
         folder = self._house(os.path.join("archive", stamp))
         os.makedirs(folder, exist_ok=True)
-        model_yaml = yaml.safe_dump(proposal.get("model") or {}, sort_keys=False, allow_unicode=True, width=100)
-        review = {k: proposal.get(k) for k in ("generated", "model_name", "edited", "questions", "recommendations")}
+        model_yaml = yaml.safe_dump(draft.get("model") or {}, sort_keys=False, allow_unicode=True, width=100)
+        review = {k: draft.get(k) for k in ("generated", "model_name", "edited", "knowledge_edited",
+                                             "knowledge_changes", "questions", "recommendations")}
         for target in (self.cfg["paths"]["house_dir"], folder):
             with open(os.path.join(target, "description.md"), "w", encoding="utf-8") as fp:
-                fp.write(proposal["description_md"].rstrip() + "\n")
+                fp.write(draft["description_md"].rstrip() + "\n")
+            with open(os.path.join(target, "knowledge.md"), "w", encoding="utf-8") as fp:
+                fp.write((draft.get("knowledge_md") or "").rstrip() + "\n")
             with open(os.path.join(target, "model.yaml"), "w", encoding="utf-8") as fp:
                 fp.write(model_yaml)
         with open(os.path.join(folder, "review.yaml"), "w", encoding="utf-8") as fp:
             yaml.safe_dump(review, fp, sort_keys=False, allow_unicode=True, width=100)
         with open(os.path.join(folder, "notes.md"), "w", encoding="utf-8") as fp:
             fp.write(self._read(self._house("notes.md")))
-        os.remove(path)
+        if clear_review:
+            self.save_notes("")
+        os.remove(self.cfg["paths"]["house_draft"])
         return stamp
 
     def archived(self, stamp: str) -> dict:
@@ -357,5 +398,6 @@ class Service:
             raise KeyError(stamp)
         review = self._read(os.path.join(folder, "review.yaml"))
         return {"stamp": stamp, "description": self._read(os.path.join(folder, "description.md")),
+                "knowledge": self._read(os.path.join(folder, "knowledge.md")),
                 "notes": self._read(os.path.join(folder, "notes.md")),
                 "review": yaml.safe_load(review) if review else {}}

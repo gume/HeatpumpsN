@@ -281,16 +281,17 @@ HOUSE_SYSTEM = """You write the description of a house's heating system for its 
 who will review it, correct it and add facts. A supervisor later uses the
 same understanding for analysis and anomaly detection.
 
-You get: the house context, the described signals (id, name, quantity, unit,
-location, circuit, role, description), signals that are recorded or seen but
-not described or not stored (candidates), the owner's review notes (they are
-authoritative: follow them, even against your own reading) and the previous
-audited description (keep what is still right, improve the rest).
+You get: the house context, the owner knowledge (facts from the owner that
+are not in the sensor data; they are authoritative: follow them, even against
+your own reading), the described signals (id, name, quantity, unit, location,
+circuit, role, description), signals that are recorded or seen but not
+described or not stored (candidates), and the previously accepted
+understanding (keep what is still right, improve the rest).
 
 Answer only with JSON:
 {
  "description_md": "Markdown for the owner. Sections: ## Overview, ## Boiler and hot water, ## Heating circuits (one ### per circuit), ## Rooms, ## Outdoor, ## Controller and measurement devices, ## How the parts interact (expected behaviour, with typical numbers where you can estimate them), ## Uncertain points. Name sensors by their names, with the id in backticks the first time. Plain, concrete sentences.",
- "questions": ["specific questions whose answers would make the description or the analysis better"],
+ "questions": ["specific questions whose answers would make the description or the analysis better; do not ask what the owner knowledge already answers"],
  "recommendations": [{"kind": "existing_signal" or "new_sensor", "signal": "candidate id (existing_signal only)", "what": "short", "why": "what it would enable", "priority": "high" | "medium" | "low"}],
  "model": {"systems": [{"name", "description", "signals": []}],
            "points": [{"signal", "measures", "use"}],
@@ -305,11 +306,51 @@ uncertain instead."""
 PRIORITIES = ("high", "medium", "low")
 
 
+KNOWLEDGE_SYSTEM = """You keep the owner knowledge of a house's heating system: the facts
+the owner told us that are not in the sensor data (building, insulation,
+hydraulics and equipment, rooms and their use, comfort targets and
+schedules, history and changes, known problems, answers to earlier
+questions). A supervisor and its analyses rely on it.
+
+You get the house context, the current owner knowledge (may be empty), the
+owner's new review (free text, possibly informal or in another language) and
+the questions the last understanding asked.
+
+Merge the review into the knowledge:
+* keep every fact of the current knowledge unless the review changes it;
+  newer statements override older ones (say "changed: ..." in `changes`);
+* only facts and wishes of the owner: no sensor values, nothing invented,
+  no advice; keep the owner's uncertainty ("probably", "about");
+* corrections of the understanding ("X is not the boiler flow but ...") are
+  facts: keep them;
+* write in English, short and concrete, in Markdown with these sections when
+  they have content: ## Building, ## Heating system and hydraulics,
+  ## Rooms and use, ## Comfort targets and schedules, ## Sensors and signals
+  (what a signal really measures), ## History and changes, ## Known issues,
+  ## Open points.
+
+Answer only with JSON:
+{"knowledge_md": "the complete merged document", "changes": ["one line per fact added, changed or removed"]}"""
+
+
+def consolidate_knowledge(client: LlmClient, context: str, knowledge_md: str, review: str,
+                          questions: list[str] | None = None) -> dict:
+    """The owner knowledge with the review merged in: {knowledge_md, changes}."""
+    user = json.dumps({"house_context": context.strip(), "current_owner_knowledge": knowledge_md.strip(),
+                       "owner_review": review.strip(), "questions_asked_last_time": questions or []},
+                      ensure_ascii=False, indent=1)
+    data = chat_json(client, KNOWLEDGE_SYSTEM, user)
+    if not isinstance(data, dict) or not isinstance(data.get("knowledge_md"), str) or not data["knowledge_md"].strip():
+        raise ValueError("the answer has no owner knowledge")
+    return {"knowledge_md": data["knowledge_md"].strip(),
+            "changes": [c.strip() for c in data.get("changes", []) if isinstance(c, str) and c.strip()]}
+
+
 def build_house_description(client: LlmClient, context: str, described: dict[str, dict],
-                            candidates: dict[str, dict], notes: str, previous_md: str) -> dict:
-    """Validated description, questions, recommendations and model from the LLM."""
-    user = json.dumps({"house_context": context.strip(), "owner_review_notes": notes.strip(),
-                       "previous_audited_description": previous_md.strip(),
+                            candidates: dict[str, dict], knowledge: str, previous_md: str) -> dict:
+    """Validated understanding (description, questions, recommendations, model) from the LLM."""
+    user = json.dumps({"house_context": context.strip(), "owner_knowledge": knowledge.strip(),
+                       "previous_accepted_understanding": previous_md.strip(),
                        "described_signals": described, "candidate_signals": candidates},
                       ensure_ascii=False, indent=1)
     data = chat_json(client, HOUSE_SYSTEM, user)

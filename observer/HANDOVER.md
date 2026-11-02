@@ -43,7 +43,7 @@ Signals tab writes the entries. The generic starter file is
   `OBSERVER_HOME`, default `~/.local/share/heatpumpsn-observer` (never in git):
   `config.yaml`, `.env` (secrets: InfluxDB token, LLM endpoints and keys),
   `registry.yaml` (this house's sensor selection and descriptions),
-  `house/` (description, model, review notes, archive), `data/` (catalog,
+  `house/` (your review, owner knowledge, accepted understanding and model, archive), `data/` (catalog,
   settings, proposals, log). `observer init` creates a data directory from
   `observer/defaults/`.
 * **Running:** `observer serve` (portal `http://127.0.0.1:8090/`, no login yet),
@@ -63,11 +63,16 @@ Signals tab writes the entries. The generic starter file is
   to the broker port). Direction `out` only.
 * **LLM:** provider slot 1 "Gemini proxy" (`http://localhost:38080/v1`, in the
   data directory's `.env`); all three tasks on `gemini-3.5-flash-lite`. The
-  house description is thin with that model: switch the *house* task to a
-  stronger model (the proxy lists `gemini-2.5-pro`) in Settings.
-* **House description:** a proposal is waiting in the House tab; nothing has
-  been accepted or archived yet. The owner reviews it, writes notes, accepts.
-* **Next (plan phases):** C deterministic supervision from the audited model's
+  house description is thin with that model. The owner has
+  `gemini-3.8-flash` too, but only 20 requests a day: fine for the house
+  task (2 requests per draft), not for agent runs (10–25 requests).
+  `gemini-2.5-pro` answers 404, the pro models 429. All tasks are on
+  flash-lite now (the owner's choice, 2026-11-02).
+* **House understanding** (three parts: your review, owner knowledge,
+  understanding): a draft from before the knowledge step is waiting; the
+  owner's review (notes.md) has content that "Generate a draft" will
+  consolidate. Nothing accepted yet.
+* **Next (plan phases):** C deterministic supervision from the accepted model's
   checks with alerts to HA (first rule: EMS-ESP offline / heartbeat missing);
   then the tool layer, sandbox and agents (`plans/observer_agentic_plan.md`).
   Copy the old HA InfluxDB year in once (read-only token) before HA's InfluxDB

@@ -59,7 +59,7 @@ def create_app(service: Service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    # --- the reviewed house description ---------------------------------------
+    # --- the house understanding: review, owner knowledge, understanding ------
     @app.get("/api/house")
     def house():
         return service.house()
@@ -70,28 +70,31 @@ def create_app(service: Service) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/house/generate")
-    async def generate_house():
+    async def generate_house(body: dict | None = Body(None)):
+        keep = bool((body or {}).get("from_draft_knowledge"))
         try:
-            return await run_in_threadpool(service.generate_house)
+            return await run_in_threadpool(lambda: service.generate_house(from_draft_knowledge=keep))
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no draft knowledge to build from") from exc
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    @app.put("/api/house/proposal")
-    def edit_proposal(description: str = Body(..., embed=True)):
+    @app.put("/api/house/draft")
+    def edit_draft(body: dict = Body(...)):
         try:
-            service.edit_proposal(description)
+            service.edit_draft(body.get("description"), body.get("knowledge"))
         except FileNotFoundError as exc:
-            raise HTTPException(404, "no proposal") from exc
+            raise HTTPException(404, "no draft") from exc
         return {"ok": True}
 
     @app.post("/api/house/accept")
-    def accept_house():
+    def accept_house(body: dict | None = Body(None)):
         try:
-            return {"archived": service.accept_house()}
+            return {"archived": service.accept_house(bool((body or {}).get("clear_review")))}
         except FileNotFoundError as exc:
-            raise HTTPException(404, "no proposal to accept") from exc
+            raise HTTPException(404, "no draft to accept") from exc
 
     @app.get("/api/house/archive")
     def archived(stamp: str = Query(...)):

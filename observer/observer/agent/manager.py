@@ -6,7 +6,7 @@ Configuration (config.yaml, all optional):
     agent:
       read_token_env: OBSERVER_INFLUX_READ_TOKEN   # read-only InfluxDB token
       max_steps: 25
-      deadline_s: 900
+      deadline_s: 1800
       sandbox: {runtime: bwrap, wall_s: 120, cpu_s: 120, memory_mb: 1024, tasks: 64, file_mb: 200}
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ class AgentManager:
         self.sandbox = make_sandbox(cfg)
         self.data = make_data(cfg)
         a = cfg.get("agent") or {}
-        self.max_steps, self.deadline_s = int(a.get("max_steps", 25)), float(a.get("deadline_s", 900))
+        self.max_steps, self.deadline_s = int(a.get("max_steps", 25)), float(a.get("deadline_s", 1800))
         self._lock = threading.Lock()
         self._active: tuple[str, threading.Event] | None = None
 

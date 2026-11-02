@@ -41,7 +41,7 @@ llm:
 agent:
   read_token_env: OBSERVER_INFLUX_READ_TOKEN
   max_steps: 25
-  deadline_s: 900
+  deadline_s: 1800      # strong (thinking) models need 1-2 min per step
   sandbox:
     runtime: bwrap        # bwrap (rootless, default) | podman | docker
     wall_s: 120           # per code run

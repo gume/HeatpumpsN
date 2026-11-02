@@ -91,13 +91,16 @@ def load_config(path: str) -> dict:
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
-                         ("house_proposal", "data/house_proposal.yaml"), ("settings", "data/settings.yaml"),
+                         ("house_draft", "data/house_draft.yaml"), ("settings", "data/settings.yaml"),
                          ("runs", "runs/runs.keep"), ("skills", "skills/skills.keep"),
                          ("sandbox_venv", "sandbox/venv")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
     paths["house_dir"] = os.path.dirname(paths["house_dir"])   # a folder: house/
+    old_draft = os.path.join(os.path.dirname(paths["house_draft"]), "house_proposal.yaml")
+    if os.path.exists(old_draft) and not os.path.exists(paths["house_draft"]):
+        os.replace(old_draft, paths["house_draft"])             # the draft's former name
     paths["runs"] = os.path.dirname(paths["runs"])             # agent runs: runs/<id>/
     paths["skills"] = os.path.dirname(paths["skills"])         # house-local skills
     return cfg

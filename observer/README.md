@@ -20,7 +20,7 @@ send later is a validated controller parameter set (plan:
 | --- | --- |
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
-| `docker-compose.dev.yml`, scripts | `house/`: description, model, review notes, archive |
+| `docker-compose.dev.yml`, scripts | `house/`: your review, owner knowledge, accepted understanding, archive |
 | `observer/skills/`: agent skills (recipes and helpers) | `data/`: catalog, settings, proposals, log |
 | | `runs/`: every agent run (steps, code, data, report); `skills/`: house-local skills |
 | | `sandbox/venv`: the sandbox's Python environment |
@@ -120,31 +120,36 @@ write a draft description in your own words and press **Polish with LLM**: the
 model rewrites it using the signal's metadata, unit, rule and neighbouring
 signals, and says what it changed; you review and save.
 
-## House description (reviewed)
+## House understanding
 
-The observer's understanding of the house, written for the owner to check and
-extend. Files in `house/` in the data directory:
+How the observer understands the house, kept in three parts (House tab):
 
-* `description.md`: the audited description (overview, boiler and DHW, each
-  circuit, rooms, outdoor, controller and devices, how the parts interact,
-  uncertain points);
-* `model.yaml`: the same understanding in machine form (systems, points,
-  relations, checks, gaps), read by analysis and anomaly checks;
-* `notes.md`: the owner's review notes: corrections, missing facts, answers to
-  the questions. Always editable; every regeneration uses them;
-* `archive/<time>/`: every audited version with its notes, model and review
-  data (questions, recommendations, which model wrote it, whether it was edited).
+1. **Your review** (`house/notes.md`): free text, any language, always
+   editable: corrections, missing facts, answers to the questions, comfort
+   targets, changes in the house.
+2. **Owner knowledge** (`house/knowledge.md`): the facts from your reviews
+   that the sensors cannot know (building, hydraulics and equipment, rooms and
+   use, comfort targets and schedules, what a signal really measures,
+   history, known issues), consolidated and formatted by the LLM. Newer
+   statements override older ones; each draft lists what changed. It is
+   authoritative for the understanding and the agent.
+3. **House understanding** (`house/description.md` + `model.yaml`): the
+   description for you (overview, boiler and DHW, each circuit, rooms,
+   outdoor, controller and devices, how the parts interact, uncertain points)
+   and the same in machine form (systems, points, relations, checks, gaps),
+   built from the signals and the owner knowledge.
 
-**Cycle:** *Generate a proposal* (from the house context, all described
-signals, the not-yet-used catalog signals, the notes and the previous audited
-description) → read it, answer its **questions** in the notes, look at the
-**recommendations** (existing signals worth using, sensors worth adding) →
-edit the text if needed or regenerate → *Accept and archive*. Signal ids named
-in the text that do not exist are flagged above the proposal. The proposal
-waits in `data/house_proposal.yaml` until it is accepted.
-
-The quality depends on the model: the house description benefits from a
-strong reasoning model (Settings).
+**Cycle:** *Generate a draft* merges your review into the owner knowledge,
+then builds the understanding from it (two LLM requests) → read both, answer
+the **questions** in your review, look at the **recommendations** → edit the
+knowledge or the understanding in the draft if needed (*Rebuild the
+understanding from the knowledge* uses edited knowledge without a new
+consolidation) → *Accept and archive*: knowledge and understanding become the
+accepted version and go to `house/archive/<time>/` together with the review
+they came from and `review.yaml` (questions, recommendations, changes, model,
+whether it was edited); optionally your review is cleared. The draft waits in
+`data/house_draft.yaml`. Signal ids named in the text that do not exist are
+flagged.
 
 ## LLM providers and models
 
@@ -202,7 +207,7 @@ or use its tools from any MCP client (`observer mcp`).
   Helpers are copied into the workspace (`skill/`). Now: `sensor-health`,
   `heating-start`, `boiler-cycling`. House-local skills in
   `<OBSERVER_HOME>/skills/` override them.
-* **Runs**: one at a time, at most 25 model steps and 15 minutes; everything
+* **Runs**: one at a time, at most 25 model steps and 30 minutes; everything
   is kept in `runs/<id>/` and shown in the portal (report, findings,
   proposals, plots, every step with its code and output). The agent never
   changes anything; proposals are for the owner.

@@ -155,19 +155,23 @@
   </section>
 
   <section id="view-house" class="hidden">
-    <p class="dim">The observer's understanding of the house, written for you to check. Correct it and add facts in the review
-      notes; regenerating uses them. Accepting a proposal makes it the audited version and archives it
-      (<span class="mono">house/</span> in the data directory, not in git). Analysis and anomaly checks use the audited version.</p>
+    <p class="dim">How the observer understands the house, in three parts: <strong>your review</strong> (free text, any time),
+      the <strong>owner knowledge</strong> consolidated from your reviews (facts that are not in the sensor data) and the
+      <strong>house understanding</strong> built from the data and that knowledge. A new draft of both waits for your acceptance;
+      accepting archives knowledge, understanding and your review together (<span class="mono">house/</span> in the data
+      directory, not in git). Analyses and the agent use the accepted version.</p>
     <div class="card" style="margin-bottom:12px">
-      <h3 class="sec" style="margin-top:0">Review notes</h3>
-      <p class="dim" style="margin:0 0 6px">Corrections, missing facts, answers to the questions. Always open; kept in the data directory.</p>
-      <textarea id="h-notes" rows="7" style="width:100%"></textarea>
-      <div class="actions" style="margin-top:8px"><span class="dim" id="h-notes-msg"></span><button class="btn" id="h-notes-save">Save notes</button></div>
+      <h3 class="sec" style="margin-top:0">1 · Your review</h3>
+      <p class="dim" style="margin:0 0 6px">Corrections, missing facts, answers to the questions, comfort targets, changes in the house.
+        Any language, any form: it is consolidated into the owner knowledge when you generate a draft.</p>
+      <textarea id="h-notes" rows="6" style="width:100%"></textarea>
+      <div class="actions" style="margin-top:8px"><span class="dim" id="h-notes-msg"></span><button class="btn" id="h-notes-save">Save review</button></div>
     </div>
     <div class="bar">
-      <button class="btn primary" id="h-generate">Generate a proposal</button>
+      <button class="btn primary" id="h-generate" title="Merge your review into the owner knowledge, then build the understanding">Generate a draft</button>
+      <button class="btn" id="h-rebuild" title="Keep the draft's (edited) owner knowledge, build only the understanding again">Rebuild the understanding from the knowledge</button>
       <button class="btn" id="h-accept">Accept and archive</button>
-      <button class="btn" id="h-edit">Edit the proposal</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="h-clear" checked> clear my review after accepting (it is archived)</label>
       <select id="h-archive"><option value="">Archived versions…</option></select>
       <span class="dim" id="h-msg"></span>
     </div>
@@ -485,7 +489,7 @@ function md(text) {
   return out.join('');
 }
 
-let house = null, houseEditing = false;
+let house = null, houseEditing = null;   // null, 'knowledge' or 'description'
 async function loadHouse() {
   house = await api('/api/house');
   if (!signals.length) signals = await api('/api/signals');
@@ -493,58 +497,82 @@ async function loadHouse() {
   const chips = (ids) => (ids || []).map((id) => `<span class="chip" title="${esc(id)}">${esc(name(id))}</span>`).join('');
   if (document.activeElement !== $('#h-notes')) $('#h-notes').value = house.notes || '';
   $('#h-archive').innerHTML = '<option value="">Archived versions…</option>' + house.archive.map((a) => `<option>${esc(a)}</option>`).join('');
-  const p = house.proposal, cur = house.current;
-  $('#h-accept').disabled = !p; $('#h-edit').disabled = !p; $('#h-generate').disabled = !llm.house;
-  $('#h-msg').textContent = !llm.house ? 'No model set for the house description (Settings).'
-    : p ? `Proposal from ${p.generated}${p.model_name ? ` (${p.model_name})` : ''}${p.edited ? ', edited' : ''}: not accepted yet.`
-    : cur.description ? `Audited version ${cur.audited || ''}.` : 'No description yet: generate a proposal.';
-  const doc = p ? { description: p.description_md, model: p.model, questions: p.questions, recommendations: p.recommendations } : cur;
-  if (!doc || !doc.description) { $('#h-body').innerHTML = ''; return; }
-  const model = doc.model || {};
+  const d = house.draft, cur = house.current;
+  $('#h-accept').disabled = !d; $('#h-rebuild').disabled = !d || !llm.house; $('#h-generate').disabled = !llm.house;
+  $('#h-msg').textContent = !llm.house ? 'No model set for the house understanding (Settings).'
+    : d ? `Draft from ${d.generated}${d.model_name ? ` (${d.model_name})` : ''}${d.edited || d.knowledge_edited ? ', edited' : ''}: waiting for your acceptance.`
+    : cur.description ? `Accepted version ${cur.accepted || ''}.` : 'No understanding yet: generate a draft.';
+  const knowledge = d ? d.knowledge_md : cur.knowledge;
+  const doc = d ? { description: d.description_md, model: d.model, questions: d.questions, recommendations: d.recommendations } : cur;
+  const state = d ? '<span class="pill" style="color:var(--warn);border-color:var(--warn)">draft</span>' : (cur.accepted ? '<span class="pill store">accepted</span>' : '');
+  const model = (doc && doc.model) || {};
   const rows = (list, cols) => list && list.length ? `<div class="table-wrap"><table><tbody>${list.map(cols).join('')}</tbody></table></div>` : '<p class="dim">none</p>';
+  const editor = (part, text) => `<textarea id="h-text" rows="24" style="width:100%;font-family:var(--mono);font-size:12px">${esc(text)}</textarea>
+      <div class="actions" style="margin-top:8px"><button class="btn" id="h-cancel">Cancel</button><button class="btn primary" id="h-save" data-part="${part}">Save in the draft</button></div>`;
   $('#h-body').innerHTML = `
-    ${houseEditing && p ? `<textarea id="h-text" rows="28" style="width:100%;font-family:var(--mono);font-size:12px">${esc(p.description_md)}</textarea>
-      <div class="actions" style="margin-top:8px"><button class="btn" id="h-cancel">Cancel</button><button class="btn primary" id="h-save">Save the edited proposal</button></div>`
-      : `<div class="card md">${md(doc.description)}</div>`}
-    ${p && p.unknown_ids && p.unknown_ids.length ? `<div class="card" style="border-color:var(--warn);margin-top:10px"><strong class="warn">The text names ${p.unknown_ids.length} signal id(s) that do not exist</strong>
-      <div class="mono" style="margin-top:4px">${p.unknown_ids.map(esc).join('<br>')}</div><p class="dim" style="margin:6px 0 0">Correct them with "Edit the proposal", or regenerate.</p></div>` : ''}
-    ${doc.questions && doc.questions.length ? `<h3 class="sec">Questions for you</h3><div class="card"><ol>${doc.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>
-      <p class="dim" style="margin:6px 0 0">Answer them in the review notes, then generate again.</p></div>` : ''}
-    ${doc.recommendations && doc.recommendations.length ? `<h3 class="sec">Recommendations</h3>${rows(doc.recommendations, (r) => `<tr>
+    <div class="card" style="margin-bottom:12px">
+      <div class="bar" style="margin:0 0 6px"><h3 class="sec" style="margin:0">2 · Owner knowledge</h3>${knowledge ? state : ''}
+        ${d && houseEditing !== 'knowledge' ? '<button class="btn" id="h-edit-k" style="margin-left:auto">Edit</button>' : ''}</div>
+      <p class="dim" style="margin:0 0 6px">What you told us that the sensors cannot know, consolidated and versioned with the understanding.</p>
+      ${houseEditing === 'knowledge' && d ? editor('knowledge', d.knowledge_md || '')
+        : knowledge ? `<div class="md">${md(knowledge)}</div>` : '<p class="dim">Nothing yet: write a review and generate a draft.</p>'}
+      ${d && (d.knowledge_changes || []).length ? `<details style="margin-top:6px"><summary>What changed with this draft (${d.knowledge_changes.length})</summary><ul>${d.knowledge_changes.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : ''}
+    </div>
+    <div class="card">
+      <div class="bar" style="margin:0 0 6px"><h3 class="sec" style="margin:0">3 · House understanding</h3>${doc && doc.description ? state : ''}
+        ${d && houseEditing !== 'description' ? '<button class="btn" id="h-edit-d" style="margin-left:auto">Edit</button>' : ''}</div>
+      ${houseEditing === 'description' && d ? editor('description', d.description_md || '')
+        : doc && doc.description ? `<div class="md">${md(doc.description)}</div>` : '<p class="dim">No understanding yet.</p>'}
+    </div>
+    ${d && d.unknown_ids && d.unknown_ids.length ? `<div class="card" style="border-color:var(--warn);margin-top:10px"><strong class="warn">The text names ${d.unknown_ids.length} signal id(s) that do not exist</strong>
+      <div class="mono" style="margin-top:4px">${d.unknown_ids.map(esc).join('<br>')}</div><p class="dim" style="margin:6px 0 0">Correct them with Edit, or generate again.</p></div>` : ''}
+    ${doc && doc.questions && doc.questions.length ? `<h3 class="sec">Questions for you</h3><div class="card"><ol>${doc.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>
+      <p class="dim" style="margin:6px 0 0">Answer them in your review, then generate a draft again.</p></div>` : ''}
+    ${doc && doc.recommendations && doc.recommendations.length ? `<h3 class="sec">Recommendations</h3>${rows(doc.recommendations, (r) => `<tr>
       <td class="${r.priority === 'high' ? 'warn' : 'dim'}">${esc(r.priority)}</td><td>${r.kind === 'existing_signal' ? 'use existing' : 'new sensor'}</td>
       <td>${r.signal ? chips([r.signal]) + ' ' : ''}${esc(r.what)}</td><td class="dim">${esc(r.why)}</td></tr>`)}` : ''}
-    <details style="margin-top:12px"><summary>Machine model: ${(model.systems || []).length} systems, ${(model.relations || []).length} relations, ${(model.checks || []).length} checks</summary>
+    ${doc && doc.description ? `<details style="margin-top:12px"><summary>Machine model: ${(model.systems || []).length} systems, ${(model.relations || []).length} relations, ${(model.checks || []).length} checks</summary>
       <h3 class="sec">Relations</h3>${rows(model.relations, (r) => `<tr><td><span class="pill">${esc(r.type)}</span></td><td>${chips(r.signals)}</td><td>${esc(r.condition)}</td><td>${esc(r.expectation)}<div class="dim">${esc(r.why)}</div></td></tr>`)}
       <h3 class="sec">Checks</h3>${rows(model.checks, (c) => `<tr><td class="${c.severity === 'alarm' ? 'err' : c.severity === 'warning' ? 'warn' : 'dim'}">${esc(c.severity)}</td><td>${esc(c.name)}</td><td>${chips(c.signals)}</td><td>${esc(c.condition)}</td></tr>`)}
-    </details>`;
-  if ($('#h-save')) $('#h-save').addEventListener('click', async () => {
-    try { await api('/api/house/proposal', { method: 'PUT', body: JSON.stringify({ description: $('#h-text').value }) }); houseEditing = false; toast('Proposal saved.'); loadHouse(); }
+    </details>` : ''}`;
+  if ($('#h-edit-k')) $('#h-edit-k').addEventListener('click', () => { houseEditing = 'knowledge'; loadHouse(); });
+  if ($('#h-edit-d')) $('#h-edit-d').addEventListener('click', () => { houseEditing = 'description'; loadHouse(); });
+  if ($('#h-save')) $('#h-save').addEventListener('click', async (e) => {
+    const body = e.target.dataset.part === 'knowledge' ? { knowledge: $('#h-text').value } : { description: $('#h-text').value };
+    try { await api('/api/house/draft', { method: 'PUT', body: JSON.stringify(body) }); houseEditing = null;
+          toast(body.knowledge != null ? 'Knowledge saved in the draft. "Rebuild the understanding" uses it.' : 'Understanding saved in the draft.', 4000); loadHouse(); }
     catch (err) { toast(err.message, 5000); }
   });
-  if ($('#h-cancel')) $('#h-cancel').addEventListener('click', () => { houseEditing = false; loadHouse(); });
+  if ($('#h-cancel')) $('#h-cancel').addEventListener('click', () => { houseEditing = null; loadHouse(); });
 }
 $('#h-notes-save').addEventListener('click', async () => {
   try { await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }); $('#h-notes-msg').textContent = 'Saved.'; }
   catch (err) { $('#h-notes-msg').textContent = err.message; }
 });
-$('#h-generate').addEventListener('click', async () => {
-  await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }).catch(() => {});
-  $('#h-generate').disabled = true; $('#h-msg').textContent = 'Generating… a minute or more with a strong model.';
-  try { await api('/api/house/generate', { method: 'POST' }); toast('Proposal ready.'); } catch (err) { $('#h-msg').textContent = err.message; }
-  $('#h-generate').disabled = false; houseEditing = false; loadHouse();
-});
+async function generateHouse(fromKnowledge) {
+  if (!fromKnowledge) await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }).catch(() => {});
+  for (const b of ['#h-generate', '#h-rebuild']) $(b).disabled = true;
+  $('#h-msg').textContent = fromKnowledge ? 'Building the understanding…' : 'Consolidating your review, then building the understanding… a minute or more.';
+  try { await api('/api/house/generate', { method: 'POST', body: JSON.stringify({ from_draft_knowledge: fromKnowledge }) }); toast('Draft ready.'); }
+  catch (err) { $('#h-msg').textContent = err.message; }
+  houseEditing = null; loadHouse();
+}
+$('#h-generate').addEventListener('click', () => generateHouse(false));
+$('#h-rebuild').addEventListener('click', () => generateHouse(true));
 $('#h-accept').addEventListener('click', async () => {
-  if (!confirm('Accept this proposal as the audited description? The current version and your notes are archived with it.')) return;
-  try { const r = await api('/api/house/accept', { method: 'POST' }); toast(`Accepted and archived (${r.archived}).`); loadHouse(); }
+  if (!confirm('Accept this draft? Owner knowledge and understanding become the accepted version and are archived with your review.')) return;
+  try { const r = await api('/api/house/accept', { method: 'POST', body: JSON.stringify({ clear_review: $('#h-clear').checked }) });
+        toast(`Accepted and archived (${r.archived}).`); loadHouse(); }
   catch (err) { toast(err.message, 5000); }
 });
-$('#h-edit').addEventListener('click', () => { houseEditing = true; loadHouse(); });
 $('#h-archive').addEventListener('change', async (e) => {
   if (!e.target.value) return;
   try {
     const a = await api(`/api/house/archive?stamp=${encodeURIComponent(e.target.value)}`);
     $('#h-body').innerHTML = `<p class="dim">Archived version ${esc(a.stamp)}${a.review && a.review.model_name ? ` (${esc(a.review.model_name)})` : ''}. Pick "Archived versions…" to go back.</p>
-      <div class="card md">${md(a.description)}</div>${a.notes ? `<h3 class="sec">Notes at that time</h3><div class="card md">${md(a.notes)}</div>` : ''}`;
+      ${a.knowledge ? `<h3 class="sec">Owner knowledge</h3><div class="card md">${md(a.knowledge)}</div>` : ''}
+      <h3 class="sec">House understanding</h3><div class="card md">${md(a.description)}</div>
+      ${a.notes ? `<h3 class="sec">Your review at that time</h3><div class="card md">${md(a.notes)}</div>` : ''}`;
   } catch (err) { toast(err.message, 5000); }
   e.target.value = '';
 });

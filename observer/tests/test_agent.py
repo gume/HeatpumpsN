@@ -32,7 +32,8 @@ class FakeService:
 
     def house(self):
         return {"current": {"description": "# House\nFloor circuit BF.", "model": {"checks": [{"name": "c"}]},
-                            "audited": "2026-11-01"}, "proposal": None, "notes": "BF is the bottom floor."}
+                            "knowledge": "## Comfort targets\n- BF 21 °C", "accepted": "2026-11-01"},
+                "draft": None, "notes": "BF is the bottom floor."}
 
 
 class FakeData:
@@ -106,7 +107,8 @@ def test_events_severity_and_workspace_guard(tmp_path):
     assert ev["count"] == 1 and ev["events"][0]["code"] == 1340 and ev["events"][0]["severity"] == "error"
     assert tb.call("get_events", {})["count"] == 2
     assert "stay inside" in tb.call("read_file", {"path": "../../.env"})["error"]
-    assert tb.call("house_context", {})["status"].startswith("audited")
+    ctx = tb.call("house_context", {})
+    assert ctx["status"].startswith("accepted") and ctx["owner_knowledge_md"].endswith("BF 21 °C")
 
 
 def test_skills_load_and_install(tmp_path):
