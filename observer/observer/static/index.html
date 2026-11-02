@@ -352,6 +352,21 @@ const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const age = (s) => s == null ? '—' : s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`;
 let signals = [], view = 'status', editing = null, llm = {};
 
+// Redraw a container without closing what the user opened: <details> keep their state,
+// matched by their summary text (and position among equal summaries).
+function detailsKeys(el) {
+  const seen = {};
+  return [...el.querySelectorAll('details')].map((d) => {
+    const s = (d.querySelector('summary') || {}).textContent || '';
+    seen[s] = (seen[s] || 0) + 1;
+    return [d, `${s}#${seen[s]}`];
+  });
+}
+function redraw(el, html) {
+  const open = new Set(detailsKeys(el).filter(([d]) => d.open).map(([, k]) => k));
+  el.innerHTML = html;
+  for (const [d, k] of detailsKeys(el)) if (open.has(k)) d.open = true;
+}
 function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
@@ -895,13 +910,22 @@ function libUsed(m) {
   return rows.length || m.data_requests ? `<h3 class="sec">Library and data used</h3><div class="table-wrap"><table><tbody>${rows.join('')}
     <tr><td>data</td><td colspan="2">${m.data_requests || 0} requests from the sandbox to the data socket (queries.jsonl)</td></tr></tbody></table></div>` : '';
 }
+let runShown = '';
 async function loadRun(id) {
   clearTimeout(runTimer);
   let r; try { r = await api(`/api/agent/run?id=${encodeURIComponent(id)}`); } catch (err) { $('#a-run').innerHTML = `<p class="err">${esc(err.message)}</p>`; return; }
+  const sig = JSON.stringify(r);
+  const unchanged = sig === runShown && $('#a-run').childElementCount;
+  runShown = sig;
   const m = r.meta, running = ['running', 'starting'].includes(m.status);
   const sevCls = (s) => s === 'alert' ? 'err' : s === 'warning' ? 'warn' : 'dim';
   const imgs = r.files.filter((f) => f.path.endsWith('.png'));
-  $('#a-run').innerHTML = `<div class="card">
+  const harvesting = r.harvest && r.harvest.job && r.harvest.job.state === 'running';
+  const schedule = () => {
+    if ((running || harvesting) && view === 'agent' && runOpen === id) runTimer = setTimeout(() => loadAgent().catch(() => {}), 3000);
+  };
+  if (unchanged) { schedule(); return; }             // nothing new: keep the page as it is (open steps stay open)
+  redraw($('#a-run'), `<div class="card">
       <div class="bar" style="margin:0"><strong>${esc(m.skill || 'Question')}</strong><span class="mono dim">${esc(m.id)}</span>
         <span class="${m.status === 'done' ? 'ok' : m.status === 'error' ? 'err' : 'warn'}">${esc(m.status)}</span>
         <span class="dim">${esc(m.model || '')} · ${m.steps ?? 0} steps${m.seconds ? ` · ${Math.round(m.seconds)} s` : ''}${m.usage && m.usage.prompt_tokens ? ` · ${(m.usage.prompt_tokens + m.usage.completion_tokens).toLocaleString()} tokens` : ''}${m.confidence != null ? ` · confidence ${m.confidence}` : ''}</span>
@@ -923,7 +947,7 @@ async function loadRun(id) {
     ${(m.proposals || []).length ? `<h3 class="sec">Proposals (for you to decide; nothing was changed)</h3><div class="card"><ul>${m.proposals.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
     ${imgs.length ? `<h3 class="sec">Plots</h3><div class="runimgs">${imgs.map((f) => `<a href="${fileUrl(m.id, f.path)}" target="_blank"><img src="${fileUrl(m.id, f.path)}" title="${esc(f.path)}"></a>`).join('')}</div>` : ''}
     <h3 class="sec">Steps</h3><div class="steps">${r.steps.map((s) => stepHtml(m.id, s)).join('')}</div>
-    <h3 class="sec">Workspace files</h3><p>${r.files.map((f) => `<a class="chip mono" href="${fileUrl(m.id, f.path)}" target="_blank">${esc(f.path)} <span class="dim">${Math.ceil(f.bytes / 1024)} kB</span></a>`).join('') || '<span class="dim">none</span>'}</p>`;
+    <h3 class="sec">Workspace files</h3><p>${r.files.map((f) => `<a class="chip mono" href="${fileUrl(m.id, f.path)}" target="_blank">${esc(f.path)} <span class="dim">${Math.ceil(f.bytes / 1024)} kB</span></a>`).join('') || '<span class="dim">none</span>'}</p>`);
   if ($('#a-resume')) $('#a-resume').addEventListener('click', async () => {
     try { await api(`/api/agent/run/resume?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Resumed.'); loadAgent(); }
     catch (err) { toast(err.message, 6000); }
@@ -937,9 +961,8 @@ async function loadRun(id) {
   document.querySelectorAll('[data-open-kind]').forEach((b) => b.addEventListener('click', () =>
     openProposal(id, b.dataset.openKind, +b.dataset.openIndex)));
   if ($('#a-cancel')) $('#a-cancel').addEventListener('click', async () => { await api(`/api/agent/run/cancel?id=${encodeURIComponent(id)}`, { method: 'POST' }); toast('Cancelling after the current step.'); });
-  const harvesting = r.harvest && r.harvest.job && r.harvest.job.state === 'running';
   if ($('#a-harvest') && harvesting) { $('#a-harvest').disabled = true; $('#a-harvest').textContent = 'Reviewing…'; }
-  if ((running || harvesting) && view === 'agent' && runOpen === id) runTimer = setTimeout(() => loadAgent().catch(() => {}), 3000);
+  schedule();
 }
 
 // --- library ------------------------------------------------------------------
@@ -1063,13 +1086,32 @@ async function loadProposal() {
     });
   } else {
     const j = p.job, writing = j && j.state === 'running';
+    $('#l-item').innerHTML = `<div class="card">${head}<div id="e-fields"></div><div id="e-code"></div>${actions}</div>`;
+    $('#e-fields').innerHTML = toolFields(p);
+    $('#e-code').innerHTML = codeBlock(p);
+    $('#e-add-in').addEventListener('click', () => $('#e-inputs').insertAdjacentHTML('beforeend', inputRow()));
+    $('#e-add-t').addEventListener('click', () => $('#e-tests').insertAdjacentHTML('beforeend', testRow()));
+    toolButtons(p);
+    if (writing) pollCode();
+  }
+  if (propScroll) { propScroll = false; $('#l-item').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  wireProposalActions(kind, pending);
+}
+
+function codeBlock(p) {
+    const j = p.job, writing = j && j.state === 'running';
     const codeState = writing ? `<p class="warn">Writing code and tests with ${esc(j.model)}… ${j.elapsed_s} s</p>`
       : j && j.state === 'error' ? `<p class="err">Writing the code failed: ${esc(j.error)}</p>`
       : p.code_stale ? '<p class="warn">The description was changed: the code does not match it yet. Use "Write code from the description".</p>'
       : `<p class="ok" style="margin:4px 0">The code matches the description${p.written ? ` (written by ${esc(p.written_by)}, ${esc(p.written)})` : ' (as proposed)'}.</p>`;
     const test = p.test ? `<details ${p.test.passed ? '' : 'open'}><summary>Tests ${esc(p.test.at)}: <span class="${p.test.passed ? 'ok' : 'err'}">${p.test.passed ? 'passed' : 'FAILED'}</span></summary><pre>${esc(p.test.output)}</pre></details>`
       : '<p class="dim" style="margin:4px 0">Tests not run yet.</p>';
-    $('#l-item').innerHTML = `<div class="card">${head}
+    return `<h3 class="sec">Code</h3>${codeState}${test}
+      <details><summary class="dim">Generated code and tests (read-only)</summary><pre style="max-height:400px">${esc(p.code || '')}</pre><pre style="max-height:400px">${esc(p.tests || '')}</pre></details>`;
+}
+
+function toolFields(p) {
+    return `
       <div class="grid2" style="margin-top:8px"><label>Name<input id="e-name" class="mono" value="${esc(p.name)}"></label>
         <label>Data it needs (in generic terms)<input id="e-needs" value="${esc(p.needs || '')}"></label></div>
       <label style="margin-top:8px">Goal: what it is for and how it works<textarea id="e-purpose" rows="3">${esc(p.purpose || '')}</textarea></label>
@@ -1082,18 +1124,32 @@ async function loadProposal() {
         <input id="e-odesc" value="${esc((p.outputs || {}).description || '')}" style="flex:1"></div>
       <h3 class="sec">Tests (one sentence each: what is checked)</h3>
       <div id="e-tests">${(p.tests_description || []).map(testRow).join('')}</div>
-      <button class="btn" id="e-add-t" style="margin-top:6px">Add test</button>
-      <h3 class="sec">Code</h3>${codeState}${test}
-      <details><summary class="dim">Generated code and tests (read-only)</summary><pre style="max-height:400px">${esc(p.code || '')}</pre><pre style="max-height:400px">${esc(p.tests || '')}</pre></details>
-      ${actions}</div>`;
-    $('#e-add-in').addEventListener('click', () => $('#e-inputs').insertAdjacentHTML('beforeend', inputRow()));
-    $('#e-add-t').addEventListener('click', () => $('#e-tests').insertAdjacentHTML('beforeend', testRow()));
-    if ($('#e-write')) $('#e-write').disabled = writing;
-    if ($('#e-accept')) $('#e-accept').disabled = writing || p.code_stale;
-    if ($('#e-test')) $('#e-test').disabled = writing || p.code_stale;
-    if (writing) propTimer = setTimeout(() => { if (view === 'library' && propOpen) loadProposal(); }, 3000);
-  }
-  if (propScroll) { propScroll = false; $('#l-item').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      <button class="btn" id="e-add-t" style="margin-top:6px">Add test</button>`;
+}
+
+function toolButtons(p) {
+  const writing = p.job && p.job.state === 'running';
+  if ($('#e-write')) $('#e-write').disabled = writing;
+  if ($('#e-accept')) $('#e-accept').disabled = writing || p.code_stale;
+  if ($('#e-test')) $('#e-test').disabled = writing || p.code_stale;
+}
+
+// While the model writes code, only the code status updates: the fields (and what you type there) stay.
+function pollCode() {
+  clearTimeout(propTimer);
+  const at = propOpen;
+  propTimer = setTimeout(async () => {
+    if (view !== 'library' || propOpen !== at || !$('#e-code')) return;
+    try {
+      const p = await api(`/api/library/proposal?${propQ()}`);
+      redraw($('#e-code'), codeBlock(p));
+      toolButtons(p);
+      if (p.job && p.job.state === 'running') pollCode();
+    } catch { pollCode(); }
+  }, 3000);
+}
+
+function wireProposalActions(kind, pending) {
   $('#e-close').addEventListener('click', () => { propOpen = null; $('#l-item').innerHTML = ''; });
   if (!pending) return;
   const msg = (t) => { if ($('#e-msg')) $('#e-msg').textContent = t; };
@@ -1108,7 +1164,8 @@ async function loadProposal() {
   });
   if ($('#e-test')) $('#e-test').addEventListener('click', async () => {
     msg('Running the tests in the sandbox…');
-    try { const r = await api(`/api/library/proposal/test?run=${encodeURIComponent(propOpen.run)}&index=${propOpen.index}`, { method: 'POST' }); toast(r.passed ? 'Tests passed.' : 'Tests FAILED.', 4000); loadProposal(); }
+    try { const r = await api(`/api/library/proposal/test?run=${encodeURIComponent(propOpen.run)}&index=${propOpen.index}`, { method: 'POST' }); toast(r.passed ? 'Tests passed.' : 'Tests FAILED.', 4000);
+          const p = await api(`/api/library/proposal?${propQ()}`); redraw($('#e-code'), codeBlock(p)); toolButtons(p); msg(''); }
     catch (err) { msg(err.message); }
   });
   $('#e-accept').addEventListener('click', async () => {
