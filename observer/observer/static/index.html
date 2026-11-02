@@ -243,7 +243,6 @@
     <h3 class="sec">Models per task</h3>
     <div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Model</th><th></th></tr></thead><tbody id="s-tasks"></tbody></table></div>
     <div class="actions" style="margin-top:10px"><span class="dim" id="s-msg"></span><button class="btn primary" id="s-save">Save settings</button></div>
-    <datalist id="s-models"></datalist>
   </section>
 
   <section id="view-rules" class="hidden">
@@ -611,17 +610,33 @@ async function loadSettings() {
     : '<tr><td colspan="4" class="dim">No provider in .env (OBSERVER_LLM_BASE_URL).</td></tr>';
   $('#s-tasks').innerHTML = settingsView.tasks.map((t) => `<tr data-task="${esc(t.task)}"><td>${esc(t.label)}</td>
       <td><select class="s-prov"><option value=""></option>${prov.map((p) => `<option value="${esc(p.slot)}" ${p.slot === t.provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
-      <td><input class="s-model" list="s-models" value="${esc(t.model)}" placeholder="model name" size="28"></td>
+      <td><select class="s-pick" style="display:none;margin-bottom:4px;max-width:100%"></select>
+        <input class="s-model" value="${esc(t.model)}" placeholder="model name" size="28"></td>
       <td>${t.ready ? '<span class="ok">ready</span>' : '<span class="dim">not set</span>'} <button class="btn btn-sm s-list" type="button">List models</button></td></tr>`).join('');
+}
+const modelCache = {};
+function fillPick(tr, models) {
+  const pick = tr.querySelector('.s-pick'), input = tr.querySelector('.s-model');
+  const cur = input.value.trim();
+  pick.innerHTML = `<option value="">— choose one of ${models.length} models —</option>` +
+    models.map((m) => `<option value="${esc(m)}" ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  pick.style.display = 'block';
 }
 $('#s-tasks').addEventListener('click', async (e) => {
   if (!e.target.classList.contains('s-list')) return;
-  const slot = e.target.closest('tr').querySelector('.s-prov').value;
+  const tr = e.target.closest('tr');
+  const slot = tr.querySelector('.s-prov').value;
   if (!slot) { toast('Choose a provider first.'); return; }
-  try { const models = await api(`/api/settings/models?provider=${encodeURIComponent(slot)}`);
-        $('#s-models').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
-        toast(`${models.length} models listed: type to choose.`); e.target.closest('tr').querySelector('.s-model').focus(); }
-  catch (err) { toast(err.message, 5000); }
+  try {
+    const models = modelCache[slot] || (modelCache[slot] = await api(`/api/settings/models?provider=${encodeURIComponent(slot)}`));
+    // Every task row on the same provider gets the list.
+    document.querySelectorAll('#s-tasks tr').forEach((row) => { if (row.querySelector('.s-prov').value === slot) fillPick(row, models); });
+    toast(`${models.length} models: choose one in the list above the model field, then Save settings.`, 4000);
+    tr.querySelector('.s-pick').focus();
+  } catch (err) { toast(err.message, 5000); }
+});
+$('#s-tasks').addEventListener('change', (e) => {
+  if (e.target.classList.contains('s-pick') && e.target.value) e.target.closest('tr').querySelector('.s-model').value = e.target.value;
 });
 $('#s-save').addEventListener('click', async () => {
   const body = { providers: {}, tasks: {} };
