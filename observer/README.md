@@ -21,7 +21,9 @@ send later is a validated controller parameter set (plan:
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
 | `docker-compose.dev.yml`, scripts | `house/`: description, model, review notes, archive |
-| | `data/`: catalog, settings, proposals, log |
+| `observer/skills/`: agent skills (recipes and helpers) | `data/`: catalog, settings, proposals, log |
+| | `runs/`: every agent run (steps, code, data, report); `skills/`: house-local skills |
+| | `sandbox/venv`: the sandbox's Python environment |
 | | InfluxDB: the Docker volume `observer-influx-dev` |
 
 The data directory is `OBSERVER_HOME`, default
@@ -162,6 +164,65 @@ provider offers. These choices are not secrets and live in
 `data/settings.yaml` in the data directory. Transient provider errors (rate limits, overload) are
 retried; an answer that is not valid JSON gets one repair round.
 
+## Agent, tools, sandbox and skills
+
+The agent answers questions about the house from the recorded data
+(`plans/observer_agentic_plan.md`, phases D–F). Start it from the portal's
+**Agent** tab, from the command line (`observer agent --skill heating-start`)
+or use its tools from any MCP client (`observer mcp`).
+
+```
+ model (Settings: task "agent")
+   │  function calls
+   ▼
+ tools (inside the observer)                      the run's workspace runs/<id>/
+   house_context, find_signals ── registry, house    data/*.csv  ◄── get_series
+   get_series, signal_features,  ── InfluxDB,         *.png, results
+   get_events                       read-only token   .runs/*.py (every script)
+   run_python ──────────────────► sandbox ──────────► reads/writes only the workspace
+   finish ── report.md, findings, proposals           steps.jsonl, run.yaml (audit)
+```
+
+* **Tools** (`observer/agent/tools.py`) read the registry, the house
+  description and the recorded data. The database is read with a token that
+  can only read the bucket (`OBSERVER_INFLUX_READ_TOKEN`); signal ids are
+  checked against the catalog and times and windows against strict patterns
+  before they reach a query. Series go into the workspace as CSV; the model
+  gets statistics and a short sample.
+* **Sandbox** (`observer/agent/sandbox.py`): the code the model writes runs
+  in bubblewrap, rootless, with all namespaces unshared, so **no network**
+  (the database, the broker and the internet are unreachable: data reaches
+  the code only as files the tools wrote), only `/usr`, its own Python
+  environment (numpy, pandas, scipy, matplotlib) and the workspace visible, a
+  cleared environment, and limits: memory and processes by a systemd user
+  scope (cgroup), CPU time, file size and open files by rlimits, wall-clock
+  timeout. `podman` (rootless) or `docker` can be configured instead.
+* **Skills** (`observer/skills/<name>/SKILL.md` + helpers): recipes in the
+  house model's vocabulary (circuits, roles), shareable between houses.
+  Helpers are copied into the workspace (`skill/`). Now: `sensor-health`,
+  `heating-start`, `boiler-cycling`. House-local skills in
+  `<OBSERVER_HOME>/skills/` override them.
+* **Runs**: one at a time, at most 25 model steps and 15 minutes; everything
+  is kept in `runs/<id>/` and shown in the portal (report, findings,
+  proposals, plots, every step with its code and output). The agent never
+  changes anything; proposals are for the owner.
+
+Setup once: create the read-only token (below), `observer sandbox-setup`,
+and choose a model for the task *agent* on the Settings page. A strong model
+gives better analyses; the reports are only as good as the reviewed house
+description they start from.
+
+```bash
+docker exec observer-influx-dev influx auth create --org heatpumpsn \
+  --read-bucket <bucket id from `influx bucket list`> --description "observer agent tools: read-only" -t <admin token>
+# put the token into .env as OBSERVER_INFLUX_READ_TOKEN
+.venv/bin/observer sandbox-setup
+.venv/bin/observer skills
+.venv/bin/observer agent --skill sensor-health
+.venv/bin/observer agent "Why did the floor circuit heat slowly this morning?"
+uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
+```
+
 ## Development
 
 ```bash
@@ -200,13 +261,14 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
 
 1. **Ingest and storage** (this step): catalog, registry, raw InfluxDB storage,
    web portal for status, signals and proposals.
-2. **Anomalies and alerts:** rules on the stored data (staleness, stuck values,
+2. **Agent, tools, sandbox, skills** (done, first version): see above.
+3. **Anomalies and alerts:** rules on the stored data (staleness, stuck values,
    plausibility between redundant sensors, short-cycling, heat not delivered),
    alerts as HA entities over MQTT.
-3. **Identification and optimisation:** transport delay, valve gain and
+4. **Identification and optimisation:** transport delay, valve gain and
    coupling from the data; parameter proposals backtested against the recorded
    data and the simulator plant model (`floor_simulator/`).
-4. **Docker:** the observer and InfluxDB as one compose stack at home.
+5. **Docker:** the observer and InfluxDB as one compose stack at home.
 
 The portal grows with each step: charts of the stored data, the alert list
 and its rules, identification results and parameter proposals with their

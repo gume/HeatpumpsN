@@ -49,6 +49,7 @@ class Service:
         from .settings import Settings
         self.settings = Settings(paths["settings"], float((cfg.get("llm") or {}).get("timeout_s", 300)))
         self.started = time.time()
+        self._agents = None
         self._stop = threading.Event()
         self._saver: threading.Thread | None = None
 
@@ -76,6 +77,14 @@ class Service:
         while not self._stop.wait(60):
             with self.lock:
                 self.ingest.catalog.save()
+
+    @property
+    def agents(self):
+        """Agent runs (created on first use: database client and sandbox)."""
+        if self._agents is None:
+            from .agent.manager import AgentManager
+            self._agents = AgentManager(self, self.cfg)
+        return self._agents
 
     # --- views -------------------------------------------------------------------
     def status(self) -> dict:

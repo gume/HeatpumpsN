@@ -121,7 +121,7 @@ def test_settings_providers_and_tasks(tmp_path, monkeypatch):
                                                     "describe": {"provider": "2", "model": "qwen2.5"}}}).json()
     assert r["providers"][0]["name"] == "Gemini"
     ready = {t["task"]: t["ready"] for t in r["tasks"]}
-    assert ready == {"describe": True, "propose": False, "house": True}
+    assert ready == {"describe": True, "propose": False, "house": True, "agent": False}
     house_client = service.settings.client("house")
     assert (house_client.base_url, house_client.model, house_client.api_key) == ("http://proxy:4000/v1", "gemini-2.5-pro", "secret")
     assert service.settings.client("describe").api_key is None

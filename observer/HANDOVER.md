@@ -74,6 +74,28 @@ Signals tab writes the entries. The generic starter file is
   integration is removed.
 
 
+### 2.1 Agent, tools, sandbox, skills (first version, 2026-11-01)
+
+* Portal **Agent** tab, `observer agent [--skill NAME] [QUESTION]`, and
+  `observer mcp` (the same tools for MCP clients). Design and limits in
+  `README.md` → "Agent, tools, sandbox and skills".
+* Tools run inside the observer and read the database with the **read-only
+  token** `OBSERVER_INFLUX_READ_TOKEN` (in the data directory's `.env`;
+  created 2026-11-01, a write with it returns 403). Generated code runs in
+  **bubblewrap** (rootless, no network: data reaches it only as CSV files the
+  tools wrote; cgroup memory/process limits via `systemd-run --user`; CPU
+  time by rlimit, since the cpu controller is not delegated to the user).
+  The sandbox's Python lives in `<OBSERVER_HOME>/sandbox/venv`
+  (`observer sandbox-setup`).
+* Skills: `sensor-health`, `heating-start`, `boiler-cycling` in
+  `observer/skills/`. Runs and their audit records in `<OBSERVER_HOME>/runs/`.
+* Model for the task *agent*: `gemini-3.5-flash-lite` (runs take 30–80 s,
+  ~140k tokens). The first runs found real things (overshoot at heating
+  starts, MPC anomalies, BLE sensor gaps) but also misread facts the
+  unreviewed house description does not settle (see ISSUES).
+* Docker is available here too, but the user is in the `docker` group
+  (root-equivalent), so it is not used as the default sandbox.
+
 ## 3. Working on it
 
 | What | Where |
@@ -95,4 +117,7 @@ Code map: `observer/cli.py` (commands, data directory), `ingest.py`,
 `payload.py` (topic/JSON → samples), `metadata.py` (HA discovery, Z2M),
 `catalog.py`, `registry.py` (ruamel round-trip save keeps comments),
 `store.py` (InfluxDB), `llm.py`, `settings.py` (per-task models, provider
-slots from `.env`), `service.py`, `web.py`, `static/index.html`.
+slots from `.env`), `service.py`, `web.py`, `static/index.html`;
+`agent/` (`data.py` read-only queries, `tools.py`, `sandbox.py`,
+`skills.py`, `runner.py` loop and audit record, `manager.py` background
+runs, `mcp_server.py`); `skills/<name>/` (recipes and helpers).

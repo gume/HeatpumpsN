@@ -67,6 +67,29 @@ class LlmClient:
             time.sleep(10 * (attempt + 1))
         raise RuntimeError("unreachable")
 
+    def chat_tools(self, messages: list[dict], tools: list[dict], attempts: int = 3) -> tuple[dict, dict]:
+        """One step of function calling: (assistant message as returned, usage).
+
+        The message goes back into the history unchanged: some providers
+        (Gemini) attach signatures to tool calls that must be returned."""
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        body = {"model": self.model, "temperature": 0, "messages": messages}
+        if tools:
+            body["tools"] = tools
+        for attempt in range(attempts):
+            try:
+                r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
+                               timeout=self.timeout_s)
+                if r.status_code not in self.RETRY_STATUS or attempt == attempts - 1:
+                    r.raise_for_status()
+                    data = r.json()
+                    return data["choices"][0]["message"], data.get("usage") or {}
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt == attempts - 1:
+                    raise
+            time.sleep(10 * (attempt + 1))
+        raise RuntimeError("unreachable")
+
 
 _TRAILING_COMMA = __import__("re").compile(r",(\s*[}\]])")
 

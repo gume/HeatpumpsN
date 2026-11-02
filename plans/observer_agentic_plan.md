@@ -1,8 +1,9 @@
 # Observer: house understanding, supervision and AI agents — plan
 
 Status: plan (2026-11-01). Implemented so far: data collection, signal
-registry and catalog, LLM-assisted descriptions, LLM settings per task
-(see `observer/README.md`). This document describes where the observer goes
+registry and catalog, LLM-assisted descriptions, LLM settings per task,
+the reviewed house description, and a first version of the tools, the
+sandbox, skills and the agent (phases D–F, see `observer/README.md`). This document describes where the observer goes
 next and in which order.
 
 ## 1. Goals
@@ -123,7 +124,7 @@ optimisation.
   (circuits, roles, relations), not against one house's signal ids, so they
   can be **shared between houses**; each house maps them through its own
   audited model.
-* Repository layout (planned): `observer/skills/<name>/` (recipe, tools,
+* Repository layout: `observer/observer/skills/<name>/` (recipe, helpers,
   tests) in git; house-specific description, model, notes and archive in
   `<OBSERVER_HOME>/house/`, never in git.
 
@@ -132,13 +133,16 @@ optimisation.
 | Phase | Deliverable |
 | --- | --- |
 | A (done) | data collection, registry, catalog, LLM descriptions, per-task model settings |
-| B (now) | reviewed house description with notes, questions, recommendations and archive |
+| B (done) | reviewed house description with notes, questions, recommendations and archive |
 | C | deterministic supervision from the audited model's checks; alerts to HA |
-| D | read-only tool layer (data, features, calculation) as MCP + Python API; first recipes |
-| E | sandbox (rootless containers, resource limits), workspaces, audit records |
-| F | anomaly-investigation agent |
+| D (first version) | read-only tools (data, features, events, house context) as MCP + Python API; skills `sensor-health`, `heating-start`, `boiler-cycling` |
+| E (first version) | sandbox: bubblewrap (rootless, no network, cgroup memory/process limits, rlimits, timeout); workspaces and audit records per run |
+| F (first version) | agent loop with skills and free questions; portal Agent tab; still to come: triggering it from supervision (C) |
 | G | optimisation agent with backtesting against recorded data and the simulator; approval flow for parameter pushes |
 | H | LLM-written tools with tests and review; shareable skills |
 
-Prerequisites before E: the portal needs a login (it may then approve
-parameter pushes), and the read-only database token.
+Prerequisites before G: the portal needs a login (it may then approve
+parameter pushes). The read-only database token exists (agent tools).
+The sandbox uses bubblewrap rather than containers: it needs no daemon and no
+root, and the code inside gets data only as files the tools wrote (no
+network at all), which is stricter than a container with a database route.

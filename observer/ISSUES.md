@@ -17,6 +17,22 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    restarted; bus `txerror` (receives, cannot transmit: check the Tx mode), so
    it only sees what the boiler broadcasts. First supervision rule: EMS-ESP
    offline / heartbeat missing.
-6. **Git history** still contains the old `observer/registry.yaml` with this
+6. **Agent: facts it cannot know.** Reports mix old and current behaviour
+   (e.g. "encoder did not respond" warnings from before the `stat_t`
+   firmware fix, the boot-time ΔT pause) and the unreviewed house
+   description misleads (the controller's "boiler" sensor is the
+   heat-exchanger secondary, not the boiler flow). Remedies: accept a
+   reviewed house description; an operations log in the data directory
+   (firmware uploads, settings changes, hardware work) exposed as a tool.
+7. **Agent model**: runs use `gemini-3.5-flash-lite`; compare with
+   `gemini-2.5-pro` on the same skill and keep the better one for the task.
+8. **Sandbox hardening**: add a seccomp filter to bwrap; CPU is limited by
+   rlimit only (the user's cgroup has no cpu controller: enable delegation
+   with a systemd drop-in if CPU shares matter); `docker`/`podman` runtimes
+   are implemented but untested here.
+9. **Agent scheduling**: one run at a time, started by hand. Trigger from
+   supervision (phase C) and scheduled skills are open; old runs are never
+   deleted (decide a retention).
+10. **Git history** still contains the old `observer/registry.yaml` with this
    house's sensor ids and room names (before the data directory existed). Not
    secret; removing it would need a history rewrite.

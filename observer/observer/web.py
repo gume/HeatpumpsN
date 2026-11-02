@@ -1,8 +1,8 @@
 """Web portal: JSON API plus one static page (static/index.html).
 
 Signal ids contain "/" and "#", so they travel as the `id` query parameter.
-The portal changes only the observer's own registry and proposals; it has
-no path to the plant.
+The portal changes only the observer's own registry and proposals, and starts
+agent runs (read-only tools, sandboxed code); it has no path to the plant.
 """
 from __future__ import annotations
 
@@ -148,6 +148,44 @@ def create_app(service: Service) -> FastAPI:
         if not service.reject_proposal(id):
             raise HTTPException(404, "no such proposal")
         return {"ok": True}
+
+    # --- agents: skills, tools, sandbox, runs ---------------------------------
+    @app.get("/api/agent")
+    def agent_status():
+        a = service.agents
+        return {**a.status(), "skills": [s.view() for s in a.skills().values()], "tools": a.tools()}
+
+    @app.get("/api/agent/runs")
+    def agent_runs():
+        return service.agents.runs()
+
+    @app.post("/api/agent/runs")
+    def start_run(body: dict = Body(...)):
+        try:
+            return {"id": service.agents.start(body.get("skill") or None, str(body.get("question") or ""),
+                                               body.get("params") or {})}
+        except KeyError as exc:
+            raise HTTPException(404, f"no skill {exc}") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/agent/run")
+    def agent_run(id: str = Query(...)):
+        try:
+            return service.agents.run(id)
+        except KeyError as exc:
+            raise HTTPException(404, "no such run") from exc
+
+    @app.post("/api/agent/run/cancel")
+    def cancel_run(id: str = Query(...)):
+        return {"cancelled": service.agents.cancel(id)}
+
+    @app.get("/api/agent/file")
+    def run_file(id: str = Query(...), path: str = Query(...)):
+        try:
+            return FileResponse(service.agents.file(id, path))
+        except KeyError as exc:
+            raise HTTPException(404, "no such file") from exc
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

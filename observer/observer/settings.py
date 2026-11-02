@@ -23,6 +23,7 @@ TASKS = {
     "describe": "Polish one signal's description",
     "propose": "Describe undescribed signals (bulk proposals)",
     "house": "House description and model (benefits from a strong model)",
+    "agent": "Agent runs: skills and questions with tools (benefits from a strong model)",
 }
 MAX_SLOTS = 9
 

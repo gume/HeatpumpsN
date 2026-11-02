@@ -13,6 +13,11 @@ settings, proposals). The repository holds only code, docs and defaults.
   run      [--dry-run]     ingest continuously and store into InfluxDB
   propose  [--limit N]     ask the LLM to describe unregistered signals -> proposals.yaml
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
+
+  sandbox-setup            create the sandbox's Python environment (numpy, pandas, scipy, matplotlib)
+  skills                   list the agent skills
+  agent    [--skill NAME] [QUESTION ...]   one agent run in the foreground; the record goes to runs/
+  mcp                      the agent tools as an MCP server (stdio)
 """
 from __future__ import annotations
 
@@ -86,11 +91,15 @@ def load_config(path: str) -> dict:
     paths = cfg.setdefault("paths", {})
     for key, default in (("catalog", "data/catalog.json"), ("registry", "registry.yaml"),
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
-                         ("house_proposal", "data/house_proposal.yaml"), ("settings", "data/settings.yaml")):
+                         ("house_proposal", "data/house_proposal.yaml"), ("settings", "data/settings.yaml"),
+                         ("runs", "runs/runs.keep"), ("skills", "skills/skills.keep"),
+                         ("sandbox_venv", "sandbox/venv")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)
     paths["house_dir"] = os.path.dirname(paths["house_dir"])   # a folder: house/
+    paths["runs"] = os.path.dirname(paths["runs"])             # agent runs: runs/<id>/
+    paths["skills"] = os.path.dirname(paths["skills"])         # house-local skills
     return cfg
 
 
@@ -227,6 +236,59 @@ def cmd_accept(cfg: dict, args) -> None:
     print(f"{len(chosen)} signals added to {cfg['paths']['registry']}")
 
 
+def cmd_sandbox_setup(cfg: dict, args) -> None:
+    from .agent.manager import make_sandbox
+    from .agent.sandbox import Sandbox
+
+    sb = make_sandbox(cfg)
+    Sandbox.setup(sb.venv)
+    probe = sb.run("import numpy, pandas, scipy, matplotlib, socket\n"
+                   "try:\n    socket.create_connection(('1.1.1.1', 53), 2); print('NETWORK OPEN')\n"
+                   "except OSError:\n    print('network: none')\n", os.path.join(sb.venv, "..", "probe"), "probe")
+    print(probe.stdout.strip() or probe.stderr.strip())
+    print(sb.status())
+
+
+def cmd_skills(cfg: dict, args) -> None:
+    from .agent import skills
+
+    for s in skills.load([cfg["paths"]["skills"]]).values():
+        print(f"{s.name:18s} {s.title} [{s.origin}]\n{'':18s} {s.description}")
+
+
+def cmd_agent(cfg: dict, args) -> None:
+    from .agent.runner import Run, execute
+    from .service import Service
+
+    service = Service(cfg, MemoryWriter(), "none")
+    agents = service.agents
+    client = service.settings.client("agent")
+    if client is None:
+        sys.exit("no LLM configured for the task 'agent' (portal Settings)")
+    skill = agents.skills().get(args.skill) if args.skill else None
+    if args.skill and skill is None:
+        sys.exit(f"no skill {args.skill!r}: see `observer skills`")
+    folder = os.path.join(agents.runs_dir, time.strftime("%Y%m%d-%H%M%S-") + (args.skill or "question"))
+    os.makedirs(folder)
+    run = Run(folder)
+    meta = execute(run, client, agents.toolbox(folder), " ".join(args.question), skill,
+                   skill.defaults if skill else {}, min(skill.max_steps, agents.max_steps) if skill
+                   else agents.max_steps, agents.deadline_s)
+    for step in run.steps():
+        if step["kind"] == "tool":
+            print(f"  [{step['n']:2d}] {step['tool']}({', '.join(f'{k}=' for k in step['args'])})")
+    print(f"\n{meta['status']} in {meta.get('seconds')} s, {meta.get('steps')} steps -> {folder}\n")
+    print(run.report() or meta.get("error") or "")
+
+
+def cmd_mcp(cfg: dict, args) -> None:
+    from .agent.mcp_server import serve
+
+    logging.getLogger().handlers.clear()            # stdout carries the protocol
+    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+    serve(cfg)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="observer", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -253,6 +315,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("ids", nargs="*")
     p.add_argument("--all", action="store_true")
     p.add_argument("--min-confidence", type=float, default=0.7)
+    sub.add_parser("sandbox-setup")
+    sub.add_parser("skills")
+    p = sub.add_parser("agent")
+    p.add_argument("--skill", default=None)
+    p.add_argument("question", nargs="*")
+    sub.add_parser("mcp")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -261,7 +329,8 @@ def main(argv: list[str] | None = None) -> None:
         return
     cfg = load_config(args.config)
     {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
-     "accept": cmd_accept}[args.command](cfg, args)
+     "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "skills": cmd_skills, "agent": cmd_agent,
+     "mcp": cmd_mcp}[args.command](cfg, args)
 
 
 if __name__ == "__main__":
