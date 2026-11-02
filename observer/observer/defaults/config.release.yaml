@@ -55,6 +55,14 @@ agent:
     tasks: 64
     file_mb: 200
 
+# Supervision (checks in checks.yaml next to this file; Alerts tab). Open
+# alerts are published retained on <mqtt_topic>/alerts with Home Assistant
+# discovery (a "Heating problem" binary sensor and "Heating alerts" count).
+alerts:
+  publish: true
+  mqtt_topic: observer
+  discovery_prefix: homeassistant
+
 # Release checks: GitHub releases of the observer and of installed library
 # packs (each pack's library.yaml names its repository). A banner in the
 # portal shows newer versions; nothing is installed automatically.

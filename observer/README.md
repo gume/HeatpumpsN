@@ -273,6 +273,27 @@ docker exec observer-influx-dev influx auth create --org heatpumpsn \
 uv pip install -e ".[mcp]" && .venv/bin/observer mcp     # stdio MCP server
 ```
 
+## Supervision and alerts
+
+`observer/supervision.py`, checks in `<OBSERVER_HOME>/checks.yaml` (created
+from `observer/defaults/checks.yaml`; Alerts tab: alerts, check status, Run
+now, editor). Four kinds of trigger:
+
+| Type | When | LLM | Examples (defaults) |
+| --- | --- | --- | --- |
+| `event` | every incoming message of a signal | no | controller event severity error/warn (one alert per code), mixer control not in MPC mode, EMS-ESP offline, boiler maintenance message |
+| `stale`, `range` | `every: 1m`… | no | controller / EMS-ESP / encoder silent, a room sensor silent for 6 h, supply above 85 °C, rooms outside 10–32 °C |
+| `stuck` | hourly, from the database | no | a temperature unchanged for 8 h while samples arrive |
+| `agent` | `cron:` | yes | a daily `sensor_health` run whose warnings become alerts (off by default: quota) |
+
+Alerts open once, count repeats, close by themselves (`clear_when`,
+`clear_after`, or the condition gone) and can be acknowledged; history in
+`data/alerts.log.jsonl`. Open alerts are published retained on
+`observer/alerts` with Home Assistant discovery: a binary sensor "Heating
+problem" (device class problem) and a sensor "Heating alerts" (count, the
+list as attributes), unavailable when the observer is gone (last will on
+`observer/status`). Configuration: `alerts` in config.yaml.
+
 ## Deployment (release)
 
 Releases are tags `observer-v<version>` with a deploy bundle

@@ -132,7 +132,8 @@ def load_config(path: str) -> dict:
                          ("proposals", "data/proposals.yaml"), ("house_dir", "house/house.keep"),
                          ("house_draft", "data/house_draft.yaml"), ("settings", "data/settings.yaml"),
                          ("runs", "runs/runs.keep"), ("library", "library/library.keep"),
-                         ("sandbox_venv", "sandbox/venv"), ("exports", "exports/exports.keep")):
+                         ("sandbox_venv", "sandbox/venv"), ("exports", "exports/exports.keep"),
+                         ("checks", "checks.yaml")):
         value = paths.get(key, default)
         paths[key] = value if os.path.isabs(value) else os.path.join(base, value)
         os.makedirs(os.path.dirname(paths[key]), exist_ok=True)

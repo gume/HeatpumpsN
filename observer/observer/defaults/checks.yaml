@@ -1,0 +1,127 @@
+# Supervision checks of this observer (copied from the defaults on the first
+# start; edit here or on the portal's Alerts tab). Types and fields: see
+# observer/supervision.py. Severities: info, warning, alarm. Schedules:
+# "every: 5m" or "cron: 'min hour day month weekday'" (local time).
+checks:
+
+# --- Events: the devices report a problem themselves (on every message, no LLM) ---
+
+- id: controller_error
+  type: event
+  signal: heatpumpsn/controller/log/event#severity
+  when: {equals: error}
+  subject: "#code"            # one alert per event code; repeats are counted
+  detail: "#detail"
+  title: "Controller error {subject}: {detail}"
+  severity: alarm
+  clear_after: 2h             # closes when the code has not come again for 2 h
+
+- id: controller_warning
+  type: event
+  signal: heatpumpsn/controller/log/event#severity
+  when: {equals: warn}
+  subject: "#code"
+  detail: "#detail"
+  title: "Controller warning {subject}: {detail}"
+  severity: warning
+  clear_after: 1h
+
+- id: mixer_control_mode
+  type: event
+  signal: heatpumpsn/controller/state/mpc#mode
+  when: {not_equals: mpc}
+  clear_when: {equals: mpc}
+  title: "Mixer control in {value} mode (not predictive)"
+  severity: warning
+
+- id: emsesp_offline
+  type: event
+  signal: ems-esp/status
+  when: {equals: 0}            # "offline" (EMS-ESP's last will)
+  clear_when: {equals: 1}
+  title: EMS-ESP is offline (no boiler data)
+  severity: alarm
+
+- id: boiler_maintenance
+  type: event
+  signal: ems-esp/boiler_data#maintenancemessage
+  when: {not_in: ["H00", "", "-"]}
+  clear_when: {in: ["H00", "", "-"]}
+  title: "Boiler maintenance message {value}"
+  severity: warning
+
+# --- Fast checks: something stopped or is out of range (every few minutes, no LLM) ---
+
+- id: controller_silent
+  type: stale
+  every: 1m
+  select: {source: heatpumpsn}
+  mode: source                # the newest sample of all its signals
+  max_age: 5m
+  title: "No data from the heating controller for {age}"
+  severity: alarm
+
+- id: emsesp_silent
+  type: stale
+  every: 2m
+  select: {source: ems-esp}
+  mode: source
+  max_age: 10m
+  title: "No data from EMS-ESP (boiler) for {age}"
+  severity: alarm
+
+- id: mixermeter_silent
+  type: stale
+  every: 5m
+  select: {source: mixermeter}
+  mode: source
+  max_age: 30m
+  title: "No data from the mixer encoder for {age}"
+  severity: warning
+
+- id: room_sensor_silent
+  type: stale
+  every: 15m
+  select: {role: room, quantity: temperature}
+  mode: each
+  max_age: 6h
+  title: "{name}: no reading for {age}"
+  severity: warning
+
+- id: supply_too_hot
+  type: range
+  every: 1m
+  select: {role: supply, quantity: temperature}
+  max: 85
+  title: "{name}: {value} °C (above {max} °C)"
+  severity: alarm
+
+- id: room_out_of_range
+  type: range
+  every: 10m
+  select: {role: room, quantity: temperature}
+  min: 10
+  max: 32
+  title: "{name}: {value} °C (outside {min}-{max} °C)"
+  severity: warning
+
+# --- Slow checks: patterns that need history (hourly, from the database, no LLM) ---
+
+- id: temperature_stuck
+  type: stuck
+  every: 1h
+  select: {quantity: temperature}
+  hours: 8                    # no change at all for 8 h while samples keep arriving
+  min_samples: 6
+  title: "{name}: unchanged ({value}) for {hours} h"
+  severity: warning
+
+# --- Daily: an agent run with a skill (uses the LLM: mind the quota) ---
+
+- id: daily_sensor_health
+  type: agent
+  enabled: false              # switch on when the agent model has quota for it
+  cron: "17 6 * * *"
+  skill: sensor_health
+  question: "Daily check of the last 24 hours."
+  severity: warning

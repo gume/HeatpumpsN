@@ -23,12 +23,16 @@ class Ingest:
         self.statestream_base = statestream_base
         self.stored = 0
         self.new_signals: list[str] = []
+        self.listeners: list = []      # called with (topic, samples, retained, time_ns), e.g. event checks
+        self.ignore: tuple[str, ...] = ()   # topic prefixes not ingested (the observer's own publications)
 
     def handle(self, topic: str, payload: bytes, retained: bool = False, time_ns: int | None = None) -> None:
         if self.prefix:
             if not topic.startswith(self.prefix):
                 return
             topic = topic[len(self.prefix):]
+        if self.ignore and topic.startswith(self.ignore):
+            return
         time_ns = time.time_ns() if time_ns is None else time_ns
 
         # Metadata the stream carries about signals.
@@ -40,7 +44,13 @@ class Ingest:
             return
         self.catalog.add_meta(metadata.from_statestream(topic, self.statestream_base))
 
-        for sample in parse(topic, payload):
+        samples = parse(topic, payload)
+        for listener in self.listeners:
+            try:
+                listener(topic, samples, retained, time_ns)
+            except Exception:                # a check must never stop the ingest
+                log.exception("listener failed on %s", topic)
+        for sample in samples:
             if self.catalog.observe(sample.signal, sample.value, sample.text, time_ns / 1e9):
                 self.new_signals.append(sample.signal)
             # A retained message is a replay of an old value whose time is
@@ -59,16 +69,19 @@ class MqttRunner:
     """Background MQTT connection feeding `handler(topic, payload, retained)`."""
 
     def __init__(self, handler, host: str, port: int, subscribe: list[str], username: str | None = None,
-                 password: str | None = None):
+                 password: str | None = None, will: tuple[str, str] | None = None):
         import paho.mqtt.client as mqtt
 
         self.host, self.port, self.subscribe = host, port, subscribe
         self.connected = False
         self.messages = 0
         self.last_message: float | None = None
+        self.on_connect_hooks: list = []          # called after every (re)connect, e.g. HA discovery
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"hpn-observer-{int(time.time())}")
         if username:
             self.client.username_pw_set(username, password)
+        if will:                                   # the broker publishes it when the observer disappears
+            self.client.will_set(will[0], will[1], qos=1, retain=True)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
@@ -80,6 +93,11 @@ class MqttRunner:
         log.info("MQTT connected to %s:%s (%s)", self.host, self.port, reason)
         for pattern in self.subscribe:
             cl.subscribe(pattern, qos=0)
+        for hook in self.on_connect_hooks:
+            try:
+                hook()
+            except Exception:
+                log.exception("on-connect hook failed")
 
     def _on_disconnect(self, cl, userdata, flags, reason, props):
         self.connected = False
@@ -92,6 +110,10 @@ class MqttRunner:
             self._handler(msg.topic, msg.payload, msg.retain)
         except Exception:  # one bad message must not stop the ingest
             log.exception("message on %s failed", msg.topic)
+
+    def publish(self, topic: str, payload: str, retain: bool = False) -> None:
+        if self.connected:
+            self.client.publish(topic, payload, qos=1, retain=retain)
 
     def start(self) -> None:
         self.client.connect_async(self.host, self.port, keepalive=60)

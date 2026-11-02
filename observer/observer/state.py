@@ -26,6 +26,7 @@ import yaml
 FORMAT = "heatpumpsn-observer-state/1"
 # (archive path, path relative to the data directory); folders end with "/".
 ITEMS = (("registry.yaml", "registry"), ("catalog.json", "catalog"), ("settings.yaml", "settings"),
+         ("checks.yaml", "checks"),
          ("house_draft.yaml", "house_draft"), ("house/", "house_dir"), ("library/", "library"))
 LIBRARY_SKIP = ("tests_tmp",)
 MAX_ARCHIVE = 200 * 1024 * 1024

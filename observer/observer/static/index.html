@@ -91,6 +91,7 @@
   <h1><b>●</b> HeatpumpsN Observer <span id="ver" class="dim" style="font-size:12px;font-weight:400"></span></h1>
   <nav>
     <button data-view="status" class="active">Status</button>
+    <button data-view="alerts">Alerts <span id="alert-badge"></span></button>
     <button data-view="signals">Signals</button>
     <button data-view="proposals">Proposals</button>
     <button data-view="house">House</button>
@@ -132,6 +133,25 @@
         <span class="dim" id="state-msg"></span></div>
       <div class="table-wrap"><table><thead><tr><th>Export file</th><th class="num">Size</th><th>Created</th><th></th></tr></thead><tbody id="db-files"></tbody></table></div>
     </div>
+  </section>
+
+  <section id="view-alerts" class="hidden">
+    <p class="dim">Automatic checks: <strong>events</strong> the devices report (on every message), <strong>fast checks</strong>
+      every few minutes (a device stopped sending, a value out of range), <strong>slow checks</strong> from the database
+      (stuck sensors) and optional <strong>scheduled agent runs</strong> (LLM). An alert opens once, counts repeats, closes by
+      itself when the condition is gone and can be acknowledged. Open alerts go to Home Assistant over MQTT
+      (<span class="mono" id="al-topic"></span>: a "Heating problem" sensor and the alert count).</p>
+    <div id="al-error"></div>
+    <h3 class="sec">Alerts</h3>
+    <div class="table-wrap"><table><thead><tr><th>Severity</th><th>Alert</th><th>Since</th><th>Last</th><th class="num">Count</th><th>State</th><th></th></tr></thead>
+      <tbody id="al-list"></tbody></table></div>
+    <h3 class="sec">Checks</h3>
+    <div class="table-wrap"><table><thead><tr><th>Check</th><th>Type</th><th>Schedule</th><th>Last run</th><th>Result</th><th class="num">Open</th><th></th></tr></thead>
+      <tbody id="al-checks"></tbody></table></div>
+    <details style="margin-top:10px" id="al-edit-box"><summary>Edit the checks (<span class="mono" id="al-path"></span>)</summary>
+      <textarea id="al-yaml" rows="30" style="width:100%;font-family:var(--mono);font-size:12px;margin-top:6px"></textarea>
+      <div class="actions"><span class="dim" id="al-msg"></span><button class="btn primary" id="al-save">Save and reload the checks</button></div>
+    </details>
   </section>
 
   <section id="view-signals" class="hidden">
@@ -338,7 +358,7 @@ document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click
 function show(v) {
   view = v;
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
-  for (const id of ['status', 'signals', 'proposals', 'house', 'agent', 'library', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  for (const id of ['status', 'alerts', 'signals', 'proposals', 'house', 'agent', 'library', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
 
@@ -380,6 +400,8 @@ async function loadStatus() {
   llm = s.llm || {};
   document.title = `HeatpumpsN Observer ${s.version || ''}`;
   showUpdates(s.updates || []);
+  const al = s.alerts || { open: 0 };
+  $('#alert-badge').innerHTML = al.open ? `<span class="pill" style="color:${al.alarms ? 'var(--err)' : 'var(--warn)'};border-color:currentColor">${al.open}</span>` : '';
   $('#ver').textContent = s.version ? `v${s.version}` : '';
   $('#mq').innerHTML = s.mqtt.host ? `MQTT <span class="${s.mqtt.connected ? 'ok' : 'err'}">${s.mqtt.connected ? 'connected' : 'disconnected'}</span> · ${esc(s.mqtt.host)}:${s.mqtt.port}` : 'MQTT off';
   if (view !== 'status') return;
@@ -389,6 +411,7 @@ async function loadStatus() {
     card('Stored samples', s.storage.samples.toLocaleString(), s.storage.kind === 'influx' ? 'InfluxDB' : 'dry run: nothing is written', s.storage.kind === 'influx' ? '' : 'warn'),
     card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
     card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
+    card('Alerts', (s.alerts || {}).open ? `${s.alerts.open} open` : 'none', (s.alerts || {}).open ? `${s.alerts.alarms} alarms · ${s.alerts.warnings} warnings` : 'all checks quiet', (s.alerts || {}).alarms ? 'err' : (s.alerts || {}).open ? 'warn' : 'ok'),
     card('Uptime', age(s.uptime_s), ''),
   ].join('');
   loadDb().catch(() => {});
@@ -1121,6 +1144,36 @@ async function loadItem(kind, name) {
     try { await api(`/api/library/item?${q}`, { method: 'DELETE' }); libOpen = null; $('#l-item').innerHTML = ''; toast('Deleted.'); loadLibrary(); } catch (err) { toast(err.message, 5000); } });
 }
 
+// --- alerts ---------------------------------------------------------------------
+const sevCls = (s) => s === 'alarm' ? 'err' : s === 'warning' ? 'warn' : 'dim';
+const ts = (t) => t ? new Date(t * 1000).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+async function loadAlerts() {
+  const d = await api('/api/alerts');
+  $('#al-topic').textContent = d.mqtt.publish ? d.mqtt.topic : 'publishing off';
+  $('#al-path').textContent = d.checks_path;
+  $('#al-error').innerHTML = d.error ? `<p class="err">${esc(d.error)}</p>` : '';
+  $('#al-list').innerHTML = d.alerts.length ? d.alerts.map((a) => `<tr style="${a.state === 'resolved' ? 'opacity:.55' : ''}">
+      <td class="${sevCls(a.severity)}">${esc(a.severity)}</td><td>${esc(a.title)}${a.detail ? `<div class="dim">${esc(a.detail)}</div>` : ''}<div class="dim mono">${esc(a.check)}</div></td>
+      <td>${ts(a.first)}</td><td>${ts(a.state === 'resolved' ? a.resolved : a.last)}</td><td class="num">${a.count}</td>
+      <td>${a.state === 'open' ? '<span class="warn">open</span>' : a.state === 'acknowledged' ? 'acknowledged' : '<span class="ok">resolved</span>'}</td>
+      <td>${a.state === 'open' ? `<button class="btn" data-ack="${esc(a.key)}">Acknowledge</button>` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="ok">No alerts.</td></tr>';
+  $('#al-checks').innerHTML = d.checks.map((c) => `<tr style="${c.enabled ? '' : 'opacity:.5'}"><td class="mono">${esc(c.id)}</td><td>${esc(c.type)}${c.enabled ? '' : ' (off)'}</td>
+      <td>${esc(c.schedule)}</td><td>${esc(c.last_run || '')}</td><td>${c.error ? `<span class="err">${esc(c.error)}</span>` : esc(c.result || '')}</td>
+      <td class="num">${c.open || ''}</td><td>${c.type !== 'event' && c.enabled ? `<button class="btn" data-runcheck="${esc(c.id)}">Run now</button>` : ''}</td></tr>`).join('');
+  document.querySelectorAll('[data-ack]').forEach((b) => b.addEventListener('click', async () => {
+    await api(`/api/alerts/ack?key=${encodeURIComponent(b.dataset.ack)}`, { method: 'POST' }); loadAlerts(); }));
+  document.querySelectorAll('[data-runcheck]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true; b.textContent = 'Running…';
+    try { await api(`/api/checks/run?id=${encodeURIComponent(b.dataset.runcheck)}`, { method: 'POST' }); } catch (err) { toast(err.message, 5000); }
+    loadAlerts(); }));
+  if (!$('#al-edit-box').open || !$('#al-yaml').value) $('#al-yaml').value = (await api('/api/checks')).text;
+}
+$('#al-save').addEventListener('click', async () => {
+  try { await api('/api/checks', { method: 'PUT', body: JSON.stringify({ text: $('#al-yaml').value }) }); $('#al-msg').textContent = 'Saved; the checks were reloaded.'; loadAlerts(); }
+  catch (err) { $('#al-msg').textContent = err.message; }
+});
+
 async function loadRules() {
   const rules = await api('/api/rules');
   $('#rules').innerHTML = rules.map((r) => `<tr><td class="mono">${esc(r.match)}</td><td>${esc([r.quantity, r.unit].filter(Boolean).join(' · '))}</td>
@@ -1133,6 +1186,7 @@ async function refresh() {
     if (view === 'signals' && !$('#edit').open) await loadSignals();
     if (view === 'proposals') await loadProposals();
     if (view === 'house' && !houseEditing) await loadHouse();
+    if (view === 'alerts') await loadAlerts();
     if (view === 'agent') await loadAgent();
     if (view === 'library') await loadLibrary();
     if (view === 'settings') await loadSettings();
@@ -1140,7 +1194,7 @@ async function refresh() {
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
 }
 refresh();
-setInterval(() => { if (view === 'status') refresh(); else loadStatus().catch(() => {}); }, 5000);
+setInterval(() => { if (view === 'status' || view === 'alerts') refresh(); else loadStatus().catch(() => {}); }, 5000);
 </script>
 </body>
 </html>

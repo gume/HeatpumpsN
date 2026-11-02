@@ -136,6 +136,40 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such archived version") from exc
 
+    # --- supervision: alerts and checks -----------------------------------------------
+    @app.get("/api/alerts")
+    def alerts():
+        return service.supervisor.view()
+
+    @app.post("/api/alerts/ack")
+    def ack_alert(key: str = Query(...)):
+        if not service.supervisor.store.acknowledge(key):
+            raise HTTPException(404, "no open alert with this key")
+        service.supervisor.publish()
+        return {"ok": True}
+
+    @app.get("/api/checks")
+    def checks_text():
+        return {"text": service.supervisor.text(), "path": service.supervisor.checks_path,
+                "error": service.supervisor.error}
+
+    @app.put("/api/checks")
+    def save_checks(text: str = Body(..., embed=True)):
+        try:
+            service.supervisor.save_text(text)
+        except Exception as exc:                        # YAML or check errors go back to the editor
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/api/checks/run")
+    async def run_check(id: str = Query(...)):
+        try:
+            return await run_in_threadpool(service.supervisor.run_now, id)
+        except KeyError as exc:
+            raise HTTPException(404, f"no check {exc}") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     # --- updates -------------------------------------------------------------------
     @app.get("/api/updates")
     def updates():

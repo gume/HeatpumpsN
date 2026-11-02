@@ -6,6 +6,19 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 
 ## Unreleased
 
+* Supervision (plan phase C): automatic checks open and close alerts.
+  *Events* on every message (controller errors and warnings per code, mixer
+  control leaving MPC mode, EMS-ESP offline, a boiler maintenance message),
+  *fast checks* on a schedule (controller, EMS-ESP, encoder or room sensors
+  silent; supply temperature too high; rooms out of range), *slow checks*
+  from the database (temperatures stuck for hours) and optional *scheduled
+  agent runs* (a skill; findings become alerts; off by default). Checks live
+  in `checks.yaml` in the data directory (created from the defaults,
+  editable on the new Alerts tab, part of the state export). Alerts open
+  once, count repeats, close by themselves and can be acknowledged; they
+  are published retained on `observer/alerts` with Home Assistant discovery
+  ("Heating problem", "Heating alerts", availability via a last will).
+
 * Harvest ("Find tools and skills in this run") runs in the background: the
   run view shows how long the model has been working, the error if it
   fails, and the proposals when it is done. It no longer looks stuck with a

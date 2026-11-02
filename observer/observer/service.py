@@ -50,6 +50,7 @@ class Service:
         self.settings = Settings(paths["settings"], float((cfg.get("llm") or {}).get("timeout_s", 300)))
         self.started = time.time()
         self._agents = None
+        self._supervisor = None
         self._db_job: dict | None = None
         from . import __version__
         from .updates import UpdateChecker
@@ -63,17 +64,32 @@ class Service:
         self._saver: threading.Thread | None = None
 
     # --- lifecycle ---------------------------------------------------------------
+    @property
+    def supervisor(self):
+        """Automatic checks and alerts (created on first use)."""
+        if self._supervisor is None:
+            from .supervision import Supervisor
+            self._supervisor = Supervisor(self, self.cfg)
+        return self._supervisor
+
     def start(self, mqtt_args: dict | None) -> None:
+        sup = self.supervisor
+        self.ingest.listeners.append(sup.on_message)
+        self.ingest.ignore = (sup.topic + "/",)            # the observer's own publications
         if mqtt_args:
-            self.mqtt = MqttRunner(self._handle, **mqtt_args)
+            self.mqtt = MqttRunner(self._handle, **mqtt_args, will=(f"{sup.topic}/status", "offline"))
+            self.mqtt.on_connect_hooks.append(sup.publish_discovery)
             self.mqtt.start()
         self._saver = threading.Thread(target=self._save_loop, name="catalog-saver", daemon=True)
         self._saver.start()
         self.updates.start()
+        sup.start()
 
     def stop(self) -> None:
         self._stop.set()
         self.updates.stop()
+        if self._supervisor:
+            self._supervisor.stop()
         if self.mqtt:
             self.mqtt.stop()
         with self.lock:
@@ -225,6 +241,7 @@ class Service:
                 "sources": dict(sorted(sources.items())),
                 "llm": {t["task"]: t["ready"] for t in self.settings.view()["tasks"]},
                 "updates": self.updates.summary()["available"],
+                "alerts": self.supervisor.summary(),
             }
 
     def signals(self) -> list[dict]:

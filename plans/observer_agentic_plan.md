@@ -153,7 +153,7 @@ optimisation.
 | --- | --- |
 | A (done) | data collection, registry, catalog, LLM descriptions, per-task model settings |
 | B (done) | reviewed house description with notes, questions, recommendations and archive |
-| C | deterministic supervision from the audited model's checks; alerts to HA |
+| C (first version) | supervision: event, stale, range and stuck checks without LLM, scheduled agent runs, alerts to HA over MQTT discovery; still to come: checks generated from the accepted house model, drift detection, agent investigation triggered by an alert |
 | D (first version) | core tools (MCP + function calling); library of analysis tools with manifests, tests and audit flags; seed tools and skills incl. plant identification |
 | E (first version) | sandbox: bubblewrap (rootless, no network) with the read-only data socket; limits; workspaces, query logs, audit records |
 | F (first version) | agent loop: free questions or skills, own data selection, tool and skill creation, harvest of finished runs, pause/resume on LLM quota; still to come: triggering it from supervision (C) |

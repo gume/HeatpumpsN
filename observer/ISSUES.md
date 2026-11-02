@@ -9,7 +9,7 @@ Plans: `plans/master_plan.md` (observer role, P4), `plans/observer_node.md`
 | --- | --- |
 | Ingest and store (node §9.1, phase A) | done; release deployment ready |
 | Reviewed house understanding (phase B) | done; **nothing accepted yet** (a draft waits) |
-| **Supervision with alerts to HA** (node §9.4, phase C): checks from the accepted model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **missing**: the observer publishes nothing to MQTT yet |
+| **Supervision with alerts to HA** (node §9.4, phase C): checks from the accepted model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **first version** (unreleased): event, stale, range, stuck and scheduled agent checks, alerts to HA; still missing: checks derived from the accepted house model, drift detection, an agent investigation triggered by an alert |
 | **Identification from live data** (node §9.2, master P4): transport delay from pulse events, valve characteristic f(pos, T_boiler, T_return), gradient statistics | **missing as an automated job**; tools exist (`fopdt_fit`, `plant_identification` skill), the offline work in `floor_simulator/log_analysis` did it once on HA history |
 | **Parameter generation, validation on held-out data, push** (node §9.3, master 9.9, phase G) | **missing**: no backtest against recorded data/simulator, no approval flow, no signed push to the controller's `cmd/mpc/params` (the firmware side exists) |
 | Parameter versioning with rollback (node §9.4) | missing (depends on the push) |
