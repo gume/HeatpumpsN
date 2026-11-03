@@ -24,6 +24,7 @@ class Ingest:
         self.stored = 0
         self.new_signals: list[str] = []
         self.listeners: list = []      # called with (topic, samples, retained, time_ns), e.g. event checks
+        self.raw_listeners: list = []  # called with (topic, payload, retained): messages needed whole
         self.ignore: tuple[str, ...] = ()   # topic prefixes not ingested (the observer's own publications)
 
     def handle(self, topic: str, payload: bytes, retained: bool = False, time_ns: int | None = None) -> None:
@@ -44,6 +45,11 @@ class Ingest:
             return
         self.catalog.add_meta(metadata.from_statestream(topic, self.statestream_base))
 
+        for listener in self.raw_listeners:
+            try:
+                listener(topic, payload, retained)
+            except Exception:
+                log.exception("raw listener failed on %s", topic)
         samples = parse(topic, payload)
         for listener in self.listeners:
             try:

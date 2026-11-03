@@ -148,6 +148,39 @@ def create_app(service: Service) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "no such archived version") from exc
 
+    # --- mixer model: identification, proposals, sending, rollback ----------------------
+    @app.get("/api/parameters")
+    def parameters():
+        return service.parameters.view()
+
+    @app.post("/api/parameters/identify")
+    def identify_now():
+        try:
+            return service.parameters.start_identification()
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    def _param_call(fn, pid):
+        try:
+            return fn(pid)
+        except KeyError as exc:
+            raise HTTPException(404, f"no proposal {exc}") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/parameters/approve")
+    def approve(id: str = Query(...)):
+        return _param_call(service.parameters.approve, id)
+
+    @app.post("/api/parameters/dismiss")
+    def dismiss(id: str = Query(...)):
+        _param_call(service.parameters.dismiss, id)
+        return {"ok": True}
+
+    @app.post("/api/parameters/rollback")
+    def rollback(id: str = Query(...)):
+        return _param_call(service.parameters.rollback, id)
+
     # --- supervision: alerts and checks -----------------------------------------------
     @app.get("/api/alerts")
     def alerts():

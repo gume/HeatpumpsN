@@ -63,6 +63,17 @@ alerts:
   mqtt_topic: observer
   discovery_prefix: homeassistant
 
+# Mixer-model identification and parameter proposals (Parameters tab). Sending a
+# set to the controller needs the owner's approval in the portal AND push_enabled;
+# with a command secret on the controller, OBSERVER_CONTROLLER_SECRET in .env signs it.
+parameters:
+  push_enabled: false
+  controller_topic: heatpumpsn/controller
+  command_secret_env: OBSERVER_CONTROLLER_SECRET
+  window: -14d                # data used per identification
+  min_slow_hours: 6           # below this, the published values are used (approximate)
+  drift_gain: 0.3             # a proposal predicting 30 % better raises a drift alert
+
 # Release checks: GitHub releases of the observer and of installed library
 # packs (each pack's library.yaml names its repository). A banner in the
 # portal shows newer versions; nothing is installed automatically.

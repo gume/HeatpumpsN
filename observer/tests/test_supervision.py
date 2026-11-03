@@ -171,4 +171,4 @@ def test_default_checks_are_valid():
     from observer.supervision import DEFAULTS
 
     checks = Supervisor.validate(yaml.safe_load(open(DEFAULTS))["checks"])
-    assert {c["type"] for c in checks} == {"event", "stale", "range", "stuck", "agent"}
+    assert {c["type"] for c in checks} == {"event", "stale", "range", "stuck", "agent", "identify"}

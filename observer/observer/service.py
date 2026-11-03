@@ -51,6 +51,7 @@ class Service:
         self.started = time.time()
         self._agents = None
         self._supervisor = None
+        self._parameters = None
         self.db_total: dict | None = None        # samples in the database, counted once at the start
         self._db_job: dict | None = None
         from . import __version__
@@ -73,9 +74,18 @@ class Service:
             self._supervisor = Supervisor(self, self.cfg)
         return self._supervisor
 
+    @property
+    def parameters(self):
+        """Mixer-model identification and parameter proposals (created on first use)."""
+        if self._parameters is None:
+            from .parameters import ParameterManager
+            self._parameters = ParameterManager(self, self.cfg)
+        return self._parameters
+
     def start(self, mqtt_args: dict | None) -> None:
         sup = self.supervisor
         self.ingest.listeners.append(sup.on_message)
+        self.ingest.raw_listeners.append(self.parameters.on_raw)
         self.ingest.ignore = (sup.topic + "/",)            # the observer's own publications
         if mqtt_args:
             self.mqtt = MqttRunner(self._handle, **mqtt_args, will=(f"{sup.topic}/status", "offline"))

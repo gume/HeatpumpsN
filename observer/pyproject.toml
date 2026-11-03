@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "duckdb>=1.1",                # database export/import files
+    "numpy>=1.26",                # identification of the mixer model
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]

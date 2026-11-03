@@ -4,6 +4,25 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## Unreleased
+
+* Learning from live data (plan: identification and parameter path): the
+  controller's mixer model (law, transport delay, sensor lags; per pump
+  scenario) is re-identified from recorded data (`identify.py`, a copy of the
+  firmware model, checked step by step against it), daily (check type
+  `identify`) or on the new Parameters tab. The current set is compared with
+  the re-identified one on held-out data; only a clearly better model becomes
+  a proposal, and a large gap raises a drift alert. Proposals show errors,
+  parameter changes, the law with the data coverage and a held-out plot.
+* Parameter path: an approved proposal sends only the model fields to
+  `cmd/mpc/params`, HMAC-signed with `OBSERVER_CONTROLLER_SECRET`; the
+  controller's acknowledgement marks it accepted or rejected; every sent set
+  keeps the one it replaced for a roll back. Sending is off until
+  `parameters.push_enabled` is set.
+* The controller's slow log (exact model inputs) is stored now (registry
+  rule); until enough of it exists, identification uses the published values
+  and says so.
+
 ## 0.4.0 - 2026-11-03
 
 Supervision with Home Assistant alerts, editors for harvested tools and

@@ -92,9 +92,8 @@ rules:
     role: controller
     description: MPC parameter set (configuration; changes only when a set is pushed).
   - match: "heatpumpsn/controller/log/slow*"
-    store: false
     role: controller
-    description: Slow log sample (repeats the state topics that are stored anyway).
+    description: "Slow log sample: exactly the controller's model inputs every 10 s (boiler, mix, return at sensor resolution, the unrounded position); used to identify the mixer model."
   - match: "heatpumpsn/controller/log/event*"
     role: diagnostic
     description: Controller event log record (code, severity, detail).

@@ -107,6 +107,7 @@
     <button data-view="house">House</button>
     <button data-view="agent">Agent</button>
     <button data-view="library">Library</button>
+    <button data-view="parameters">Parameters</button>
     <button data-view="settings">Settings</button>
     <button data-view="rules">Rules</button>
   </nav>
@@ -293,6 +294,26 @@
     <div id="l-item" style="margin-top:14px"></div>
   </section>
 
+  <section id="view-parameters" class="hidden">
+    <p class="dim">The controller's predictive mixer control uses a model per pump scenario (the mixing law, the transport
+      delay and two sensor lags). The observer re-identifies it from live data (daily, or now) and compares it with the
+      current set on <strong>held-out data</strong> that was not used for fitting. Only a clearly better model becomes a
+      proposal. Nothing reaches the controller without your approval; the controller checks every set against its
+      compiled limits, and every sent set keeps the one it replaced for a roll back.</p>
+    <div id="pm-push"></div>
+    <h3 class="sec">Current sets on the controller</h3>
+    <div class="table-wrap"><table><thead><tr><th>Set</th><th>Revision</th><th class="num">Delay</th><th class="num">Sensor lag</th>
+      <th class="num">Supply lead</th><th>Mixing law</th><th>Received</th></tr></thead><tbody id="pm-sets"></tbody></table></div>
+    <div class="bar" style="margin-top:12px"><h3 class="sec" style="margin:0">Identification</h3>
+      <button class="btn primary" id="pm-identify" style="margin-left:auto">Identify now</button></div>
+    <div id="pm-run"></div>
+    <h3 class="sec">Proposals</h3>
+    <div id="pm-proposals"></div>
+    <h3 class="sec">History</h3>
+    <div class="table-wrap"><table><thead><tr><th>Created</th><th>Set</th><th>Status</th><th>Sent</th><th>Answer</th><th></th></tr></thead>
+      <tbody id="pm-history"></tbody></table></div>
+  </section>
+
   <section id="view-settings" class="hidden">
     <p class="dim">LLM providers come from <span class="mono">.env</span> (endpoint and key per slot:
       <span class="mono">OBSERVER_LLM_BASE_URL/KEY</span>, <span class="mono">OBSERVER_LLM_2_BASE_URL/KEY</span>, …).
@@ -446,7 +467,7 @@ function show(v) {
     b.classList.toggle('active', b.dataset.view === v);
     if (b.dataset.view === v) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });   // narrow screens scroll the tabs
   });
-  for (const id of ['status', 'alerts', 'signals', 'proposals', 'house', 'agent', 'library', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  for (const id of ['status', 'alerts', 'signals', 'proposals', 'house', 'agent', 'library', 'parameters', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
 
@@ -1320,6 +1341,86 @@ $('#al-save').addEventListener('click', async () => {
   catch (err) { $('#al-msg').textContent = err.message; }
 });
 
+// --- parameters: identification and proposals ---------------------------------------
+function lineChart(t, series, h = 160) {
+  // series: [{values, color, label, dash}] over the time axis t (unix s); gaps where segments break
+  const all = series.flatMap((s) => s.values).filter((v) => v != null && isFinite(v));
+  if (!all.length) return '';
+  const lo = Math.floor(Math.min(...all)), hi = Math.ceil(Math.max(...all)), W = 760;
+  const x = (i) => 40 + (i / Math.max(1, t.length - 1)) * (W - 50), y = (v) => 10 + (1 - (v - lo) / Math.max(0.1, hi - lo)) * (h - 30);
+  const path = (vals) => vals.map((v, i) => (v == null ? '' : `${i && t[i] - t[i - 1] <= 120 ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`)).join('');
+  return `<svg viewBox="0 0 ${W} ${h}" style="width:100%;max-width:${W}px;height:auto" role="img">
+    <text x="4" y="14" font-size="11" fill="var(--muted)">${hi} °C</text><text x="4" y="${h - 22}" font-size="11" fill="var(--muted)">${lo} °C</text>
+    <line x1="40" x2="${W - 10}" y1="${h - 20}" y2="${h - 20}" stroke="var(--line)"/>
+    ${series.map((s) => `<path d="${path(s.values)}" fill="none" stroke="${s.color}" stroke-width="${s.width || 1.6}" ${s.dash ? 'stroke-dasharray="4 3"' : ''}/>`).join('')}
+    ${series.map((s, i) => `<text x="${50 + i * 170}" y="${h - 5}" font-size="11" fill="${s.color}">${esc(s.label)}</text>`).join('')}</svg>`;
+}
+function lawChart(knots, curves, coverage, small = false) {
+  const W = small ? 160 : 420, H = small ? 40 : 170, x = (p) => 30 + (p / 100) * (W - 40), y = (v) => 8 + (1 - v) * (H - (small ? 14 : 30));
+  const cov = coverage ? coverage.map((c, i) => c > 0 ? `<rect x="${x(knots[i]) - 3}" y="${H - 20}" width="6" height="${Math.min(14, 2 + Math.log2(1 + c) * 2)}" fill="var(--ok)" opacity=".6"><title>${c} min near ${knots[i]} %</title></rect>` : '').join('') : '';
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:${W}px;height:auto" role="img">
+    ${small ? '' : `<text x="2" y="12" font-size="10" fill="var(--muted)">1</text><text x="2" y="${H - 22}" font-size="10" fill="var(--muted)">0</text>`}
+    ${curves.map((c) => `<polyline points="${c.xk.map((v, i) => `${x(knots[i]).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="${c.color}" stroke-width="1.6" ${c.dash ? 'stroke-dasharray="4 3"' : ''}/>`).join('')}
+    ${cov}${small ? '' : curves.map((c, i) => `<text x="${40 + i * 150}" y="${H - 2}" font-size="11" fill="${c.color}">${esc(c.label)}</text>`).join('')}</svg>`;
+}
+async function loadParameters() {
+  const d = await api('/api/parameters');
+  const P = d.push;
+  $('#pm-push').innerHTML = P.enabled
+    ? `<p class="${P.signed ? 'ok' : 'warn'}">Sending is enabled (${esc(P.topic)}), ${P.signed ? 'signed with the command secret' : `<strong>unsigned</strong>: set ${esc(P.secret_env)} in .env if the controller has a command secret`}.</p>`
+    : `<p class="dim">Sending is <strong>off</strong>: proposals can be reviewed, not sent. Enable it with <span class="mono">parameters: push_enabled: true</span> in config.yaml (and ${esc(P.secret_env)} in .env when the controller has a command secret).</p>`;
+  const sets = Object.entries(d.snapshot);
+  $('#pm-sets').innerHTML = sets.length ? sets.map(([k, v]) => { const p = v.params; return `<tr><td class="mono">${esc(k)}</td><td>${p.revision ?? ''}</td>
+      <td class="num">${p.delay_s} s</td><td class="num">${p.tau_fwd_s} s</td><td class="num">${p.tau_inc_s} s</td>
+      <td>${lawChart(p.knots_pct, [{ xk: p.xk, color: 'var(--accent)' }], null, true)}</td><td class="dim">${esc(v.received)}</td></tr>`; }).join('')
+    : '<tr><td colspan="7" class="dim">Not received yet (the controller publishes them retained on state/mpc/params/&lt;set&gt;).</td></tr>';
+  const j = d.job, run = d.last_run;
+  $('#pm-identify').disabled = j && j.state === 'running';
+  let html = j && j.state === 'running' ? `<p class="warn">Identifying… since ${esc(j.started)}</p>` : j && j.state === 'error' ? `<p class="err">${esc(j.error)}</p>` : '';
+  if (run) html += `<p class="dim" style="margin:4px 0">Last run ${esc(run.time)} (${run.seconds} s), inputs: ${esc(run.inputs || '')}</p>
+    <div class="table-wrap"><table><tbody>${Object.entries(run.scenarios).map(([k, r]) => `<tr><td class="mono">${esc(k)}</td><td>${esc(r.status)}</td>
+      <td class="num">${r.hours} h data</td><td class="dim">${r.rmse ? `held-out error: current ${r.rmse.holdout_current} K, re-identified ${r.rmse.holdout_identified} K` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  else html += '<p class="dim">No identification yet.</p>';
+  $('#pm-run').innerHTML = html;
+  const open = d.proposals.filter((p) => p.status === 'proposed');
+  redraw($('#pm-proposals'), open.length ? open.map((p) => { const c = p.current, n = p.identified, r = p.rmse;
+    const row = (label, a, b, unit = '') => `<tr><td>${label}</td><td class="num">${a}${unit}</td><td class="num">${b}${unit}</td></tr>`;
+    return `<div class="card" style="margin-bottom:12px">
+      <div class="bar" style="margin:0"><strong>Set ${esc(p.scenario)}</strong><span class="dim">${esc(p.created)} · ${p.train_h} h to fit, ${p.holdout_h} h held out · inputs ${esc(p.inputs)}</span></div>
+      <div class="two" style="margin-top:8px">
+        <div><div class="table-wrap"><table><thead><tr><th></th><th class="num">Current</th><th class="num">Identified</th></tr></thead><tbody>
+          ${row('Error on held-out data', r.holdout_current, `<strong>${r.holdout_identified}</strong>`, ' K')}
+          ${row('Error on fitted data', r.train_current, r.train_identified, ' K')}
+          ${row('Transport delay', c.delay_s, n.delay_s, ' s')}${row('Forward-sensor lag', c.tau_fwd_s, n.tau_fwd_s, ' s')}${row('Supply lead', c.tau_inc_s, n.tau_inc_s, ' s')}
+        </tbody></table></div></div>
+        <div>${lawChart(c.knots_pct, [{ xk: c.xk, color: 'var(--warn)', label: 'current law', dash: true }, { xk: n.xk, color: 'var(--accent)', label: 'identified law' }], p.coverage_min)}
+          <div class="dim" style="font-size:12px">green bars: how long the valve was near a knot (unvisited knots keep the current value)</div></div>
+      </div>
+      <details><summary>Held-out data: measured and predicted forward temperature</summary>${lineChart(p.plot.t, [
+        { values: p.plot.measured, color: 'var(--text)', label: 'measured', width: 1.2 }, { values: p.plot.current, color: 'var(--warn)', label: 'current model', dash: true },
+        { values: p.plot.identified, color: 'var(--accent)', label: 'identified model' }])}</details>
+      <div class="actions"><button class="btn danger" data-pm-dismiss="${p.id}">Dismiss</button>
+        <button class="btn primary" data-pm-approve="${p.id}" ${P.enabled ? '' : 'disabled title="Sending is off (config.yaml)"'}>Approve and send to the controller</button></div></div>`; }).join('')
+    : '<p class="dim">No open proposals.</p>');
+  const hist = d.proposals.filter((p) => p.status !== 'proposed');
+  $('#pm-history').innerHTML = hist.length ? hist.map((p) => `<tr><td>${esc(p.created)}</td><td class="mono">${esc(p.scenario)}${p.rollback_of ? ' (roll back)' : ''}</td>
+      <td class="${p.status === 'accepted' ? 'ok' : /rejected|no answer/.test(p.status) ? 'err' : 'dim'}">${esc(p.status)}</td><td>${esc(p.sent || '')}${p.signed ? ` · ${esc(p.signed)}` : ''}</td>
+      <td class="dim">${p.ack ? (p.ack.ok ? 'accepted' : esc(p.ack.error)) : ''}</td>
+      <td>${['accepted', 'sent'].includes(p.status) && p.previous && P.enabled ? `<button class="btn" data-pm-rollback="${p.id}">Roll back</button>` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="dim">Nothing sent yet.</td></tr>';
+  const act = async (url, confirmText) => { if (confirmText && !confirm(confirmText)) return; try { await api(url, { method: 'POST' }); toast('Done.'); } catch (err) { toast(err.message, 6000); } loadParameters(); };
+  document.querySelectorAll('[data-pm-approve]').forEach((b) => b.onclick = () => act(`/api/parameters/approve?id=${b.dataset.pmApprove}`,
+    'Send this parameter set to the controller? It takes effect at once; the controller validates it and answers.'));
+  document.querySelectorAll('[data-pm-dismiss]').forEach((b) => b.onclick = () => act(`/api/parameters/dismiss?id=${b.dataset.pmDismiss}`));
+  document.querySelectorAll('[data-pm-rollback]').forEach((b) => b.onclick = () => act(`/api/parameters/rollback?id=${b.dataset.pmRollback}`,
+    'Send the previous parameter set back to the controller?'));
+  if (j && j.state === 'running' && view === 'parameters') setTimeout(() => loadParameters().catch(() => {}), 3000);
+}
+$('#pm-identify').addEventListener('click', async () => {
+  try { await api('/api/parameters/identify', { method: 'POST' }); } catch (err) { toast(err.message, 6000); }
+  loadParameters();
+});
+
 async function loadRules() {
   const rules = await api('/api/rules');
   $('#rules').innerHTML = rules.map((r) => `<tr><td class="mono">${esc(r.match)}</td><td>${esc([r.quantity, r.unit].filter(Boolean).join(' · '))}</td>
@@ -1335,6 +1436,7 @@ async function refresh() {
     if (view === 'alerts') await loadAlerts();
     if (view === 'agent') await loadAgent();
     if (view === 'library') await loadLibrary();
+    if (view === 'parameters') await loadParameters();
     if (view === 'settings') await loadSettings();
     if (view === 'rules') await loadRules();
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }

@@ -116,6 +116,13 @@ checks:
   title: "{name}: unchanged ({value}) for {hours} h"
   severity: warning
 
+# --- Daily: re-identify the mixer model from live data (no LLM) ---
+
+- id: mixer_model_identification
+  type: identify
+  cron: "23 3 * * *"          # proposals wait on the Parameters tab; nothing is sent without approval
+  severity: warning
+
 # --- Daily: an agent run with a skill (uses the LLM: mind the quota) ---
 
 - id: daily_sensor_health

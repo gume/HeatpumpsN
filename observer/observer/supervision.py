@@ -17,6 +17,8 @@ Checks are defined in ``<OBSERVER_HOME>/checks.yaml`` (created from
   ``hours`` while samples keep arriving.
 * ``agent``  — on a schedule: an agent run with a skill (uses the LLM); its
   findings of severity warning/alert become alerts. Off by default.
+* ``identify`` — on a schedule: re-identifies the controller's mixer model from
+  live data (parameters.py, no LLM); proposals and a drift alert follow.
 
 Schedules: ``every: 5m`` or ``cron: "17 6 * * *"`` (local time). Signals are
 chosen with ``signal: <id>`` or ``select: {source, role, quantity, location,
@@ -43,7 +45,7 @@ import yaml
 log = logging.getLogger(__name__)
 DEFAULTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defaults", "checks.yaml")
 SEVERITIES = ("info", "warning", "alarm")
-TYPES = ("event", "stale", "range", "stuck", "agent")
+TYPES = ("event", "stale", "range", "stuck", "agent", "identify")
 
 
 def duration_s(text) -> float:
@@ -245,6 +247,9 @@ class Supervisor:
             elif c["type"] == "agent":
                 if not c.get("cron") or not c.get("skill"):
                     raise ValueError(f"{c['id']}: an agent check needs cron and skill")
+            elif c["type"] == "identify":
+                if not (c.get("cron") or c.get("every")):
+                    raise ValueError(f"{c['id']}: an identify check needs cron or every")
             elif not (c.get("every") or c.get("cron")):
                 raise ValueError(f"{c['id']}: needs every or cron")
             if c.get("every"):
@@ -455,6 +460,11 @@ class Supervisor:
                 self._resolve(c, sid)
         return f"{bad} of {len(rows)} stuck"
 
+    def _check_identify(self, c: dict) -> str:
+        """Re-identify the mixer model from live data; proposals and drift alerts follow (no LLM)."""
+        job = self.service.parameters.start_identification()
+        return f"identification started {job['started']}"
+
     def _check_agent(self, c: dict) -> str:
         agents = self.service.agents
         run_id = agents.start(c["skill"], c.get("question", ""))
@@ -504,6 +514,9 @@ class Supervisor:
                 self.run_check(c)
         if self._agent_runs:
             self._collect_agent_runs()
+        params = getattr(self.service, "_parameters", None)
+        if params is not None:
+            params.check_timeouts()
 
     def run_now(self, check_id: str) -> dict:
         c = next((x for x in self.checks if x["id"] == check_id), None)
