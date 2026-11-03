@@ -194,14 +194,16 @@ def test_retry_after_parsing_and_short_429_waits(monkeypatch):
     client.sleep = slept.append
     assert client.chat("s", "u") == "ok" and slept == [21, 4]        # short delays: waited and repeated
 
+    from observer.llm import LlmUnavailable
+
     answers[:] = [resp(429, "Please retry in 6h11m16s.")]
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(LlmUnavailable) as exc:
         client.chat("s", "u")                                        # long delay: raised at once, no waiting
-    assert slept == [21, 4]
+    assert slept == [21, 4] and exc.value.kind == "quota" and exc.value.retry_after_s == 22276
 
     slept.clear()
     answers[:] = [resp(429, "You exceeded your current quota: requests per day limit exceeded")]
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(LlmUnavailable):
         client.chat("s", "u")                                        # quota used up: no retries
     assert slept == []
     answers[:] = [resp(429, "The model is overloaded. Please try again later."), resp(503, "busy"),
@@ -209,6 +211,75 @@ def test_retry_after_parsing_and_short_429_waits(monkeypatch):
     assert client.chat("s", "u") == "ok" and slept == [5, 10]       # busy: short waits, then it worked
     slept.clear()
     answers[:] = [resp(429, "Too many requests")] * 5
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(LlmUnavailable) as exc:
         client.chat("s", "u")
-    assert slept == [5, 10, 20, 30]                                  # limited: four waits, then give up
+    assert slept == [5, 10, 20, 30] and exc.value.kind == "busy"     # limited: four waits, then give up
+
+
+
+class FakeStream:
+    def __init__(self, status, lines=(), text="", hang=False):
+        self.status_code, self.lines, self.text, self.hang = status, list(lines), text, hang
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.text.encode()
+
+    def iter_lines(self):
+        import httpx
+        for ln in self.lines:
+            yield ln
+        if self.hang:
+            raise httpx.ReadTimeout("silence")
+
+
+def test_streaming_assembles_text_and_tool_calls(monkeypatch):
+    import httpx
+
+    from observer.llm import LlmClient
+
+    chunks = [
+        {"choices": [{"delta": {"role": "assistant", "content": "Hel"}}]},
+        {"choices": [{"delta": {"content": "lo"}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "c1", "type": "function", "extra_content": {"google": {"thought_signature": "SIG"}},
+                                                "function": {"name": "get", "arguments": '{"a":'}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": ' 1}'}}]}}]},       # no index, no id: same call
+        {"choices": [{"delta": {"tool_calls": [{"id": "c2", "function": {"name": "two", "arguments": "{}"}}]}}]},
+        {"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 3}}]
+    lines = [f"data: {json.dumps(c)}" for c in chunks] + ["", "data: [DONE]"]
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: FakeStream(200, lines))
+    client = LlmClient("http://x/v1", "m", stream=True)
+    msg, usage = client.chat_tools([{"role": "user", "content": "q"}], [{"type": "function"}])
+    assert msg["content"] == "Hello" and usage == {"prompt_tokens": 7, "completion_tokens": 3}
+    assert [c["id"] for c in msg["tool_calls"]] == ["c1", "c2"]
+    assert msg["tool_calls"][0]["function"]["arguments"] == '{"a": 1}'
+    assert msg["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "SIG"   # returned unchanged
+
+
+def test_silence_timeout_is_not_retried_and_rejection(monkeypatch):
+    import httpx
+
+    from observer.llm import LlmClient, LlmUnavailable
+
+    calls = []
+
+    def stream(*a, **k):
+        calls.append(k["timeout"].read)
+        return FakeStream(200, ["data: {\"choices\": [{\"delta\": {\"content\": \"x\"}}]}"], hang=True)
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    client = LlmClient("http://x/v1", "slow-model", stream=True, timeout_s=90, task="house")
+    client.sleep = lambda s: None
+    with pytest.raises(LlmUnavailable) as exc:
+        client.chat("s", "u")
+    assert calls == [90] and exc.value.kind == "timeout" and exc.value.task == "house"   # one attempt only
+    assert "90 s of silence" in str(exc.value)
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: FakeStream(404, text='{"error": {"message": "model not found"}}'))
+    with pytest.raises(LlmUnavailable) as exc:
+        client.chat("s", "u")
+    assert exc.value.kind == "rejected" and "model not found" in exc.value.message

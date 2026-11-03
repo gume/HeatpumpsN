@@ -194,3 +194,33 @@ def test_house_review_knowledge_understanding_cycle(tmp_path):
     service.generate_house(client=Fake())
     assert seen["knowledge"][1]["current_owner_knowledge"].startswith("## Building")
     assert seen["knowledge"][1]["questions_asked_last_time"] == ["Is the garage heated?"]
+
+
+def test_llm_unavailable_answers_503_with_details(tmp_path):
+    from observer.llm import LlmUnavailable
+
+    service, client = make(tmp_path)
+
+    class Busy:
+        model = "gemini-x"
+
+        def chat(self, system, user):
+            raise LlmUnavailable("quota", "requests per day exceeded", "gemini-x", "house", 3600, 429)
+
+    service.settings.client = lambda task: Busy()
+    r = client.post("/api/house/generate")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["llm"] == {"kind": "quota", "message": "requests per day exceeded", "model": "gemini-x",
+                           "task": "house", "retry_after_s": 3600, "status": 429}
+    assert "retry in 60 min" in body["detail"]
+
+
+def test_response_limit_settings(tmp_path):
+    service, client = make(tmp_path)
+    assert client.get("/api/settings").json()["response"] == {"timeout_s": 120, "stream": True}
+    assert client.put("/api/settings", json={"response": {"timeout_s": 5}}).status_code == 400
+    r = client.put("/api/settings", json={"response": {"timeout_s": 300, "stream": False}}).json()
+    assert r["response"] == {"timeout_s": 300, "stream": False}
+    from observer.settings import Settings
+    assert Settings(str(tmp_path / "settings.yaml")).data["response"]["timeout_s"] == 300

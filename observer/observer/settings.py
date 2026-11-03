@@ -41,16 +41,18 @@ def provider_slots() -> dict[str, dict]:
 
 
 class Settings:
-    def __init__(self, path: str, timeout_s: float = 300.0):
+    DEFAULT_RESPONSE = {"timeout_s": 120, "stream": True}
+
+    def __init__(self, path: str, timeout_s: float | None = None):
         self.path = path
-        self.timeout_s = timeout_s
         self._lock = threading.Lock()
-        self.data = {"providers": {}, "tasks": {}}
+        self.data = {"providers": {}, "tasks": {}, "response": dict(self.DEFAULT_RESPONSE)}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as fp:
                 loaded = yaml.safe_load(fp) or {}
             self.data["providers"] = loaded.get("providers") or {}
             self.data["tasks"] = loaded.get("tasks") or {}
+            self.data["response"].update(loaded.get("response") or {})
         # Migration from the single-provider setup: OBSERVER_LLM_MODEL in .env.
         legacy = os.environ.get("OBSERVER_LLM_MODEL", "").strip()
         if legacy:
@@ -66,7 +68,7 @@ class Settings:
             t = self.data["tasks"].get(task) or {}
             tasks.append({"task": task, "label": label, "provider": str(t.get("provider") or ""),
                           "model": t.get("model") or "", "ready": self.client(task) is not None})
-        return {"providers": providers, "tasks": tasks}
+        return {"providers": providers, "tasks": tasks, "response": dict(self.data["response"])}
 
     def update(self, body: dict) -> dict:
         slots = provider_slots()
@@ -79,6 +81,15 @@ class Settings:
                 if task in TASKS and isinstance(info, dict):
                     self.data["tasks"][task] = {"provider": str(info.get("provider") or "").strip(),
                                                 "model": str(info.get("model") or "").strip()}
+            resp = body.get("response")
+            if isinstance(resp, dict):
+                if "timeout_s" in resp:
+                    t = float(resp["timeout_s"])
+                    if not 10 <= t <= 3600:
+                        raise ValueError("response timeout: 10 to 3600 seconds")
+                    self.data["response"]["timeout_s"] = int(t)
+                if "stream" in resp:
+                    self.data["response"]["stream"] = bool(resp["stream"])
             os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
             with open(self.path, "w", encoding="utf-8") as fp:
                 yaml.safe_dump(self.data, fp, sort_keys=False, allow_unicode=True)
@@ -91,7 +102,8 @@ class Settings:
         info = provider_slots().get(slot)
         if not info or not model:
             return None
-        return LlmClient(info["base_url"], model, info["key"], self.timeout_s)
+        r = self.data["response"]
+        return LlmClient(info["base_url"], model, info["key"], float(r["timeout_s"]), bool(r["stream"]), task)
 
     def models(self, slot: str) -> list[str]:
         """Model ids the provider lists (OpenAI-compatible /models)."""

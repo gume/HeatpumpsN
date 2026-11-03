@@ -87,12 +87,60 @@ def human_duration(seconds: float) -> str:
     return f"{int(seconds // 3600)} h {int(seconds % 3600 // 60)} min"
 
 
+class LlmUnavailable(Exception):
+    """The model cannot answer now: quota used up, rate limited, busy, no answer in time,
+    unreachable, or the request was rejected (wrong model or key). The portal offers
+    to retry, to wait, or to switch the model for the task."""
+
+    def __init__(self, kind: str, message: str, model: str = "", task: str = "",
+                 retry_after_s: float | None = None, status: int | None = None):
+        super().__init__(message)
+        self.kind, self.message, self.model, self.task = kind, message, model, task
+        self.retry_after_s, self.status = retry_after_s, status
+
+    def info(self) -> dict:
+        return {"kind": self.kind, "message": self.message, "model": self.model, "task": self.task,
+                "retry_after_s": self.retry_after_s, "status": self.status}
+
+    def __str__(self) -> str:
+        when = f"; the provider says retry in {human_duration(self.retry_after_s)}" if self.retry_after_s else ""
+        return f"{self.model or 'the model'}: {self.message}{when}"
+
+
+def _error_text(r) -> str:
+    """The provider's message from an error response (OpenAI or Google style), else the raw text."""
+    text = r.text or ""
+    try:
+        body = json.loads(text)
+        body = body[0] if isinstance(body, list) and body else body
+        text = (body.get("error") or {}).get("message") or text
+    except (ValueError, AttributeError):
+        pass
+    return " ".join(text.split())[:300]
+
+
+def _merge(dst: dict, src: dict) -> None:
+    """Merge one streamed delta into the message being assembled."""
+    for k, v in src.items():
+        if k == "index":
+            continue
+        if isinstance(v, dict):
+            _merge(dst.setdefault(k, {}), v)
+        elif k in ("arguments", "content") and isinstance(v, str):
+            dst[k] = (dst.get(k) or "") + v
+        elif v is not None:
+            dst[k] = v
+
+
 class LlmClient:
-    def __init__(self, base_url: str, model: str, api_key: str | None = None, timeout_s: float = 120.0):
+    def __init__(self, base_url: str, model: str, api_key: str | None = None, timeout_s: float = 120.0,
+                 stream: bool = False, task: str = ""):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self.stream = stream
+        self.task = task
 
     @classmethod
     def from_config(cls, cfg: dict | None) -> "LlmClient | None":
@@ -107,26 +155,79 @@ class LlmClient:
     BUSY_WAITS_S = (5, 10, 20, 30)  # busy / overloaded / unreachable: short waits, then give up
     sleep = staticmethod(time.sleep)
 
-    def _post(self, body: dict, attempts: int = 3) -> dict:
-        """POST /chat/completions with retries.
+    def _unavailable(self, kind: str, message: str, retry_after_s: float | None = None,
+                     status: int | None = None) -> LlmUnavailable:
+        return LlmUnavailable(kind, message, self.model, self.task, retry_after_s, status)
 
-        * 429 with a stated delay of at most a minute: wait it and repeat (up to
-          MAX_SHORT_WAITS times); a longer stated delay is raised at once;
-        * 429 meaning the quota is used up (per day, billing): raised at once;
-        * 429 "busy" (or saying nothing), 5xx, timeouts, lost connections: the
-          short waits of BUSY_WAITS_S, then raised.
-        A raised error pauses an agent run (see agent/runner.py)."""
+    def _timeout(self) -> httpx.Timeout:
+        # read = the longest silence: between two streamed pieces, or (not streamed) the whole answer
+        return httpx.Timeout(connect=15, read=self.timeout_s, write=30, pool=15)
+
+    def _once(self, body: dict, headers: dict):
+        """One request: the response JSON (streamed answers assembled), or the error response."""
+        url = f"{self.base_url}/chat/completions"
+        if not self.stream:
+            r = httpx.post(url, json=body, headers=headers, timeout=self._timeout())
+            return r.json() if r.status_code == 200 else r
+        with httpx.stream("POST", url, json={**body, "stream": True}, headers=headers,
+                          timeout=self._timeout()) as r:
+            if r.status_code != 200:
+                r.read()
+                return r
+            msg: dict = {"role": "assistant"}
+            calls: list[dict] = []
+            usage: dict = {}
+            for line in r.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                chunk = json.loads(data)
+                usage = chunk.get("usage") or usage
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    for tc in delta.pop("tool_calls", None) or []:
+                        i = tc.get("index")
+                        if i is None:   # some providers omit the index: a new id starts a new call
+                            i = len(calls) if (tc.get("id") or not calls) and not any(
+                                c.get("id") == tc.get("id") for c in calls) else len(calls) - 1
+                        while len(calls) <= i:
+                            calls.append({})
+                        _merge(calls[i], tc)
+                    _merge(msg, delta)
+            if calls:
+                msg["tool_calls"] = calls
+            return {"choices": [{"message": msg}], "usage": usage}
+
+    def _post(self, body: dict, attempts: int = 3) -> dict:
+        """POST /chat/completions; raises LlmUnavailable when the model cannot answer now.
+
+        * no answer within timeout_s (of silence, when streamed): raised at once,
+          never retried (it would only use more quota);
+        * 429 with a stated delay of at most a minute: waited out and repeated (up
+          to MAX_SHORT_WAITS times); a longer delay or a used-up quota: raised at once;
+        * busy (429 without time, 5xx) or unreachable: the short waits of
+          BUSY_WAITS_S, then raised;
+        * 401/403/404 (key or model rejected): raised at once."""
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         busy = short_waits = 0
         while True:
             try:
-                r = httpx.post(f"{self.base_url}/chat/completions", json=body, headers=headers,
-                               timeout=self.timeout_s)
-            except (httpx.TimeoutException, httpx.TransportError):
+                r = self._once(body, headers)
+            except httpx.TimeoutException:
+                what = "of silence" if self.stream else ""
+                raise self._unavailable("timeout", f"no answer within {self.timeout_s:.0f} s {what}".strip()) from None
+            except httpx.TransportError as exc:
                 if busy >= len(self.BUSY_WAITS_S):
-                    raise
+                    raise self._unavailable("unreachable", f"endpoint not reachable: {exc}") from None
                 self.sleep(self.BUSY_WAITS_S[busy])
                 busy += 1
+                continue
+            if isinstance(r, dict):
+                return r
+            if self.stream and r.status_code in (400, 422) and "stream" in r.text.lower():
+                self.stream = False                       # the provider does not stream: ask again plainly
                 continue
             if r.status_code == 429:
                 delay = retry_after_s(r)
@@ -135,14 +236,15 @@ class LlmClient:
                         short_waits += 1
                         self.sleep(delay + 1)
                         continue
-                    r.raise_for_status()                      # long wait: let the caller pause
+                    raise self._unavailable("quota", _error_text(r), delay, 429)
                 if quota_exhausted(r):
-                    r.raise_for_status()                      # used up: retrying soon is pointless
+                    raise self._unavailable("quota", _error_text(r), None, 429)
+            if r.status_code in (401, 403, 404):
+                raise self._unavailable("rejected", f"HTTP {r.status_code}: {_error_text(r)}", None, r.status_code)
             if r.status_code not in self.RETRY_STATUS:
                 r.raise_for_status()
-                return r.json()
             if busy >= len(self.BUSY_WAITS_S):
-                r.raise_for_status()
+                raise self._unavailable("busy", f"HTTP {r.status_code}: {_error_text(r)}", None, r.status_code)
             self.sleep(self.BUSY_WAITS_S[busy])
             busy += 1
 

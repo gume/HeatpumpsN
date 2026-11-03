@@ -13,6 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .llm import LlmUnavailable
 from .service import Service
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -20,6 +21,13 @@ STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 def create_app(service: Service) -> FastAPI:
     app = FastAPI(title="HeatpumpsN observer", docs_url="/api/docs", redoc_url=None)
+    @app.exception_handler(LlmUnavailable)
+    async def llm_unavailable(request, exc: LlmUnavailable):
+        """The model cannot answer now: the portal offers retry, wait or another model."""
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse({"detail": str(exc), "llm": exc.info()}, status_code=503)
+
     user = os.environ.get("OBSERVER_PORTAL_USER", "admin")
     password = os.environ.get("OBSERVER_PORTAL_PASSWORD", "")
 
@@ -89,6 +97,8 @@ def create_app(service: Service) -> FastAPI:
             return await run_in_threadpool(service.polish, id, draft)
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except LlmUnavailable:
+            raise
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
@@ -111,6 +121,8 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(404, "no draft knowledge to build from") from exc
+        except LlmUnavailable:
+            raise
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
@@ -252,7 +264,10 @@ def create_app(service: Service) -> FastAPI:
 
     @app.put("/api/settings")
     def update_settings(body: dict = Body(...)):
-        return service.settings.update(body)
+        try:
+            return service.settings.update(body)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/settings/models")
     async def provider_models(provider: str = Query(...)):
@@ -277,6 +292,8 @@ def create_app(service: Service) -> FastAPI:
             count = await run_in_threadpool(service.run_proposals, limit)
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except LlmUnavailable:
+            raise
         except Exception as exc:  # network, model answer
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
         return {"proposals": count}

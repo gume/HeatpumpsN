@@ -47,7 +47,7 @@ class Service:
                              statestream_base=cfg.get("statestream_base", "ha_state"))
         self.mqtt: MqttRunner | None = None
         from .settings import Settings
-        self.settings = Settings(paths["settings"], float((cfg.get("llm") or {}).get("timeout_s", 300)))
+        self.settings = Settings(paths["settings"])
         self.started = time.time()
         self._agents = None
         self._supervisor = None
@@ -149,7 +149,7 @@ class Service:
             paths = self.cfg["paths"]
             self.ingest.registry = Registry(paths["registry"])
             self.ingest.catalog = Catalog(paths["catalog"])
-            self.settings = Settings(paths["settings"], float((self.cfg.get("llm") or {}).get("timeout_s", 300)))
+            self.settings = Settings(paths["settings"])
             self._agents = None                      # the library is read again on first use
         return result
 

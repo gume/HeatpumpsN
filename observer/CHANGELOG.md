@@ -6,6 +6,18 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 
 ## Unreleased
 
+* LLM answers have a limit (Settings: *Response limit*, default 120 s): with
+  streaming (on by default) it is the longest silence while the answer
+  arrives, without streaming the whole wait. A request that runs into the
+  limit is not repeated. "Model not available" (quota used up, rate limit,
+  busy, no answer in time, unreachable, model or key rejected) is one kind of
+  error everywhere: a dialog offers *Retry now*, *Wait and retry* (when the
+  provider names a time within 15 minutes) and *Use another model for this
+  task* (saved in Settings), for the house understanding, descriptions,
+  proposals, the harvest, writing tool code and paused agent runs.
+* The Proposals tab shows the signal proposals again (a name clash with
+  the library inbox had replaced its content).
+
 * Supervision (plan phase C): automatic checks open and close alerts.
   *Events* on every message (controller errors and warnings per code, mixer
   control leaving MPC mode, EMS-ESP offline, a boiler maintenance message),

@@ -200,6 +200,8 @@ class AgentManager:
                 job["state"] = "done"
             except Exception as exc:            # shown in the portal
                 job.update(state="error", error=f"{type(exc).__name__}: {exc}")
+                if hasattr(exc, "info"):
+                    job["llm"] = exc.info()         # the portal offers retry, wait or another model
             job["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
             job["seconds"] = round(time.time() - job["t0"], 1)
 

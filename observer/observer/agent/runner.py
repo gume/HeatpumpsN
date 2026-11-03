@@ -142,6 +142,10 @@ def pause_reason(exc: Exception) -> str | None:
     """Why the LLM is unavailable, when the run should wait instead of failing (None: a real error)."""
     import httpx
 
+    from ..llm import LlmUnavailable
+
+    if isinstance(exc, LlmUnavailable):
+        return f"LLM not available ({exc.kind}): {exc}"
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         if code == 429 or code >= 500:
@@ -196,6 +200,7 @@ def execute(run: Run, client, toolbox: Toolbox, question: str, skill=None,
         requests_before = int(meta.get("data_requests") or 0)
         if model not in (meta.get("models") or [meta.get("model")]):
             messages = _strip_signatures(messages)
+        meta.pop("llm", None)
         meta.update(status="running", resumed=_now(), model=model, error=None,
                     models=list(dict.fromkeys((meta.get("models") or [meta.get("model")]) + [model])))
         run.add_step({"n": first, "time": _now(), "kind": "resume", "text": f"resumed with {model}"})
@@ -275,6 +280,8 @@ def execute(run: Run, client, toolbox: Toolbox, question: str, skill=None,
     except Exception as exc:          # recorded in the run; the service keeps going
         reason = pause_reason(exc)
         status, error = ("paused", reason) if reason else ("error", f"{type(exc).__name__}: {exc}")
+        if hasattr(exc, "info"):
+            meta["llm"] = exc.info()
         if reason:
             run.add_step({"n": meta.get("steps", 0), "time": _now(), "kind": "pause", "text": reason, "model": model})
     fin = toolbox.finished or {}
