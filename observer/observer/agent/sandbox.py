@@ -33,7 +33,8 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-LIB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sandbox_lib")
+PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))       # the observer package
+LIB_DIR = os.path.join(PKG_DIR, "sandbox_lib")
 PACKAGES = ("numpy", "pandas", "scipy", "matplotlib", "pytest")
 OUTPUT_LIMIT = 12_000
 
@@ -97,11 +98,32 @@ class Sandbox:
 
     @property
     def mounts(self) -> dict[str, str]:
-        out = {LIB_DIR: "/opt/obs/lib"}
+        out = {LIB_DIR: "/opt/obs/lib", **self._sim()[0]}
         for host, target in ((self.tool_mounts() if callable(self.tool_mounts) else self.tool_mounts) or {}).items():
             if host and os.path.isdir(host):
                 out[os.path.abspath(host)] = target
         return out
+
+    @property
+    def env(self) -> dict[str, str]:
+        return {"PYTHONPATH": "/opt/obs/lib:/opt/obs/pkg", **self._sim()[1]}
+
+    _sim_cache: tuple | None = None
+
+    def _sim(self) -> tuple[dict, dict]:
+        """obs.sim: the observer package (for observer.sim) and the compiled MPC core, read-only."""
+        if self._sim_cache is None:
+            mounts, env = {PKG_DIR: "/opt/obs/pkg/observer"}, {}
+            try:
+                from ..sim import fwcore
+
+                lib = str(fwcore.library_path())       # compiles once on a development machine
+                mounts[os.path.dirname(lib)] = "/opt/obs/mpc"
+                env["OBSERVER_MPC_LIB"] = "/opt/obs/mpc/" + os.path.basename(lib)
+            except Exception as exc:  # noqa: BLE001 - the sandbox works without the simulation
+                env["OBS_SIM_UNAVAILABLE"] = str(exc)[:300]
+            self._sim_cache = (mounts, env)
+        return self._sim_cache
 
     # --- environment ---------------------------------------------------------------
     @property
@@ -152,7 +174,7 @@ class Sandbox:
                 binds += ["--ro-bind", path, path]
         for host, target in self.mounts.items():
             binds += ["--ro-bind", host, target]
-        env = ["--setenv", "PYTHONPATH", "/opt/obs/lib"]
+        env = [a for k, v in self.env.items() for a in ("--setenv", k, v)]
         if socket_dir:
             binds += ["--bind", socket_dir, "/run/obs"]
             env += ["--setenv", "OBS_SOCKET", "/run/obs/data.sock"]
@@ -190,7 +212,7 @@ class Sandbox:
         if socket_dir:
             mounts += ["-v", f"{socket_dir}:/run/obs", "-e", "OBS_SOCKET=/run/obs/data.sock"]
         return [self.runtime, "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
-                *mounts, "-e", "PYTHONPATH=/opt/obs/lib",
+                *mounts, *[a for k, v in self.env.items() for a in ("-e", f"{k}={v}")],
                 "--security-opt", "no-new-privileges", "--user", "65534:65534",
                 "--memory", f"{lim.memory_mb}m", "--memory-swap", f"{lim.memory_mb}m",
                 "--pids-limit", str(lim.tasks), "--cpus", "1", "--tmpfs", "/tmp",

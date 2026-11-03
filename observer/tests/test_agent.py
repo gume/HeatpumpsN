@@ -363,6 +363,30 @@ def test_tool_tests_and_data_socket_in_the_sandbox(tmp_path):
     assert r["stdout"].split() == ["150", "15"] and "NOT audited" in r["stderr"]
 
 
+@needs_bwrap
+def test_simulation_in_the_sandbox(tmp_path):
+    from observer.sim import fwcore
+
+    venv = os.path.expanduser("~/.local/share/heatpumpsn-observer/sandbox/venv")
+    if not os.path.exists(os.path.join(venv, "bin", "python")) or not fwcore.available()[0]:
+        pytest.skip("no sandbox environment or no MPC core")
+    sb = Sandbox(venv, limits=Limits(wall_s=90, memory_mb=800))
+
+    class Svc(FakeService):
+        parameters = type("P", (), {"current_sets": staticmethod(lambda: {"floor": {"delay_s": 70.0}})})()
+
+    tb = Toolbox(Svc(), FakeData(), sb, str(tmp_path / "ws"))
+    assert tb.mpc_params() == {"floor": {"delay_s": 70.0}} and Toolbox(FakeService(), None, None, str(tmp_path)).mpc_params() == {}
+    with DataBroker(tb, None) as broker:
+        tb.broker = broker
+        r = tb.call("run_python", {"code": "from obs import sim\n"
+                                           "print(sim.available()['ok'], sim.current_sets()['floor']['delay_s'])\n"
+                                           "r = sim.closed_loop(hours=1, setpoint=35)\n"
+                                           "print(r['metrics']['final_mode'], len(r['trace']))"})
+    assert r["exit_code"] == 0, r["stderr"]
+    assert r["stdout"].split() == ["True", "70.0", "mpc", "60"]
+
+
 def test_harvest_proposes_and_adds_to_the_library(tmp_path):
     from observer.agent.manager import AgentManager
 

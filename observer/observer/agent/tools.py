@@ -121,6 +121,13 @@ class Toolbox:
         return full
 
     # --- the tools -------------------------------------------------------------------
+    def mpc_params(self) -> dict:
+        """The controller's parameter sets as it last published them ({scenario: params}); {} when unknown."""
+        try:
+            return dict(self.service.parameters.current_sets())
+        except Exception:  # noqa: BLE001 - a service without the parameter path (tests, MCP)
+            return {}
+
     def house_context(self) -> dict:
         h = self.service.house()
         cur, draft = h.get("current") or {}, h.get("draft") or {}
@@ -407,7 +414,10 @@ class Toolbox:
                  "The code reads the recorded data itself, read-only: `from obs import data` -> "
                  "data.series(ids, start, stop, every, agg) returns a pandas DataFrame (UTC index, one column per "
                  "signal), data.find(...), data.coverage(ids), data.events(...), data.house(). Library tools: "
-                 "`from obs import tools` -> tools.load(name).run(...), tools.list(). The workspace is the current "
+                 "`from obs import tools` -> tools.load(name).run(...), tools.list(). The controller's mixer "
+                 "control in simulation (its own MPC core): `from obs import sim` -> sim.closed_loop(...), "
+                 "sim.replay(start, stop, sets=...), sim.compare(...), sim.current_sets(); help(sim). "
+                 "The workspace is the current "
                  "directory (data/*.csv from get_series, your results, PNG plots). Print what you need to see; "
                  "output is truncated.",
                  _obj({"code": {"type": "string"},

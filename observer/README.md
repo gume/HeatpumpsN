@@ -190,6 +190,7 @@ core tools from any MCP client (`observer mcp`).
                    from obs import data, tools
                    data.series(...) ── Unix socket ──► data service ── InfluxDB (read-only)
                    tools.load(name).run(...) ◄── library tools, read-only mount
+                   sim.replay(...), sim.closed_loop(...) ◄── observer.sim + MPC core, read-only
    finish ── report, findings, proposals
 ```
 
@@ -202,6 +203,14 @@ core tools from any MCP client (`observer mcp`).
   ids, strict time and window formats, size limits), reads InfluxDB with the
   read-only token (never visible to the code) and logs every request in
   `queries.jsonl`.
+* **The controller's mixer control in simulation** (`obs.sim`,
+  `sandbox_lib/obs/sim.py`): `sim.closed_loop(...)` on the identified house,
+  `sim.replay(start, stop, sets=...)` on a recorded stretch,
+  `sim.compare(...)`, `sim.current_sets()` (the controller's sets through
+  the data socket). The sandbox gets the observer package (for
+  `observer.sim`) and the compiled MPC core read-only (`/opt/obs/pkg`,
+  `/opt/obs/mpc`, `OBSERVER_MPC_LIB`); the library's skill `mixer_what_if`
+  describes the method.
 * **Sandbox** (`agent/sandbox.py`): bubblewrap, rootless, all namespaces
   unshared, only `/usr`, its own Python (numpy, pandas, scipy, matplotlib,
   pytest), the `obs` library, the tool library (read-only), the workspace and
@@ -442,8 +451,8 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
    coupling from the data; parameter proposals backtested against the recorded
    data and the simulator plant model (`floor_simulator/`). The simulation
    package with the controller's MPC core and the closed-loop backtest of a
-   proposal are in place (`observer/sim/`); next: the simulator as a library
-   tool for the agent; radiator levels later.
+   proposal and the simulator for the agent (`obs.sim`, library skill
+   `mixer_what_if`) are in place; radiator levels later.
 5. **Docker:** the observer and InfluxDB as one compose stack at home.
 
 The portal grows with each step: charts of the stored data, the alert list

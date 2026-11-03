@@ -42,7 +42,10 @@ Rules:
   history exists. Quick looks: `signal_features`, `get_series` summaries,
   `get_events`. Real analysis: `run_python`, where your code reads the data
   itself (`obs.data.series(...)`) and can use the library's tools
-  (`obs.tools.load(name).run(...)`).
+  (`obs.tools.load(name).run(...)`). What-if questions about the mixer
+  control (other parameters, setpoints, radiator states, a recorded
+  morning replayed): `obs.sim`, the controller's own MPC core in simulation
+  (`help(obs.sim)` shows its use; a skill may describe the method).
 * The library: `list_library` (tools and skills, with audit flags). Check for
   a skill that fits the question and follow it; prefer audited tools. When a
   result depends on an unaudited tool or skill, say so in the report.

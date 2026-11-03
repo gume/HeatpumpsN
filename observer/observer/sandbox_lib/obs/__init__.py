@@ -1,6 +1,6 @@
 """Inside the sandbox: read-only access to the house's data and the tool library.
 
-    from obs import data, tools
+    from obs import data, tools        # and obs.sim: the controller's mixer control, simulated
     df = data.series(["heatpumpsn/controller/state/temp_mix"], start="-7d", every="1m")
     starts = tools.load("on_periods").run(df["..."])
 

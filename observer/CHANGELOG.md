@@ -39,6 +39,11 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
   fallbacks on the proposal card, with each situation and an example chart,
   and a verdict. Runs with every new proposal and on demand. The recorded
   floor setpoint joins the identification data.
+* The simulator for the agent: `obs.sim` in the sandbox (`closed_loop`,
+  `replay` of a recorded stretch, `compare`, `current_sets`), with the
+  observer package and the compiled MPC core mounted read-only; data-socket
+  operation `mpc_params`. The library's `mixer_what_if` skill and
+  `control_metrics` tool go with it.
 * The controller's slow log (exact model inputs) is stored now (registry
   rule); until enough of it exists, identification uses the published values
   and says so.

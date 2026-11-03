@@ -136,6 +136,8 @@ class DataBroker:
             return out
         if op == "house":
             return tb.house_context()
+        if op == "mpc_params":
+            return tb.mpc_params()
         if op == "tools":
             return self.library.tool_index() if self.library else {}
         if op == "tool_used":
