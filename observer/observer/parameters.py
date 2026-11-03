@@ -52,6 +52,16 @@ class ParameterManager:
         self.window = p.get("window", "-14d")
         self.min_slow_hours = float(p.get("min_slow_hours", 6))
         self.drift_gain = float(p.get("drift_gain", 0.3))
+        # the closed-loop backtest of a proposal (observer/sim/replay.py); the controller's settings
+        # around the core are not published, these are its defaults
+        bt = p.get("backtest") or {}
+        self.backtest_enabled = bool(bt.get("enabled", True))
+        self.backtest_cfg = {"min_open_pct": float(bt.get("min_open_pct", 40)),
+                             "ceiling_pct": float(bt.get("ceiling_pct", 85)),
+                             "stroke_s": float(bt.get("stroke_s", 145)),
+                             "overshoot_delta_k": float(bt.get("overshoot_delta_k", 3.0)),
+                             "window_h": float(bt.get("window_h", 2.0)),
+                             "situations": int(bt.get("situations", 8))}
         data = os.path.dirname(cfg["paths"]["catalog"])
         self.snapshot_path = os.path.join(data, "mpc_params.json")
         self.runs_path = os.path.join(data, "identification.jsonl")
@@ -128,11 +138,58 @@ class ParameterManager:
                       f"approximate (published values; the slow log has {slow_hours:.1f} h so far)")
         with open(self.runs_path, "a", encoding="utf-8") as fp:
             fp.write(json.dumps({k: v for k, v in result.items()}, ensure_ascii=False) + "\n")
-        self._proposals_from(result, g)
+        self._proposals_from(result, g, source)
         self._drift(result)
         return result
 
-    def _proposals_from(self, result: dict, g: dict) -> None:
+    # --- closed-loop backtest -------------------------------------------------------------------
+    def _backtest(self, g: dict, scenario: str, identified: dict) -> dict:
+        """The controller's MPC core with the current and the proposed set on recorded situations."""
+        from .sim import fwcore, replay
+        from .sim.loop import LoopConfig
+
+        ok, why = fwcore.available()
+        if not ok:
+            return {"status": f"not available: {why}"}
+        current = (self.snapshot.get(scenario) or {}).get("params")
+        if current is None:
+            return {"status": f"the controller's current {scenario} set is not known"}
+        current = fwcore.full_set(scenario, current)
+        proposed = dict(current, **{k: identified[k] for k in MODEL_FIELDS})
+        err = fwcore.validate(scenario, proposed)
+        if err:
+            return {"status": f"the controller would reject the proposed set: {err}"}
+        b = self.backtest_cfg
+        cfg = LoopConfig(pmin=b["min_open_pct"] / 100, pmax=b["ceiling_pct"] / 100, travel_s=b["stroke_s"],
+                         overshoot_delta=b["overshoot_delta_k"])
+        t0 = time.time()
+        try:
+            out = replay.backtest(g, scenario, current, proposed, identified, cfg, b["window_h"], b["situations"])
+        except Exception as exc:  # noqa: BLE001 - a failed backtest must not lose the proposal
+            log.exception("backtest failed")
+            return {"status": f"failed: {type(exc).__name__}: {exc}"}
+        out.update(seconds=round(time.time() - t0, 1), time=time.strftime("%Y-%m-%d %H:%M:%S"))
+        return out
+
+    def backtest_now(self, pid: str) -> dict:
+        """(Re)run the backtest of a proposal on the data it was identified from (blocking)."""
+        p = self._proposal(pid)
+        data = self.service.agents.data
+        if data is None:
+            raise RuntimeError("no read-only database token (OBSERVER_INFLUX_READ_TOKEN)")
+        source = p.get("source") or ("slow" if str(p.get("inputs", "")).startswith("exact") else "state")
+        g = identify.fetch(data, self.window, source=source)
+        bt = self._backtest(g, p["scenario"], p["identified"])
+        with self._lock:
+            p["backtest"] = bt
+            self._save(self.proposals_path, self.proposals)
+        return bt
+
+    def start_backtest(self, pid: str) -> dict:
+        self._proposal(pid)
+        return self._start_job("backtest", lambda: self.backtest_now(pid), proposal=pid)
+
+    def _proposals_from(self, result: dict, g: dict, source: str = "slow") -> None:
         with self._lock:
             for scen, r in result["scenarios"].items():
                 if r.get("status") != "proposal":
@@ -142,11 +199,18 @@ class ParameterManager:
                         old["status"] = "superseded"
                 self.proposals.append({
                     "id": uuid.uuid4().hex[:10], "created": result["time"], "scenario": scen,
-                    "status": "proposed", "inputs": result["inputs"], "hours": r["hours"],
+                    "status": "proposed", "inputs": result["inputs"], "source": source, "hours": r["hours"],
                     "train_h": r["train_h"], "holdout_h": r["holdout_h"], "rmse": r["rmse"],
                     "current": r["current"], "identified": r["identified"], "coverage_min": r["coverage_min"],
                     "plot": self._plot(g, scen, r)})
             self._save(self.proposals_path, self.proposals)
+        if self.backtest_enabled:                           # outside the lock: takes seconds
+            for prop in self.proposals:
+                if prop["status"] == "proposed" and prop["created"] == result["time"] and "backtest" not in prop:
+                    bt = self._backtest(g, prop["scenario"], prop["identified"])
+                    with self._lock:
+                        prop["backtest"] = bt
+                        self._save(self.proposals_path, self.proposals)
 
     @staticmethod
     def _plot(g: dict, scenario: str, r: dict, every_s: int = 60) -> dict:
@@ -184,21 +248,26 @@ class ParameterManager:
                 sup._resolve(check, scen)
 
     def start_identification(self) -> dict:
+        return self._start_job("identification", self.identify_now)
+
+    def _start_job(self, kind: str, fn, **extra) -> dict:
+        """One background job at a time (identification or backtest)."""
         with self._lock:
             if self.job and self.job["state"] == "running":
-                raise RuntimeError("an identification is already running")
-            self.job = {"state": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S"), "t0": time.time()}
+                raise RuntimeError(f"a {self.job.get('kind', 'job')} is already running")
+            self.job = {"kind": kind, "state": "running", "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "t0": time.time(), **extra}
         job = self.job
 
         def work():
             try:
-                job["result"] = self.identify_now()
+                job["result"] = fn()
                 job["state"] = "done"
             except Exception as exc:
                 job.update(state="error", error=f"{type(exc).__name__}: {exc}")
             job["seconds"] = round(time.time() - job["t0"], 1)
 
-        threading.Thread(target=work, name="identification", daemon=True).start()
+        threading.Thread(target=work, name=kind, daemon=True).start()
         return self.view()["job"]
 
     def last_run(self) -> dict | None:
@@ -288,6 +357,6 @@ class ParameterManager:
             job.pop("t0", None)
             job.pop("result", None)
         return {"snapshot": self.snapshot, "proposals": list(reversed(self.proposals)), "last_run": self.last_run(),
-                "job": job, "last_ack": self.last_ack,
+                "job": job, "last_ack": self.last_ack, "backtest": dict(self.backtest_cfg, enabled=self.backtest_enabled),
                 "push": {"enabled": self.push_enabled, "signed": bool(os.environ.get(self.secret_env)),
                          "topic": f"{self.controller}/cmd/mpc/params", "secret_env": self.secret_env}}

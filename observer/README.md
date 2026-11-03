@@ -342,6 +342,22 @@ r = loop.run(loop.SyntheticPlant(setpoint=loop.setpoint_steps(35, [(7200, 30)]),
 r.metrics, r.trace, r.events
 ```
 
+**Backtest of a parameter proposal** (`sim/replay.py`): every new proposal
+(and on demand, *Run the backtest*) is replayed in closed loop on up to 8
+recorded situations of its scenario (2 h windows of the identification
+data, with the recorded setpoint): supply and return as recorded, the mixer
+as a model, the core with the current and with the proposed set. Each set
+runs on two mixers, the re-identified one and the one assumed now, so a
+proposal cannot win only because the plant is its own model. The card shows
+error to the setpoint, overshoot, time to the setpoint, travel, motor
+starts and fallbacks per mixer, each situation with its events, and the
+situation where the sets differ most. *recommended* needs: better on the
+re-identified mixer, not worse on the current one, and lower error in at
+least half of the situations. The controller's settings around the core are
+not published; `parameters.backtest` in config.yaml holds them
+(`min_open_pct` 40, `ceiling_pct` 85, `stroke_s` 145, `overshoot_delta_k`
+3, `window_h`, `situations`, `enabled`).
+
 The release bundle carries the core's sources in `native/`
 (`scripts/native.sh`); building the image from a repository checkout needs
 `scripts/native.sh` first.
@@ -425,9 +441,9 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
 4. **Identification and optimisation:** transport delay, valve gain and
    coupling from the data; parameter proposals backtested against the recorded
    data and the simulator plant model (`floor_simulator/`). The simulation
-   package with the controller's MPC core is in place (`observer/sim/`); next:
-   the closed-loop backtest of a proposal on recorded situations, then the
-   simulator as a library tool; radiator levels later.
+   package with the controller's MPC core and the closed-loop backtest of a
+   proposal are in place (`observer/sim/`); next: the simulator as a library
+   tool for the agent; radiator levels later.
 5. **Docker:** the observer and InfluxDB as one compose stack at home.
 
 The portal grows with each step: charts of the stored data, the alert list

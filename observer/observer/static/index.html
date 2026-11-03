@@ -1380,6 +1380,47 @@ function lawChart(knots, curves, coverage, small = false) {
     ${curves.map((c) => `<polyline points="${c.xk.map((v, i) => `${x(knots[i]).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="${c.color}" stroke-width="1.6" ${c.dash ? 'stroke-dasharray="4 3"' : ''}/>`).join('')}
     ${cov}${small ? '' : curves.map((c, i) => `<text x="${40 + i * 150}" y="${H - 2}" font-size="11" fill="${c.color}">${esc(c.label)}</text>`).join('')}</svg>`;
 }
+function backtestBlock(p, running) {
+  const b = p.backtest;
+  const again = `<button class="btn" data-pm-backtest="${p.id}" ${running ? 'disabled' : ''}>${b ? 'Run the backtest again' : 'Run the backtest'}</button>`;
+  if (!b) return `<div style="margin-top:10px"><strong>Closed-loop backtest</strong> <span class="dim">not run yet</span> ${again}</div>`;
+  if (b.status !== 'done') return `<div style="margin-top:10px"><strong>Closed-loop backtest</strong> <span class="warn">${esc(b.status)}</span> ${again}</div>`;
+  const P = b.plants, A = b.assumed;
+  const vcls = (v) => /^(better|recommended)/.test(v) ? 'ok' : /^(worse|not)/.test(v) ? 'err' : 'warn';
+  const f = (v, d = 2) => v == null ? '–' : (typeof v === 'number' ? +v.toFixed(d) : v);
+  const mins = (s) => s == null ? '–' : `${Math.round(s / 60)} min`;
+  const metric = (label, key, fmt = f) => `<tr><td>${label}</td>${['identified', 'current'].map((pl) =>
+    `<td class="num">${fmt(P[pl].current[key])}</td><td class="num"><strong>${fmt(P[pl].proposed[key])}</strong></td>`).join('')}</tr>`;
+  const ex = b.example;
+  const t = ex ? ex.current.map((r) => ex.t0 + r[0]) : [];
+  return `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+    <div class="bar" style="margin:0"><strong>Closed-loop backtest</strong>
+      <span class="pill ${vcls(b.verdict)}" style="border-color:currentColor">${esc(b.verdict)}</span>
+      <span class="dim">${b.situations} recorded situations, ${P.identified.current.hours} h · the controller's MPC core with each set · proposed lower error in ${b.wins} of ${b.situations} · ${esc(b.time || '')}</span></div>
+    <div class="table-wrap"><table><thead>
+      <tr><th></th><th colspan="2" class="num">mixer as re-identified <span class="${vcls(P.identified.verdict)}">(${esc(P.identified.verdict)})</span></th>
+          <th colspan="2" class="num">mixer as now assumed <span class="${vcls(P.current.verdict)}">(${esc(P.current.verdict)})</span></th></tr>
+      <tr><th></th><th class="num">current set</th><th class="num">proposed</th><th class="num">current set</th><th class="num">proposed</th></tr></thead><tbody>
+      ${metric('Error to the setpoint (RMSE, K)', 'rmse_k')}${metric('Largest overshoot (K)', 'overshoot_k')}
+      ${metric('Time to the setpoint (median of heat-ups)', 'time_to_setpoint_s', mins)}${metric('Valve travel (%/h)', 'travel_pct_h', (v) => f(v, 1))}
+      ${metric('Motor starts (/h)', 'starts_h', (v) => f(v, 1))}${metric('Fallbacks to cautious control', 'fallbacks', (v) => f(v, 0))}
+    </tbody></table></div>
+    <details><summary>Each situation (mixer as re-identified)</summary><div class="table-wrap"><table><thead><tr><th>Start</th><th class="num">h</th>
+      <th class="num">RMSE current</th><th class="num">RMSE proposed</th><th class="num">travel current</th><th class="num">travel proposed</th><th>events</th></tr></thead><tbody>
+      ${b.rows.map((r) => `<tr><td>${new Date(r.start * 1000).toLocaleString()}</td><td class="num">${r.hours}</td><td class="num">${f(r.current.rmse_k)}</td>
+        <td class="num ${r.proposed.rmse_k < r.current.rmse_k - 0.02 ? 'ok' : r.proposed.rmse_k > r.current.rmse_k + 0.02 ? 'err' : ''}">${f(r.proposed.rmse_k)}</td>
+        <td class="num">${f(r.current.travel_pct_h, 0)} %/h</td><td class="num">${f(r.proposed.travel_pct_h, 0)} %/h</td>
+        <td class="dim">${esc([...new Set([...r.current.events.map((e) => 'current: ' + e), ...r.proposed.events.map((e) => 'proposed: ' + e)])].join(' · '))}</td></tr>`).join('')}
+    </tbody></table></div></details>
+    ${ex ? `<details><summary>The situation where the sets differ most (${new Date(ex.t0 * 1000).toLocaleString()})</summary>${lineChart(t, [
+      { values: ex.current.map((r) => r[2]), color: 'var(--muted)', label: 'setpoint', width: 1 },
+      { values: ex.measured.slice(0, t.length), color: 'var(--text)', label: 'recorded', width: 1.1 },
+      { values: ex.current.map((r) => r[1]), color: 'var(--warn)', label: 'current set', dash: true },
+      { values: ex.proposed.map((r) => r[1]), color: 'var(--accent)', label: 'proposed set' }])}
+      <div class="dim" style="font-size:12px">recorded: what the controller really did; the two others are the simulated controller on the re-identified mixer</div></details>` : ''}
+    <div class="dim" style="font-size:12px">Supply and return as recorded; assumed controller settings: minimum opening ${A.min_open_pct} %, ceiling ${A.ceiling_pct} %, stroke ${A.stroke_s} s, overshoot reaction +${A.overshoot_delta_k} K (config.yaml parameters.backtest). ${again}</div>
+  </div>`;
+}
 async function loadParameters() {
   const d = await api('/api/parameters');
   const P = d.push;
@@ -1393,7 +1434,8 @@ async function loadParameters() {
     : '<tr><td colspan="7" class="dim">Not received yet (the controller publishes them retained on state/mpc/params/&lt;set&gt;).</td></tr>';
   const j = d.job, run = d.last_run;
   $('#pm-identify').disabled = j && j.state === 'running';
-  let html = j && j.state === 'running' ? `<p class="warn">Identifying… since ${esc(j.started)}</p>` : j && j.state === 'error' ? `<p class="err">${esc(j.error)}</p>` : '';
+  const running = j && j.state === 'running';
+  let html = running ? `<p class="warn">${j.kind === 'backtest' ? 'Backtesting' : 'Identifying'}… since ${esc(j.started)}</p>` : j && j.state === 'error' ? `<p class="err">${esc(j.error)}</p>` : '';
   if (run) html += `<p class="dim" style="margin:4px 0">Last run ${esc(run.time)} (${run.seconds} s), inputs: ${esc(run.inputs || '')}</p>
     <div class="table-wrap"><table><tbody>${Object.entries(run.scenarios).map(([k, r]) => `<tr><td class="mono">${esc(k)}</td><td>${esc(r.status)}</td>
       <td class="num">${r.hours} h data</td><td class="dim">${r.rmse ? `held-out error: current ${r.rmse.holdout_current} K, re-identified ${r.rmse.holdout_identified} K` : ''}</td></tr>`).join('')}</tbody></table></div>`;
@@ -1416,6 +1458,7 @@ async function loadParameters() {
       <details><summary>Held-out data: measured and predicted forward temperature</summary>${lineChart(p.plot.t, [
         { values: p.plot.measured, color: 'var(--text)', label: 'measured', width: 1.2 }, { values: p.plot.current, color: 'var(--warn)', label: 'current model', dash: true },
         { values: p.plot.identified, color: 'var(--accent)', label: 'identified model' }])}</details>
+      ${backtestBlock(p, running)}
       <div class="actions"><button class="btn danger" data-pm-dismiss="${p.id}">Dismiss</button>
         <button class="btn primary" data-pm-approve="${p.id}" ${P.enabled ? '' : 'disabled title="Sending is off (config.yaml)"'}>Approve and send to the controller</button></div></div>`; }).join('')
     : '<p class="dim">No open proposals.</p>');
@@ -1428,6 +1471,7 @@ async function loadParameters() {
   const act = async (url, confirmText) => { if (confirmText && !confirm(confirmText)) return; try { await api(url, { method: 'POST' }); toast('Done.'); } catch (err) { toast(err.message, 6000); } loadParameters(); };
   document.querySelectorAll('[data-pm-approve]').forEach((b) => b.onclick = () => act(`/api/parameters/approve?id=${b.dataset.pmApprove}`,
     'Send this parameter set to the controller? It takes effect at once; the controller validates it and answers.'));
+  document.querySelectorAll('[data-pm-backtest]').forEach((b) => b.onclick = () => act(`/api/parameters/backtest?id=${b.dataset.pmBacktest}`));
   document.querySelectorAll('[data-pm-dismiss]').forEach((b) => b.onclick = () => act(`/api/parameters/dismiss?id=${b.dataset.pmDismiss}`));
   document.querySelectorAll('[data-pm-rollback]').forEach((b) => b.onclick = () => act(`/api/parameters/rollback?id=${b.dataset.pmRollback}`,
     'Send the previous parameter set back to the controller?'));

@@ -177,6 +177,10 @@ def create_app(service: Service) -> FastAPI:
         _param_call(service.parameters.dismiss, id)
         return {"ok": True}
 
+    @app.post("/api/parameters/backtest")
+    def backtest(id: str = Query(...)):
+        return _param_call(service.parameters.start_backtest, id)
+
     @app.post("/api/parameters/rollback")
     def rollback(id: str = Query(...)):
         return _param_call(service.parameters.rollback, id)

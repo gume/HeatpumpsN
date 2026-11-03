@@ -38,14 +38,14 @@ SLOW = "heatpumpsn/controller/log/slow#"
 SIGNALS = {"inc": SLOW + "boiler", "ret": SLOW + "ret", "fwd": SLOW + "mix",
            "pos": SLOW + "pos", "floor": C + "floor_pump_physical", "r1": C + "pump_1_physical",
            "r2": C + "pump_2_physical", "dhw": "ems-esp/boiler_data#dhw.charging", "homing": C + "mpc#homing",
-           "model": C + "mpc#modelFwd"}
+           "model": C + "mpc#modelFwd", "sp": C + "floor_setpoint"}
 # Fallback while the slow log has not been recorded long enough: the published state values
 # (rounded position, filtered temperatures): usable, but marked as approximate.
 STATE_INPUTS = {"inc": C + "temp_boiler", "ret": C + "temp_return", "fwd": C + "temp_mix",
                 "pos": C + "mixer_position"}
 # how long a value may be held on the 10 s grid (seconds); state signals are published on change
 HOLD = {"inc": 120, "ret": 120, "fwd": 120, "model": 30, "pos": 6 * 3600, "floor": 1e9, "r1": 1e9, "r2": 1e9,
-        "dhw": 1e9, "homing": 1e9}
+        "dhw": 1e9, "homing": 1e9, "sp": 1e9}
 MODEL_FIELDS = ("knots_pct", "xk", "delay_s", "tau_fwd_s", "tau_inc_s")
 
 

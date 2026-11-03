@@ -32,6 +32,13 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
   the identified house plant and boiler (copies from the floor simulator,
   checked for parity) and the closed loop with its metrics. The release
   bundle carries the core's sources in `native/` (`scripts/native.sh`).
+* Closed-loop backtest of a parameter proposal (`sim/replay.py`): recorded
+  situations replayed with the controller's MPC core, current vs proposed
+  set, each on the re-identified and on the currently assumed mixer; error
+  to the setpoint, overshoot, time to the setpoint, travel, motor starts and
+  fallbacks on the proposal card, with each situation and an example chart,
+  and a verdict. Runs with every new proposal and on demand. The recorded
+  floor setpoint joins the identification data.
 * The controller's slow log (exact model inputs) is stored now (registry
   rule); until enough of it exists, identification uses the published values
   and says so.
