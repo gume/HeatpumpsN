@@ -42,7 +42,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.4.0}
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.5.0}
     command: ["collect"]
     restart: unless-stopped
     depends_on:
@@ -75,7 +75,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.4.0}
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.5.0}
     restart: unless-stopped
     depends_on:
       influxdb:

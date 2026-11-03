@@ -4,7 +4,17 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
-## Unreleased
+## 0.5.0 - 2026-11-03
+
+Data collection in its own container (portal updates without a gap), a
+Recount of the stored samples, learning the mixer model from live data with a
+signed parameter path, a closed-loop backtest of every proposal with the
+controller's own MPC core, and that simulation for the agent (`obs.sim`).
+
+Update: the first full `docker compose up -d --build` creates the
+`collector` container next to `observer`; after that, update the portal
+alone with `docker compose up -d --build observer`. Sending parameter sets
+stays off until `parameters.push_enabled` is set in config.yaml.
 
 * Learning from live data (plan: identification and parameter path): the
   controller's mixer model (law, transport delay, sensor lags; per pump
