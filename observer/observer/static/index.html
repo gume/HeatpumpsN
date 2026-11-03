@@ -136,10 +136,12 @@
         <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;align-self:flex-end">Import a file…<input type="file" id="db-import" accept=".parquet" style="display:none"></label>
       </div>
       <div id="db-job" style="margin:6px 0"></div>
-      <p class="dim" style="margin:8px 0 4px">The observer's <strong>state</strong> (registry, house understanding, library, model
-        settings, house context; no secrets, no recorded data) moves separately: export here, import on the other observer
-        (it replaces those files there and keeps the old ones in <span class="mono">backup/</span>).</p>
-      <div class="bar"><a class="btn" href="/api/state/export">Export state (.tgz)</a>
+      <p class="dim" style="margin:8px 0 4px">The observer's <strong>state</strong> moves separately: the house description and
+        owner knowledge (accepted versions and draft), the registry (which signals are stored and what they mean), the catalog,
+        the checks, the model settings, the house context, and all tools and skills (own ones and installed packs, with
+        audits). No secrets, no recorded data. Export here, import on the other observer (it replaces those files there and
+        keeps the old ones in <span class="mono">backup/</span>).</p>
+      <div class="bar"><a class="btn" href="/api/state/export" title="House description, registry, catalog, checks, settings, tools and skills - everything but secrets and recorded data">Export state (.tgz)</a>
         <label class="btn">Import state…<input type="file" id="state-import" accept=".tgz,.tar.gz" style="display:none"></label>
         <span class="dim" id="state-msg"></span></div>
       <div class="table-wrap"><table><thead><tr><th>Export file</th><th class="num">Size</th><th>Created</th><th></th></tr></thead><tbody id="db-files"></tbody></table></div>
@@ -269,7 +271,7 @@
   <section id="view-library" class="hidden">
     <p class="dim">Analysis <strong>tools</strong> (code the agent uses in the sandbox, each with purpose, inputs, outputs and
       tests on synthetic data) and <strong>skills</strong> (recipes: domain knowledge and methods that worked), from several
-      sources: <em>house</em> items (written by agents and the harvest, in the data directory) come first, then library folders
+      sources: your own items (source <em>house</em>: made by agent runs, the harvest or edited here; in the data directory) come first, then library folders
       (e.g. a git checkout of a shared library), then imported packs. Every item has a version. <strong>Audited</strong> is your
       approval, bound to the item's content: any change voids it, identical content stays audited wherever it comes from.</p>
     <h3 class="sec" style="margin-top:0">Proposed by agent runs</h3>
@@ -277,14 +279,18 @@
     <h3 class="sec">Sources</h3>
     <div class="table-wrap"><table><thead><tr><th>Source</th><th>Kind</th><th>Version</th><th>Location</th><th></th></tr></thead><tbody id="l-sources"></tbody></table></div>
     <div class="bar" style="margin-top:8px">
-      <button class="btn" id="l-export-house">Export house items (.tgz)</button>
-      <button class="btn" id="l-export-all">Export everything (.tgz)</button>
-      <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">Import a pack (.tgz)<input type="file" id="l-import" accept=".tgz,.tar.gz,.tar" style="display:none"></label>
+      <button class="btn" id="l-export-house" title="The tools and skills made in this house: by the agent, harvested or edited here (source &quot;house&quot;). Not those from installed packs or library folders.">Export own tools and skills (.tgz)</button>
+      <button class="btn" id="l-export-all" title="Every tool and skill listed below, from all sources (own, installed packs, library folders), in one pack.">Export all tools and skills (.tgz)</button>
+      <label class="btn" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer" title="Adds the tools and skills of a pack (e.g. an observer-library release or an export from another observer) as an installed pack.">Import tools and skills (.tgz)<input type="file" id="l-import" accept=".tgz,.tar.gz,.tar" style="display:none"></label>
       <input id="l-url" placeholder="or a release URL: https://github.com/…/observer-library-0.2.0.tgz" style="flex:1;min-width:260px">
       <button class="btn" id="l-url-go">Import from URL</button>
       <button class="btn" id="l-check">Check for updates</button>
       <span class="dim" id="l-msg"></span>
     </div>
+    <p class="dim" style="margin:4px 0 0">These move only analysis tools and skills, e.g. to share them or to put them
+      into the library repository. The house description, owner knowledge, registry, settings and checks (and these
+      tools and skills too) are in the observer's state: Status tab → <em>Export state</em>; the recorded data: Status
+      tab → database <em>Export</em>.</p>
     <div class="two">
       <div><h3 class="sec" style="margin-top:0">Tools</h3><div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>Purpose</th><th>Source</th><th>Ver.</th><th>Tests</th><th>Audited</th></tr></thead><tbody id="l-tools"></tbody></table></div></div>
@@ -1082,6 +1088,12 @@ async function loadLibrary() {
   const src = (i) => `${esc(i.source_label)}${i.shadows.length ? ` <span class="dim" title="also in ${esc(i.shadows.join(', '))}">+${i.shadows.length}</span>` : ''}`;
   $('#l-sources').innerHTML = lib.sources.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.kind)}</td><td>${esc(x.version || '')}</td>
       <td class="mono">${esc(x.root)}</td><td>${x.kind === 'pack' ? `<button class="btn danger" data-rmpack="${esc(x.id.slice(5))}">Remove</button>` : ''}</td></tr>`).join('');
+  const own = [...lib.tools, ...lib.skills].filter((i) => i.origin === 'house').length;
+  const all = lib.tools.length + lib.skills.length;
+  $('#l-export-house').textContent = `Export own tools and skills (${own})`;
+  $('#l-export-house').disabled = !own;
+  $('#l-export-all').textContent = `Export all tools and skills (${all})`;
+  $('#l-export-all').disabled = !all;
   $('#l-tools').innerHTML = lib.tools.map((i) => `<tr data-kind="tools" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>
       <td>${esc((i.purpose || '').slice(0, 140))}</td><td>${src(i)}</td><td>${esc(i.version)}</td><td>${testCell(i)}</td><td>${auditCell(i)}</td></tr>`).join('') || '<tr><td colspan="6" class="dim">none</td></tr>';
   $('#l-skills').innerHTML = lib.skills.map((i) => `<tr data-kind="skills" data-name="${esc(i.name)}"><td class="mono">${esc(i.name)}</td>

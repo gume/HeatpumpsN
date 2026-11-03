@@ -271,7 +271,7 @@ def cmd_library(cfg: dict, args) -> None:
     if args.action == "export":
         chosen = [tuple(i.split("/", 1)) for i in args.item] if args.item else \
             ([(k, n) for k in ("tools", "skills") for n in lib.items(k)] if args.all else None)
-        name = args.name or ("library-export" if chosen else "house-export")
+        name = args.name or ("tools-skills" if chosen else "own-tools-skills")
         version = args.version or time.strftime("%Y.%m.%d-%H%M")
         data = lib.export(chosen, name, version)
         out = args.output or f"{name}-{version}.tgz"

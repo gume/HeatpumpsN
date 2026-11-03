@@ -28,6 +28,11 @@ Deployment: one install folder, the collector on its own.
   `data/` once (the volume is kept until `cleanup.sh --old-volume`). The
   collector restarts once for this move.
 * `OBSERVER_UID` / `OBSERVER_GID` in `.env`: the user the containers run as.
+* Library tab: the export and import buttons say what they move ("own tools
+  and skills", "all tools and skills", with counts; pack names
+  `own-tools-skills`, `all-tools-skills`) and point to the state export for
+  the house description, registry, settings and checks; the Status tab lists
+  what the state export holds.
 * `config.py` (configuration loading) out of `cli.py`, shared with the
   collector; the release's `observer init` no longer writes a `data/.env`
   template (only the generated read-only token goes there).

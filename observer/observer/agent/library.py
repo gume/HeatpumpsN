@@ -399,7 +399,7 @@ class Library:
         return result
 
     # --- export and import ---------------------------------------------------------------
-    def export(self, items: list[tuple[str, str]] | None = None, name: str = "house-export",
+    def export(self, items: list[tuple[str, str]] | None = None, name: str = "own-tools-skills",
                version: str = "", description: str = "") -> bytes:
         """A .tgz with library.yaml and the chosen items (default: all house items)."""
         if not PACK_NAME.match(name):

@@ -134,7 +134,7 @@ class AgentManager:
             chosen = [(str(k), str(n)) for k, n in items or []]
         else:
             chosen = None
-        name = name or ("house-export" if selection == "house" else "library-export")
+        name = name or ("own-tools-skills" if selection == "house" else "all-tools-skills")
         version = version or time.strftime("%Y.%m.%d-%H%M")
         return f"{name}-{version}.tgz", self.library.export(chosen, name, version)
 
