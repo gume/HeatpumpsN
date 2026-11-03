@@ -1,7 +1,7 @@
 # Agent sandbox (optional): lets the observer start bubblewrap for agent-written code.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d
-#   (or COMPOSE_FILE=docker-compose.yml:docker-compose.sandbox.yml in .env)
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.sandbox.yml   in .env (the install
+#   folder links both files), then app/scripts/update.sh or docker compose up -d
 #
 # bubblewrap needs to create user, mount, network and PID namespaces. Docker's
 # default seccomp and AppArmor profiles forbid that, so this file switches them

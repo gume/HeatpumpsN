@@ -1,0 +1,12 @@
+# The collector image's Python packages, pinned: the image is built once per
+# collector version and must not change with what PyPI offers on a later day.
+paho-mqtt==2.1.0
+influxdb-client==1.50.0
+PyYAML==6.0.3
+ruamel.yaml==0.19.1
+reactivex==5.1.0
+certifi==2026.10.23
+python-dateutil==3.0.0
+urllib3==2.8.0
+six==1.17.0
+typing_extensions==4.16.0

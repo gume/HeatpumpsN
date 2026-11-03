@@ -1,18 +1,27 @@
 # HeatpumpsN observer, release: InfluxDB, the data collector and the portal.
 #
-#   cp env.example .env        # fill in the passwords, tokens and the broker
-#   docker compose up -d --build
+# CODE LAND. This file belongs to the release (app/deploy/docker-compose.yml);
+# the install folder links to it and every update replaces it. Do not edit
+# it: your own additions go into docker-compose.override.yml (compose reads it
+# automatically), your settings into .env.
 #
-# The collector (MQTT in, InfluxDB out) and the portal (web, alerts, agents,
-# parameters) are separate containers of the same image: update or restart the
-# portal alone with "docker compose up -d --build observer" and the recording
-# goes on without a gap.
+#   <install folder>/                  e.g. ~/heatpumpsn-observer
+#     .env                             YOURS: passwords, tokens, broker, ports
+#     data/                            YOURS: everything the observer keeps (/data in
+#                                      the containers): config.yaml, registry.yaml,
+#                                      checks.yaml, house/, library/, data/, runs/, exports/
+#     docker-compose.override.yml      YOURS (optional)
+#     app/                             CODE: the release, replaced by every update
+#     docker-compose.yml          -> app/deploy/docker-compose.yml
+#     docker-compose.sandbox.yml  -> app/deploy/docker-compose.sandbox.yml
 #
-# Everything persistent is in three named volumes (prefixed with the project
-# name): influx-data (the recorded samples), influx-config, observer-data
-# (/data: config, registry, house understanding, library, runs, exports).
-# Ports are published on 127.0.0.1 by default; set OBSERVER_BIND=0.0.0.0 in
-# .env to reach the portal from the network (then set a portal password).
+# The recorded samples stay in InfluxDB's named volume heatpumpsn-observer_influx-data.
+#
+#   app/scripts/update.sh <bundle.tar.gz>   install or update (keeps .env and data/)
+#   app/scripts/cleanup.sh [--yes]          lists (and with --yes deletes) what is surely not needed
+#
+# The collector has its own image and version: an update that does not change
+# it leaves the running collector alone (no gap in the recording).
 name: heatpumpsn-observer
 
 services:
@@ -40,15 +49,17 @@ services:
 
   collector:
     build:
-      context: ..
-      dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.5.0}
-    command: ["collect"]
+      context: ./app
+      dockerfile: Dockerfile.collector
+      args:                                      # the hash in collector.lock (scripts/collector_lock.py)
+        COLLECTOR_DIGEST: "c9a3103fc356030aaa72b0f0c2982a25f552567e70a25787a69c0ef87002cb77"
+    image: heatpumpsn-collector:1.0.0             # COLLECTOR_VERSION (observer/collector.py)
     restart: unless-stopped
     depends_on:
       influxdb:
         condition: service_healthy
-    env_file: .env
+    user: "${OBSERVER_UID:-1000}:${OBSERVER_GID:-1000}"
+    # only what the collector needs: other .env changes do not recreate it
     environment:
       INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
       OBSERVER_INFLUX_URL: http://influxdb:8086
@@ -61,25 +72,20 @@ services:
       OBSERVER_MQTT_TOPIC_PREFIX: ${OBSERVER_MQTT_TOPIC_PREFIX:-}
       TZ: ${TZ:-UTC}
     volumes:
-      - observer-data:/data
+      - ./data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    healthcheck:                                  # its status file is rewritten every 10 s
-      test: ["CMD", "python", "-c", "import json,time,sys; s=json.load(open('/data/data/collector.json')); sys.exit(0 if time.time()-s['updated']<60 and s['connected'] else 1)"]
-      interval: 30s
-      timeout: 5s
-      start_period: 90s
-      retries: 3
 
   observer:
     build:
-      context: ..
+      context: ./app
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.5.0}
+    image: heatpumpsn-observer:0.5.0              # the observer version (pyproject.toml)
     restart: unless-stopped
     depends_on:
       influxdb:
         condition: service_healthy
+    user: "${OBSERVER_UID:-1000}:${OBSERVER_GID:-1000}"
     env_file: .env                                # every setting, e.g. OBSERVER_LLM_2_BASE_URL, OBSERVER_GITHUB_TOKEN
     environment:
       INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
@@ -98,7 +104,7 @@ services:
       OBSERVER_LLM_KEY: ${OBSERVER_LLM_KEY:-}
       TZ: ${TZ:-UTC}
     volumes:
-      - observer-data:/data
+      - ./data:/data
     ports:
       - "${OBSERVER_BIND:-127.0.0.1}:${OBSERVER_PORT:-8090}:8090"
     extra_hosts:
@@ -107,4 +113,3 @@ services:
 volumes:
   influx-data:
   influx-config:
-  observer-data:

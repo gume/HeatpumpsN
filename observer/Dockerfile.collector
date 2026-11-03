@@ -1,0 +1,34 @@
+# HeatpumpsN data collector: MQTT in, InfluxDB out, nothing else.
+# Its own image and version (COLLECTOR_VERSION in observer/collector.py):
+# only the collector's modules are copied, so the image changes only when
+# they do, and collector.lock makes sure that means a new version. An
+# observer update therefore leaves the running collector alone.
+FROM python:3.12-slim
+LABEL org.heatpumpsn.component=collector
+# the hash of this image's inputs (collector.lock): update.sh keeps an existing image only when it matches
+ARG COLLECTOR_DIGEST=""
+LABEL org.heatpumpsn.collector.digest=$COLLECTOR_DIGEST
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OBSERVER_HOME=/data
+
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin observer \
+ && mkdir -p /data && chown observer:observer /data
+
+COPY collector-requirements.txt /app/
+RUN pip install --no-cache-dir -r /app/collector-requirements.txt && rm -rf /root/.cache
+
+COPY observer/collector.py observer/config.py observer/catalog.py observer/ingest.py \
+     observer/registry.py observer/store.py observer/payload.py observer/metadata.py /app/observer/
+RUN touch /app/observer/__init__.py \
+ && cd /app && python -c "import observer.collector, paho.mqtt.client, influxdb_client, \
+    influxdb_client.client.write_api, yaml, ruamel.yaml, ruamel.yaml.comments"
+
+WORKDIR /app
+USER observer
+VOLUME ["/data"]
+# its status file is rewritten every 10 s while it is connected
+HEALTHCHECK --interval=30s --timeout=5s --start-period=150s --retries=3 \
+  CMD python -c "import json,time,sys; s=json.load(open('/data/data/collector.json')); sys.exit(0 if time.time()-s['updated']<60 and s['connected'] else 1)"
+CMD ["python", "-m", "observer.collector"]

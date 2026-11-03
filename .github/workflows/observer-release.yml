@@ -34,13 +34,16 @@ jobs:
         run: |
           name="heatpumpsn-observer-$VERSION"
           mkdir -p "dist/$name"
-          git -C "$GITHUB_WORKSPACE" archive HEAD:observer -- observer pyproject.toml README.md CHANGELOG.md Dockerfile .dockerignore deploy | tar -x -C "dist/$name"
+          git -C "$GITHUB_WORKSPACE" archive HEAD:observer -- observer pyproject.toml README.md CHANGELOG.md Dockerfile Dockerfile.collector collector-requirements.txt collector.lock .dockerignore deploy scripts/update.sh scripts/cleanup.sh | tar -x -C "dist/$name"
           scripts/native.sh --head && cp -r native "dist/$name/"
           scripts/native.sh --head && cp -r native "dist/$name/"
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           awk "/^## $VERSION/{f=1;next} /^## /{f=0} f" CHANGELOG.md > dist/notes.md
       - name: Image builds
-        run: docker build -t heatpumpsn-observer:$VERSION .
+        run: |
+          python scripts/collector_lock.py --check
+          docker build -t heatpumpsn-observer:$VERSION .
+          docker build -f Dockerfile.collector -t heatpumpsn-collector:test .
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

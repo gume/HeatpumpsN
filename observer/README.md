@@ -311,8 +311,13 @@ workflow `.github/workflows/observer-release.yml`, `CHANGELOG.md`). The
 observer checks GitHub for newer releases of itself and of its library packs
 (`updates.py`; banner in the portal, `observer updates`).
 
-`deploy/docker-compose.yml` runs InfluxDB and the observer (image from
-`Dockerfile`); settings in `deploy/.env` (`deploy/env.example`). Step by step,
+`deploy/docker-compose.yml` runs InfluxDB, the data collector (its own image
+and version: `Dockerfile.collector`, `COLLECTOR_VERSION`, `collector.lock`)
+and the portal (`Dockerfile`) from one install folder: `.env`, `data/` (all
+the observer keeps, bind-mounted as `/data`) and an optional
+`docker-compose.override.yml` are the owner's, `app/` is the release and is
+replaced by `scripts/update.sh`; `scripts/cleanup.sh` lists and deletes what
+is surely not needed. An update leaves an unchanged collector running. Step by step,
 including moving the state and the history from the development observer:
 [`deploy/README.md`](deploy/README.md). The release configuration takes the
 machine-specific settings from the environment (`OBSERVER_MQTT_HOST`,

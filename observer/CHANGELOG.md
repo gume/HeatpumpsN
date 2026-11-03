@@ -4,6 +4,34 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## Unreleased
+
+Deployment: one install folder, the collector on its own.
+
+* The collector has its own image (`Dockerfile.collector`: only its modules,
+  pinned packages, an import check while building) and its own version
+  (`COLLECTOR_VERSION` 1.0.0). `collector.lock` holds the hash of its inputs
+  per version; tests and `release.sh` refuse a change without a new version,
+  and the image carries the hash, so an update keeps an existing collector
+  image only when it was built from exactly these files. An update that does
+  not change the collector leaves it running; editing unrelated `.env`
+  settings does not restart it either.
+* One install folder that keeps its name: `.env`, `data/` (everything the
+  observer keeps, now a visible folder instead of the volume
+  `observer-data`) and `docker-compose.override.yml` are yours; `app/` is
+  the release. `scripts/update.sh` installs and updates (new images built
+  before anything changes, the previous release kept as `.app-previous`,
+  `docker compose up -d`); `scripts/cleanup.sh` lists and with `--yes`
+  deletes what is surely not needed (never `.env`, `data/` or InfluxDB).
+* Coming from 0.5.0: `update.sh --dir ~/heatpumpsn-observer --from
+  <old bundle folder>` takes the old `.env` and copies the data volume into
+  `data/` once (the volume is kept until `cleanup.sh --old-volume`). The
+  collector restarts once for this move.
+* `OBSERVER_UID` / `OBSERVER_GID` in `.env`: the user the containers run as.
+* `config.py` (configuration loading) out of `cli.py`, shared with the
+  collector; the release's `observer init` no longer writes a `data/.env`
+  template (only the generated read-only token goes there).
+
 ## 0.5.0 - 2026-11-03
 
 Data collection in its own container (portal updates without a gap), a

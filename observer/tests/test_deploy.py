@@ -1,6 +1,8 @@
 import base64
+import json
 import io
 import os
+import sys
 import tarfile
 
 import pytest
@@ -102,3 +104,54 @@ def test_empty_environment_does_not_hide_the_env_file(tmp_path, monkeypatch):
     load_env(str(tmp_path / ".env"))
     assert os.environ["OBSERVER_LLM_BASE_URL"] == "http://proxy:4000/v1"
     assert os.environ["OBSERVER_LLM_KEY"] == "from-compose"      # a real value from the environment still wins
+
+
+# --- the collector's own image and the install-folder layout ---------------------------------
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def test_collector_image_is_locked_and_self_contained():
+    import re
+    import subprocess
+
+    from observer import collector
+
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "collector_lock.py"), "--check"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for name in collector.FILES:                       # only imports among themselves
+        text = open(os.path.join(ROOT, "observer", name), encoding="utf-8").read()
+        mods = re.findall(r"^\s*from \.(\w+) import", text, re.M)
+        mods += [m.strip() for line in re.findall(r"^\s*from \. import (.+)$", text, re.M) for m in line.split(",")]
+        for mod in mods:                                   # (the image's package __init__ is empty)
+            assert f"{mod}.py" in collector.FILES, f"{name} imports .{mod}: not in the collector image"
+    docker = open(os.path.join(ROOT, "Dockerfile.collector"), encoding="utf-8").read()
+    copied = set(re.findall(r"observer/(\w+\.py)", docker)) - {"__init__.py"}   # (created empty)
+    assert copied == set(collector.FILES)
+
+
+def test_compose_layout():
+    import yaml as Y
+
+    from observer import collector
+
+    c = Y.safe_load(open(os.path.join(ROOT, "deploy", "docker-compose.yml"), encoding="utf-8"))
+    col, obs = c["services"]["collector"], c["services"]["observer"]
+    assert col["image"] == f"heatpumpsn-collector:{collector.COLLECTOR_VERSION}"
+    assert col["build"]["context"] == "./app" and col["build"]["dockerfile"] == "Dockerfile.collector"
+    lock = json.load(open(os.path.join(ROOT, "collector.lock"), encoding="utf-8"))
+    assert col["build"]["args"]["COLLECTOR_DIGEST"] == lock["versions"][collector.COLLECTOR_VERSION]
+    assert obs["build"]["context"] == "./app" and obs["image"].startswith("heatpumpsn-observer:")
+    assert "env_file" not in col                       # unrelated .env edits must not recreate it
+    assert col["volumes"] == ["./data:/data"] and obs["volumes"] == ["./data:/data"]
+    assert set(c["volumes"]) == {"influx-data", "influx-config"}
+
+
+def test_scripts_parse():
+    import shutil
+    import subprocess
+
+    if not shutil.which("bash"):
+        pytest.skip("no bash")
+    for s in ("update.sh", "cleanup.sh", "release.sh", "native.sh"):
+        assert subprocess.run(["bash", "-n", os.path.join(ROOT, "scripts", s)]).returncode == 0, s

@@ -5,12 +5,14 @@
 
 # The controller's MPC core for the simulations (observer/sim/fwcore.py).
 FROM python:3.12-slim AS mpc
+LABEL org.heatpumpsn.component=observer
 RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
 COPY native /src
 COPY observer/sim/mpc_shim.cpp /src/
 RUN g++ -std=c++17 -O2 -fPIC -shared -I/src/include /src/src/mpc_core.cpp /src/mpc_shim.cpp -o /libmpc_core.so
 
 FROM python:3.12-slim
+LABEL org.heatpumpsn.component=observer
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

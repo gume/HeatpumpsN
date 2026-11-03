@@ -12,6 +12,12 @@ in the recorded data. It shares the data directory with the portal:
 
 It keeps no catalog of its own (the portal owns ``data/catalog.json``) and
 ignores the observer's own publications (``<alerts.mqtt_topic>/...``).
+
+The collector has its own version and its own image (Dockerfile.collector),
+built only from the modules it needs. ``collector.lock`` holds a hash of
+those files per version: a test fails when they change without a new
+COLLECTOR_VERSION (scripts/collector_lock.py), so an unchanged version is an
+unchanged image, and an observer update leaves the running collector alone.
 """
 from __future__ import annotations
 
@@ -22,12 +28,16 @@ import signal
 import threading
 import time
 
-from . import __version__
 from .catalog import Catalog
+from .config import load_config, mqtt_args, observer_home
 from .ingest import Ingest, MqttRunner
 from .registry import Registry
 from .store import InfluxWriter
 
+COLLECTOR_VERSION = "1.0.0"
+# The modules in the collector image (Dockerfile.collector copies exactly these).
+FILES = ("collector.py", "config.py", "catalog.py", "ingest.py", "registry.py", "store.py", "payload.py",
+         "metadata.py")
 log = logging.getLogger("observer.collector")
 STATUS_FILE = "collector.json"
 
@@ -72,7 +82,7 @@ def run(cfg: dict, mqtt_args: dict) -> None:
     started = time.time()
     reg_mtime = os.path.getmtime(reg_path) if os.path.exists(reg_path) else 0
     last_stored, last_write = 0, None
-    log.info("collector %s: %s:%s -> InfluxDB %s", __version__, mqtt_args["host"], mqtt_args["port"], i["url"])
+    log.info("collector %s: %s:%s -> InfluxDB %s", COLLECTOR_VERSION, mqtt_args["host"], mqtt_args["port"], i["url"])
     try:
         while not stop.wait(10):
             mtime = os.path.getmtime(reg_path) if os.path.exists(reg_path) else 0
@@ -83,7 +93,7 @@ def run(cfg: dict, mqtt_args: dict) -> None:
                 log.info("registry reloaded")
             if ingest.stored != last_stored:
                 last_stored, last_write = ingest.stored, time.time()
-            status = {"updated": time.time(), "started": started, "version": __version__, "pid": os.getpid(),
+            status = {"updated": time.time(), "started": started, "version": COLLECTOR_VERSION, "pid": os.getpid(),
                       "connected": runner.connected, "host": runner.host, "port": runner.port,
                       "messages": runner.messages, "last_message": runner.last_message,
                       "stored": ingest.stored, "last_write": last_write}
@@ -95,3 +105,21 @@ def run(cfg: dict, mqtt_args: dict) -> None:
         runner.stop()
         writer.close()
         log.info("collector stopped after %d samples", ingest.stored)
+
+
+def main() -> None:
+    """``python -m observer.collector``: the collector image's command."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    path = os.path.join(observer_home(), "config.yaml")
+    for _ in range(120):                    # the portal creates the data directory on its first start
+        if os.path.exists(path):
+            break
+        if _ == 0:
+            log.info("waiting for %s (created by the portal on its first start)", path)
+        time.sleep(1)
+    cfg = load_config(path)
+    run(cfg, mqtt_args(cfg))
+
+
+if __name__ == "__main__":
+    main()
