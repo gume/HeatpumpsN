@@ -4,7 +4,15 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
-## Unreleased
+## 0.4.0 - 2026-11-03
+
+Supervision with Home Assistant alerts, editors for harvested tools and
+skills, limited LLM waits with a choice to retry, wait or switch the model.
+
+* Portal: the menu bar stays at the top (one line, tabs scroll on narrow
+  screens); *Stored samples* shows the database total (counted once at the
+  start, then raised by every write); refreshes keep opened steps and typed
+  text; a development checkout shows its git state in the version.
 
 * LLM answers have a limit (Settings: *Response limit*, default 120 s): with
   streaming (on by default) it is the longest silence while the answer
