@@ -517,6 +517,22 @@ class Supervisor:
         params = getattr(self.service, "_parameters", None)
         if params is not None:
             params.check_timeouts()
+        self._check_collector()
+
+    def _check_collector(self) -> None:
+        """With a separate collector: an alarm when it stops reporting or loses the broker."""
+        fn = getattr(self.service, "collector_status", None)
+        if fn is None or getattr(self.service, "writer_kind", "") != "external":
+            return
+        st = fn()
+        check = {"id": "collector", "severity": "alarm"}
+        if st is None or time.time() - st.get("updated", 0) > 90:
+            self._raise(check, "-", "The data collector is not running: nothing is being recorded",
+                        "no status from data/collector.json for 90 s")
+        elif not st.get("connected"):
+            self._raise(check, "-", "The data collector has lost the MQTT broker: nothing is being recorded")
+        else:
+            self._resolve(check, "-")
 
     def run_now(self, check_id: str) -> dict:
         c = next((x for x in self.checks if x["id"] == check_id), None)

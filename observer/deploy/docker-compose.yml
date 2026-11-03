@@ -1,7 +1,12 @@
-# HeatpumpsN observer, release: InfluxDB + the observer.
+# HeatpumpsN observer, release: InfluxDB, the data collector and the portal.
 #
 #   cp env.example .env        # fill in the passwords, tokens and the broker
 #   docker compose up -d --build
+#
+# The collector (MQTT in, InfluxDB out) and the portal (web, alerts, agents,
+# parameters) are separate containers of the same image: update or restart the
+# portal alone with "docker compose up -d --build observer" and the recording
+# goes on without a gap.
 #
 # Everything persistent is in three named volumes (prefixed with the project
 # name): influx-data (the recorded samples), influx-config, observer-data
@@ -33,6 +38,39 @@ services:
       timeout: 5s
       retries: 12
 
+  collector:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: heatpumpsn-observer:${OBSERVER_VERSION:-0.4.0}
+    command: ["collect"]
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
+      OBSERVER_INFLUX_URL: http://influxdb:8086
+      OBSERVER_INFLUX_ORG: ${INFLUX_ORG:-heatpumpsn}
+      OBSERVER_INFLUX_BUCKET: ${INFLUX_BUCKET:-observer}
+      OBSERVER_MQTT_HOST: ${OBSERVER_MQTT_HOST:-mqtt.home}
+      OBSERVER_MQTT_PORT: ${OBSERVER_MQTT_PORT:-1883}
+      OBSERVER_MQTT_USER: ${OBSERVER_MQTT_USER:-}
+      OBSERVER_MQTT_PASSWORD: ${OBSERVER_MQTT_PASSWORD:-}
+      OBSERVER_MQTT_TOPIC_PREFIX: ${OBSERVER_MQTT_TOPIC_PREFIX:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - observer-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:                                  # its status file is rewritten every 10 s
+      test: ["CMD", "python", "-c", "import json,time,sys; s=json.load(open('/data/data/collector.json')); sys.exit(0 if time.time()-s['updated']<60 and s['connected'] else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
   observer:
     build:
       context: ..
@@ -53,6 +91,7 @@ services:
       OBSERVER_MQTT_USER: ${OBSERVER_MQTT_USER:-}
       OBSERVER_MQTT_PASSWORD: ${OBSERVER_MQTT_PASSWORD:-}
       OBSERVER_MQTT_TOPIC_PREFIX: ${OBSERVER_MQTT_TOPIC_PREFIX:-}
+      OBSERVER_INGEST: external                   # the collector stores the data
       OBSERVER_PORTAL_USER: ${OBSERVER_PORTAL_USER:-admin}
       OBSERVER_PORTAL_PASSWORD: ${OBSERVER_PORTAL_PASSWORD:-}
       OBSERVER_LLM_BASE_URL: ${OBSERVER_LLM_BASE_URL:-}

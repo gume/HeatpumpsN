@@ -19,6 +19,14 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
   controller's acknowledgement marks it accepted or rejected; every sent set
   keeps the one it replaced for a roll back. Sending is off until
   `parameters.push_enabled` is set.
+* Data collection and the portal are separate containers (`observer
+  collect`, `observer serve --no-ingest` / `OBSERVER_INGEST=external`):
+  `docker compose up -d --build observer` updates the portal without a gap
+  in the recording. The portal shows the collector's state
+  (`data/collector.json`) and raises an alarm when it is silent for 90 s or
+  loses the broker. `observer serve` alone still does both (development).
+* Stored samples: *Recount* button; the count also runs again after an import
+  and follows a collector restart. MQTT client ids are unique per process.
 * The controller's slow log (exact model inputs) is stored now (registry
   rule); until enough of it exists, identification uses the published values
   and says so.

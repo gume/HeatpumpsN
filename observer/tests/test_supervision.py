@@ -172,3 +172,26 @@ def test_default_checks_are_valid():
 
     checks = Supervisor.validate(yaml.safe_load(open(DEFAULTS))["checks"])
     assert {c["type"] for c in checks} == {"event", "stale", "range", "stuck", "agent", "identify"}
+
+
+def test_collector_alarm(tmp_path):
+    svc = Svc()
+    svc.writer_kind = "external"
+    st = {"updated": time.time(), "connected": True}
+    svc.collector_status = lambda: st
+    sup = make(tmp_path, [], svc)
+    sup.tick()
+    assert sup.summary()["open"] == 0
+    st["connected"] = False
+    sup.tick()
+    assert "lost the MQTT broker" in sup.store.view()[0]["title"]
+    st.update(connected=True, updated=time.time() - 200)
+    sup.tick()
+    assert "not running" in sup.store.view()[0]["title"] and sup.summary()["alarms"] == 1
+    st["updated"] = time.time()
+    sup.tick()
+    assert sup.summary()["open"] == 0
+    svc.writer_kind = "influx"                          # all-in-one: no collector to watch
+    st["updated"] = 0
+    sup.tick()
+    assert sup.summary()["open"] == 0

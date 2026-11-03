@@ -8,7 +8,9 @@ settings, proposals). The repository holds only code, docs and defaults.
   init     [--home PATH] [--profile dev|release]   create the data directory from the defaults
   influx-setup             create the read-only InfluxDB token if missing (idempotent)
 
-  serve    [--dry-run] [--host H] [--port P]   ingest + web portal (http://H:P/), the normal way to run it
+  serve    [--dry-run] [--no-ingest] [--host H] [--port P]   ingest + web portal (http://H:P/); with
+                           --no-ingest (or OBSERVER_INGEST=external) only the portal, a collector stores the data
+  collect                  the data collector alone: MQTT in, InfluxDB out (its own container in the release)
   listen   [--seconds N]   collect for N s (default 120): update the catalog, store nothing
   catalog  [--unregistered] [--source PREFIX]   show the inventory and how each signal is handled
   run      [--dry-run]     ingest continuously and store into InfluxDB
@@ -228,13 +230,23 @@ def _writer(cfg: dict, dry_run: bool):
     return InfluxWriter(i["url"], token, i["org"], i["bucket"]), "influx"
 
 
+def cmd_collect(cfg: dict, args) -> None:
+    from .collector import run
+
+    run(cfg, _mqtt_args(cfg))
+
+
 def cmd_serve(cfg: dict, args) -> None:
     import uvicorn
 
     from .service import Service
     from .web import create_app
 
-    writer, kind = _writer(cfg, args.dry_run)
+    if args.no_ingest or os.environ.get("OBSERVER_INGEST", "").strip() == "external":
+        from .store import NullWriter
+        writer, kind = NullWriter(), "external"     # a separate collector stores the data (observer collect)
+    else:
+        writer, kind = _writer(cfg, args.dry_run)
     service = Service(cfg, writer, kind)
     service.start(_mqtt_args(cfg))
     web = cfg.get("web", {})
@@ -510,6 +522,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="release: the configuration for docker compose (mqtt.home, influxdb:8086)")
     p = sub.add_parser("serve")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-ingest", action="store_true",
+                   help="a separate collector stores the data (also OBSERVER_INGEST=external)")
+    sub.add_parser("collect")
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
     p = sub.add_parser("listen")
@@ -560,7 +575,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_init(os.path.abspath(os.path.expanduser(args.home)) if args.home else observer_home(), args.profile)
         return
     cfg = load_config(args.config)
-    {"serve": cmd_serve, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
+    {"serve": cmd_serve, "collect": cmd_collect, "listen": cmd_listen, "catalog": cmd_catalog, "run": cmd_run, "propose": cmd_propose,
      "accept": cmd_accept, "sandbox-setup": cmd_sandbox_setup, "sandbox-check": cmd_sandbox_check, "library": cmd_library, "test-tool": cmd_test_tool,
      "agent": cmd_agent,
      "mcp": cmd_mcp, "db": cmd_db, "influx-setup": cmd_influx_setup,

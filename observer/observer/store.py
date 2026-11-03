@@ -42,6 +42,16 @@ class MemoryWriter:
         pass
 
 
+class NullWriter:
+    """Stores nothing: the portal when a separate collector writes the data (OBSERVER_INGEST=external)."""
+
+    def write(self, point: Point) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 class InfluxWriter:
     """Batched writes to an InfluxDB 2.x bucket."""
 

@@ -244,6 +244,10 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
     # --- database export / import ------------------------------------------------
+    @app.post("/api/db/recount")
+    def db_recount():
+        return service.recount()
+
     @app.get("/api/db")
     def db_status():
         return service.db_status()

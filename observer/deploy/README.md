@@ -31,7 +31,7 @@ cp env.example .env
 # fill in .env: INFLUX_ADMIN_PASSWORD and INFLUX_ADMIN_TOKEN (openssl rand -hex 32),
 # OBSERVER_MQTT_HOST/PORT (the home broker), OBSERVER_PORTAL_PASSWORD, TZ
 docker compose up -d --build
-docker compose ps            # both healthy after about a minute
+docker compose ps            # all three healthy after about a minute
 docker compose logs observer # "MQTT connected", "OBSERVER_INFLUX_READ_TOKEN: created"
 ```
 
@@ -122,6 +122,18 @@ docker compose exec observer observer db import /data/exports/observer-20261102-
 * **New versions**: the portal shows a banner when a newer observer or
   library-pack release exists (checked every 12 hours; Library tab → *Check
   for updates*). A newer pack installs with one click from the banner.
+* **Containers**: `collector` records (MQTT in, InfluxDB out, nothing else),
+  `observer` is the portal (web, alerts, agents, parameters); both run the
+  same image and share `/data`. The portal shows the collector on the Status
+  tab and raises an alarm when it stops reporting.
+* **Update only the portal** (no gap in the data):
+  `docker compose up -d --build observer`. The collector keeps running on the
+  old version; a later full `docker compose up -d` replaces it as well (a few
+  seconds without recording). Coming from 0.4.0, the first full update
+  creates the collector.
+* **Stored samples** on the Status tab is counted from the database once
+  and then follows what the collector writes; *Recount* counts again (it also
+  runs after every import).
 * **Update** to a new observer release: unpack the new bundle next to the old
   one, copy `.env` over (`cp ../../heatpumpsn-observer-0.2.0/deploy/.env .`;
   coming from 0.2.0, delete its line `OBSERVER_VERSION=0.2.0`), and run

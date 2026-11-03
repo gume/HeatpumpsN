@@ -361,7 +361,10 @@ uv venv && uv pip install -e ".[dev]"
 
 # with InfluxDB (holds recorded data: reset only with the owner's agreement)
 # scripts/influx-reset.sh --yes-delete-all-data   # DELETES all recorded data, then recreates org, bucket, token
-.venv/bin/observer serve
+.venv/bin/observer serve                    # ingest + portal in one process
+# or split, as in the release: the collector records, the portal can restart freely
+.venv/bin/observer collect &
+.venv/bin/observer serve --no-ingest
 ```
 
 In development the data comes from the home broker's bridge (topics under

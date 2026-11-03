@@ -517,9 +517,11 @@ async function loadStatus() {
   const card = (k, v, sub = '', cls = '') => `<div class="card"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${sub}</div></div>`;
   $('#cards').innerHTML = [
     card('MQTT', s.mqtt.connected ? 'connected' : 'disconnected', `${s.mqtt.messages} messages · last ${age(s.mqtt.last_message_age_s)} ago`, s.mqtt.connected ? 'ok' : 'err'),
-    s.storage.kind === 'influx'
-      ? card('Stored samples', s.storage.total != null ? s.storage.total.toLocaleString() : '…', 'InfluxDB')
+    s.storage.kind === 'influx' || s.storage.kind === 'external'
+      ? card('Stored samples', s.storage.total != null ? s.storage.total.toLocaleString() : '…',
+             `InfluxDB${s.storage.counted ? ` · counted ${esc(s.storage.counted.slice(11, 16))}` : ''} <button class="btn" data-recount title="Count the samples in the database again">Recount</button>`)
       : card('Stored samples', '0', 'dry run: nothing is written', 'warn'),
+    ...(s.storage.kind === 'external' ? [collectorCard(s.storage.collector, card)] : []),
     card('Signals', s.signals.total, `${s.signals.stored} stored · ${s.signals.unregistered} undescribed`),
     card('LLM', Object.values(s.llm || {}).some(Boolean) ? 'configured' : 'off', Object.entries(s.llm || {}).map(([t, ok]) => `${t} ${ok ? '✓' : '–'}`).join(' · '), Object.values(s.llm || {}).some(Boolean) ? 'ok' : 'dim'),
     card('Alerts', (s.alerts || {}).open ? `${s.alerts.open} open` : 'none', (s.alerts || {}).open ? `${s.alerts.alarms} alarms · ${s.alerts.warnings} warnings` : 'all checks quiet', (s.alerts || {}).alarms ? 'err' : (s.alerts || {}).open ? 'warn' : 'ok'),
@@ -531,6 +533,21 @@ async function loadStatus() {
      <td class="num ${x.age_s > 900 ? 'warn' : ''}">${age(x.age_s)} ago</td></tr>`).join('');
 }
 
+function collectorCard(c, card) {
+  if (!c) return card('Data collector', 'not running', 'no status from the collector container', 'err');
+  const since = Date.now() / 1000 - c.updated;
+  const ok = since < 90 && c.connected;
+  return card('Data collector', since >= 90 ? 'not running' : c.connected ? 'recording' : 'disconnected',
+    `v${esc(c.version || '?')} · ${c.stored.toLocaleString()} samples since ${new Date(c.started * 1000).toLocaleString()} · last write ${c.last_write ? age(Math.round(Date.now() / 1000 - c.last_write)) + ' ago' : '–'}`,
+    ok ? 'ok' : 'err');
+}
+$('#cards').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-recount]'); if (!b) return;
+  b.disabled = true; b.textContent = 'Counting…';
+  try { await api('/api/db/recount', { method: 'POST' }); toast('Counting the database; the number updates in a few seconds.', 4000); }
+  catch (err) { toast(err.message, 6000); }
+  setTimeout(loadStatus, 3000);
+});
 const mb = (b) => b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.ceil(b / 1024)} kB`;
 async function loadDb() {
   const d = await api('/api/db');

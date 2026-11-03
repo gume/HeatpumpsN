@@ -53,6 +53,7 @@ class Service:
         self._supervisor = None
         self._parameters = None
         self.db_total: dict | None = None        # samples in the database, counted once at the start
+        self._last_total: int | None = None
         self._db_job: dict | None = None
         from . import __version__
         from .updates import UpdateChecker
@@ -117,9 +118,40 @@ class Service:
             with self.lock:
                 self.ingest.catalog.save()
 
+    def collector_status(self) -> dict | None:
+        """The separate collector's state (data/collector.json), when the ingest is external."""
+        if self.writer_kind != "external":
+            return None
+        from .collector import read_status
+        return read_status(self.cfg)
+
+    def _written(self) -> tuple:
+        """(session, samples written in it): this process, or the separate collector's run."""
+        if self.writer_kind == "external":
+            st = self.collector_status() or {}
+            return st.get("started"), int(st.get("stored") or 0)
+        return "local", self.ingest.stored
+
+    def stored_total(self) -> int | None:
+        """The database total: counted once, plus what was written since (a new collector run rebases)."""
+        if not self.db_total:
+            return None
+        session, stored = self._written()
+        if session != self.db_total["session"]:      # the collector restarted: its counter began at 0
+            self.db_total = {"samples": self._last_total or self.db_total["samples"], "session": session,
+                             "stored_then": 0, "counted": self.db_total.get("counted")}
+        total = self.db_total["samples"] + stored - self.db_total["stored_then"]
+        self._last_total = total
+        return total
+
+    def recount(self) -> dict:
+        """Count the database again (button on the Status tab; after every import)."""
+        threading.Thread(target=self._count_total, name="count", daemon=True).start()
+        return {"ok": True}
+
     def _count_total(self) -> None:
-        """Count the samples in the database once, at the start; the status adds what was written since."""
-        if self.writer_kind != "influx":
+        """Count the samples in the database (at the start and on request); the status adds what was written since."""
+        if self.writer_kind not in ("influx", "external"):
             return
         try:
             import tempfile
@@ -135,7 +167,9 @@ class Service:
                     lines = [ln.strip() for ln in fp if ln.strip()]
                 # ",result,table,t" then ",_result,0,<count>"; an empty bucket gives no lines
                 total = int(lines[1].split(",")[-1]) if len(lines) > 1 else 0
-            self.db_total = {"samples": total, "stored_then": self.ingest.stored}
+            session, stored = self._written()
+            self.db_total = {"samples": total, "session": session, "stored_then": stored,
+                             "counted": time.strftime("%Y-%m-%d %H:%M:%S")}
         except Exception as exc:              # shown as unknown; ingest is unaffected
             log.warning("counting the stored samples failed: %s", exc)
 
@@ -229,7 +263,13 @@ class Service:
 
         read_meta(path)                                   # reject a wrong file before starting
         influx = self._influx(write=True)
-        return self._start_db_job("import", lambda progress: import_db(influx, path, dry_run, progress))
+        def work(progress):
+            result = import_db(influx, path, dry_run, progress)
+            if not dry_run and result.get("written"):
+                self._count_total()                  # the import bypasses the counter: count again
+            return result
+
+        return self._start_db_job("import", work)
 
     @property
     def agents(self):
@@ -269,9 +309,10 @@ class Service:
                          "messages": self.mqtt.messages if self.mqtt else 0,
                          "last_message_age_s": round(now - self.mqtt.last_message)
                          if self.mqtt and self.mqtt.last_message else None},
-                "storage": {"kind": self.writer_kind, "samples": self.ingest.stored,
-                            "total": self.db_total["samples"] + self.ingest.stored - self.db_total["stored_then"]
-                            if self.db_total else None},
+                "storage": {"kind": self.writer_kind, "samples": self._written()[1],
+                            "total": self.stored_total(),
+                            "counted": self.db_total.get("counted") if self.db_total else None,
+                            "collector": self.collector_status()},
                 "signals": {"total": len(self.ingest.catalog.entries), "stored": stored_signals,
                             "unregistered": unregistered},
                 "sources": dict(sorted(sources.items())),

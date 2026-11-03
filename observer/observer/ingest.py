@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from . import metadata
@@ -83,7 +84,7 @@ class MqttRunner:
         self.messages = 0
         self.last_message: float | None = None
         self.on_connect_hooks: list = []          # called after every (re)connect, e.g. HA discovery
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"hpn-observer-{int(time.time())}")
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"hpn-observer-{int(time.time())}-{os.urandom(3).hex()}")
         if username:
             self.client.username_pw_set(username, password)
         if will:                                   # the broker publishes it when the observer disappears

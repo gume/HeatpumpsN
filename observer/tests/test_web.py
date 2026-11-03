@@ -27,7 +27,7 @@ def test_status_and_signals(tmp_path):
     service, client = make(tmp_path)
     status = client.get("/api/status").json()
     assert status["signals"] == {"total": 2, "stored": 1, "unregistered": 1}
-    assert status["storage"] == {"kind": "dry-run", "samples": 1, "total": None}
+    assert status["storage"] == {"kind": "dry-run", "samples": 1, "total": None, "counted": None, "collector": None}
     rows = {r["id"]: r for r in client.get("/api/signals").json()}
     assert rows["ems-esp/boiler_data#curflowtemp"]["resolved_by"].startswith("rule:")
     assert rows["zigbee2mqtt/radar#humidity"]["store"] is False
