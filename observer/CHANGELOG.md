@@ -27,6 +27,11 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
   loses the broker. `observer serve` alone still does both (development).
 * Stored samples: *Recount* button; the count also runs again after an import
   and follows a collector restart. MQTT client ids are unique per process.
+* Simulation package `observer/sim/`: the firmware's MPC core compiled for
+  the host (in a build stage of the image; on first use in development),
+  the identified house plant and boiler (copies from the floor simulator,
+  checked for parity) and the closed loop with its metrics. The release
+  bundle carries the core's sources in `native/` (`scripts/native.sh`).
 * The controller's slow log (exact model inputs) is stored now (registry
   rule); until enough of it exists, identification uses the published values
   and says so.

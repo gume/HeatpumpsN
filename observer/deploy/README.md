@@ -22,6 +22,10 @@ from the GitHub release (`observer-v<version>`; for a private repository with
 `gh release download observer-v0.2.0 -R gume/HeatpumpsN`) or copy it from
 the development machine (`observer/dist/`, built by `scripts/release.sh`).
 
+(Building from a repository checkout instead of a bundle: run
+`scripts/native.sh` in `observer/` first; it copies the controller's MPC core
+into `native/`, which the image compiles.)
+
 On the release machine (Docker with the compose plugin):
 
 ```bash

@@ -31,7 +31,7 @@ build-backend = "setuptools.build_meta"
 include = ["observer*"]
 
 [tool.setuptools.package-data]
-observer = ["static/*", "defaults/*", "defaults/.*", "sandbox_lib/*/*"]
+observer = ["static/*", "defaults/*", "defaults/.*", "sandbox_lib/*/*", "sim/*.json", "sim/*.cpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

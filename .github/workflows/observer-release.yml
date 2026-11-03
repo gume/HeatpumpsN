@@ -27,7 +27,7 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Tests
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap g++ g++
           pip install -q -e ".[dev]"
           python -m pytest -q
       - name: Bundle
@@ -35,6 +35,8 @@ jobs:
           name="heatpumpsn-observer-$VERSION"
           mkdir -p "dist/$name"
           git -C "$GITHUB_WORKSPACE" archive HEAD:observer -- observer pyproject.toml README.md CHANGELOG.md Dockerfile .dockerignore deploy | tar -x -C "dist/$name"
+          scripts/native.sh --head && cp -r native "dist/$name/"
+          scripts/native.sh --head && cp -r native "dist/$name/"
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           awk "/^## $VERSION/{f=1;next} /^## /{f=0} f" CHANGELOG.md > dist/notes.md
       - name: Image builds

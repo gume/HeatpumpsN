@@ -1,5 +1,15 @@
 # HeatpumpsN observer: ingest, storage, portal, LLM features.
 # Built by deploy/docker-compose.yml; all state lives in the /data volume.
+# native/ (the firmware's MPC core) comes with the release bundle; in a
+# repository checkout create it first with scripts/native.sh.
+
+# The controller's MPC core for the simulations (observer/sim/fwcore.py).
+FROM python:3.12-slim AS mpc
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+COPY native /src
+COPY observer/sim/mpc_shim.cpp /src/
+RUN g++ -std=c++17 -O2 -fPIC -shared -I/src/include /src/src/mpc_core.cpp /src/mpc_shim.cpp -o /libmpc_core.so
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,6 +32,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY observer ./observer
 RUN pip install --no-cache-dir . && rm -rf /root/.cache
+
+COPY --from=mpc /libmpc_core.so /opt/mpc/libmpc_core.so
+ENV OBSERVER_MPC_LIB=/opt/mpc/libmpc_core.so
 
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

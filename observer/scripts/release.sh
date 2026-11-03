@@ -5,7 +5,8 @@
 #   scripts/release.sh --tag      # ...and the annotated tag observer-v<version>
 #
 # The bundle holds what a release machine needs: the package, Dockerfile,
-# deploy/ (compose, env.example, guide), README and CHANGELOG. Checks: a
+# deploy/ (compose, env.example, guide), README, CHANGELOG and native/ (the
+# firmware's MPC core, scripts/native.sh). Checks: a
 # clean working tree for --tag, the version has a CHANGELOG entry, tests pass.
 set -e
 cd "$(dirname "$0")/.."
@@ -22,11 +23,14 @@ mkdir "$tmp/$name"
 files="observer pyproject.toml README.md CHANGELOG.md Dockerfile .dockerignore deploy"
 if [ "$1" = "--tag" ]; then           # exactly the committed state
     git -C "$(git rev-parse --show-toplevel)" archive HEAD:observer -- $files | tar -x -C "$tmp/$name"
-else                                  # a test build of the working tree
+    scripts/native.sh --head
+else
+    scripts/native.sh                                  # a test build of the working tree
     cp -r $files "$tmp/$name/"
     find "$tmp/$name" -name __pycache__ -prune -exec rm -rf {} +
     rm -f "$tmp/$name/deploy/.env"
 fi
+cp -r native "$tmp/$name/"            # the firmware MPC core, compiled while the image is built
 tar -czf "dist/$name.tar.gz" -C "$tmp" "$name"
 rm -rf "$tmp"
 echo "dist/$name.tar.gz"

@@ -313,6 +313,39 @@ portal password (`OBSERVER_PORTAL_PASSWORD`, HTTP Basic) protects everything
 but `/healthz`. `observer state export|import` moves registry, catalog, house
 understanding, house library, settings and context between observers.
 
+## Simulation with the controller's MPC core
+
+`observer/sim/` runs the controller's own decisions offline:
+
+* `fwcore.py`: the firmware's MPC core (`firmware/src/mpc_core.cpp`, the
+  same C++ the controller runs) with a C shim (`mpc_shim.cpp`), bound with
+  ctypes. The image compiles it while it is built (`OBSERVER_MPC_LIB`); in
+  development it is compiled on first use from `firmware/` with `g++` and
+  cached by the sources' hash in `$OBSERVER_HOME/cache/`. The firmware's
+  default sets and its `validate()` are available too.
+* `plant.py`, `boiler.py`: the identified house (coupled HX, mixer, slab and
+  room; the observed boiler cycles), copied from `floor_simulator/app/`
+  with `plant_parameters.json`; a test checks the copy step by step against
+  the floor simulator.
+* `loop.py`: the closed loop around the core as the controller runs it (2 s
+  ticks with the dead-reckoned position, motor at the stroke speed with its
+  deadband, homing, the parameter set by the radiator pumps, no ticks during
+  DHW) on any plant; metrics: time to setpoint, overshoot, RMSE (all and
+  while the supply suffices), travel, motor starts, reversals, fallbacks,
+  anomalies, MPC share.
+
+```python
+from observer.sim import loop
+r = loop.run(loop.SyntheticPlant(setpoint=loop.setpoint_steps(35, [(7200, 30)]),
+                                 rad_schedule=[(3600, 5400, "rad1")]),
+             sets={"floor": {"delay_s": 60}}, seconds=4 * 3600)
+r.metrics, r.trace, r.events
+```
+
+The release bundle carries the core's sources in `native/`
+(`scripts/native.sh`); building the image from a repository checkout needs
+`scripts/native.sh` first.
+
 ## Database export and import
 
 The recorded samples can be taken out of InfluxDB and brought back as **one
@@ -391,7 +424,10 @@ broker directly: `topic_prefix: ""`, `subscribe: ["#"]`.
    alerts as HA entities over MQTT.
 4. **Identification and optimisation:** transport delay, valve gain and
    coupling from the data; parameter proposals backtested against the recorded
-   data and the simulator plant model (`floor_simulator/`).
+   data and the simulator plant model (`floor_simulator/`). The simulation
+   package with the controller's MPC core is in place (`observer/sim/`); next:
+   the closed-loop backtest of a proposal on recorded situations, then the
+   simulator as a library tool; radiator levels later.
 5. **Docker:** the observer and InfluxDB as one compose stack at home.
 
 The portal grows with each step: charts of the stored data, the alert list
