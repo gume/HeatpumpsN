@@ -72,9 +72,21 @@ say "install folder: $root"
 say "observer: $current -> ${obs_image#*:}   collector image: ${col_image#*:}"
 
 # --- yours: .env and data/ ------------------------------------------------------------------
+old_volume="${project}_observer-data"
 if [ ! -f .env ]; then
     old_env=""
     for c in "$from/deploy/.env" "$from/.env"; do [ -n "$from" ] && [ -f "$c" ] && old_env=$c && break; done
+    if [ -z "$old_env" ] && [ ! -f data/config.yaml ] && docker volume inspect "$old_volume" >/dev/null 2>&1; then
+        # an installation from before 0.6.0 is here: its .env belongs to its data, take both
+        old_dir=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+            "${project}-observer-1" 2>/dev/null || true)
+        old_dir=${old_dir%/deploy}                     # compose ran in <bundle>/deploy
+        say "an observer from before 0.6.0 is installed here (volume $old_volume)${old_dir:+, in $old_dir}."
+        say "Give its folder to take its .env and data: $0 --dir $root --from ${old_dir:-<old bundle folder>}"
+        say "Nothing was changed."
+        rm -rf .update
+        exit 1
+    fi
     if [ -n "$old_env" ]; then
         cp "$old_env" .env && say ".env taken from $old_env"
     else
@@ -94,22 +106,20 @@ fi
 mkdir -p data
 
 # --- build the new images before touching anything that runs ---------------------------------
-if [ "$start" = 1 ]; then
-    say "building $obs_image"
-    docker build -q -t "$obs_image" -f "$new/Dockerfile" "$new" >/dev/null
-    # an existing collector image is kept only when it was built from exactly these files
-    digest=$(sed -n 's/^ *COLLECTOR_DIGEST: "\([^"]*\)".*/\1/p' "$new/deploy/docker-compose.yml" | head -1)
-    have=$(docker image inspect -f '{{index .Config.Labels "org.heatpumpsn.collector.digest"}}' "$col_image" 2>/dev/null || true)
-    if [ -n "$digest" ] && [ "$have" = "$digest" ]; then
-        say "$col_image is current: the collector is not rebuilt"
-    else
-        say "building $col_image"
-        docker build -q -t "$col_image" --build-arg "COLLECTOR_DIGEST=$digest" -f "$new/Dockerfile.collector" "$new" >/dev/null
-    fi
+# Always, also with --no-start or a new .env: the data move below runs in the observer image.
+say "building $obs_image"
+docker build -q -t "$obs_image" -f "$new/Dockerfile" "$new" >/dev/null
+# an existing collector image is kept only when it was built from exactly these files
+digest=$(sed -n 's/^ *COLLECTOR_DIGEST: "\([^"]*\)".*/\1/p' "$new/deploy/docker-compose.yml" | head -1)
+have=$(docker image inspect -f '{{index .Config.Labels "org.heatpumpsn.collector.digest"}}' "$col_image" 2>/dev/null || true)
+if [ -n "$digest" ] && [ "$have" = "$digest" ]; then
+    say "$col_image is current: the collector is not rebuilt"
+else
+    say "building $col_image"
+    docker build -q -t "$col_image" --build-arg "COLLECTOR_DIGEST=$digest" -f "$new/Dockerfile.collector" "$new" >/dev/null
 fi
 
 # --- once: the data volume of the layout before 0.6.0 into data/ -------------------------------
-old_volume="${project}_observer-data"
 if [ ! -f data/config.yaml ] && docker volume inspect "$old_volume" >/dev/null 2>&1; then
     say "moving the observer's data from the volume $old_volume into $root/data (the volume is kept)"
     docker stop "${project}-observer-1" "${project}-collector-1" >/dev/null 2>&1 || true

@@ -8,6 +8,12 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 
 * `INSTALL.md`: what the observer is, installing from scratch, updating,
   rolling back and cleaning up, in one short guide (also in the bundle).
+* `update.sh`: a first install with a new `.env` did not build the images
+  but still moved the data of an installation from before 0.6.0 with them,
+  after stopping its observer and collector ("pull access denied for
+  heatpumpsn-observer"). It builds the images always now, and without
+  `--from` it stops before changing anything when such an installation is
+  there, naming its folder.
 * Release workflow: the MPC core was copied into the bundle twice
   (`native/native/`).
 
