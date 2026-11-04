@@ -14,6 +14,10 @@ Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
   heatpumpsn-observer"). It builds the images always now, and without
   `--from` it stops before changing anything when such an installation is
   there, naming its folder.
+  It also stops before changing anything when `--from` is given but the
+  install folder already has a different `.env`, or when
+  `INFLUX_ADMIN_PASSWORD` / `INFLUX_ADMIN_TOKEN` are empty (compose refused
+  to start only after the old containers had been stopped).
 * Release workflow: the MPC core was copied into the bundle twice
   (`native/native/`).
 

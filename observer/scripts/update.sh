@@ -73,9 +73,16 @@ say "observer: $current -> ${obs_image#*:}   collector image: ${col_image#*:}"
 
 # --- yours: .env and data/ ------------------------------------------------------------------
 old_volume="${project}_observer-data"
+old_env=""
+for c in "$from/deploy/.env" "$from/.env"; do [ -n "$from" ] && [ -f "$c" ] && old_env=$c && break; done
+[ -z "$from" ] || [ -n "$old_env" ] || { say "no .env in $from or $from/deploy: give the old bundle folder"; rm -rf .update; exit 1; }
+if [ -f .env ] && [ -n "$old_env" ] && ! cmp -s .env "$old_env"; then
+    say "$root/.env exists and differs from $old_env; --from would not take it."
+    say "Keep the one you want: rm $root/.env (then the old one is taken) or drop --from. Nothing was changed."
+    rm -rf .update
+    exit 1
+fi
 if [ ! -f .env ]; then
-    old_env=""
-    for c in "$from/deploy/.env" "$from/.env"; do [ -n "$from" ] && [ -f "$c" ] && old_env=$c && break; done
     if [ -z "$old_env" ] && [ ! -f data/config.yaml ] && docker volume inspect "$old_volume" >/dev/null 2>&1; then
         # an installation from before 0.6.0 is here: its .env belongs to its data, take both
         old_dir=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' \
@@ -104,6 +111,11 @@ if [ "$(id -u)" != "$uid" ]; then
     say "      To own data/ yourself, add OBSERVER_UID=$(id -u) and OBSERVER_GID=$(id -g) to .env."
 fi
 mkdir -p data
+if [ "$start" = 1 ]; then                 # compose refuses to start without these: check before stopping anything
+    for v in INFLUX_ADMIN_PASSWORD INFLUX_ADMIN_TOKEN; do
+        [ -n "$(envval $v)" ] || { say "$v is empty in $root/.env: fill it in (or use --from), then run again. Nothing was changed."; rm -rf .update; exit 1; }
+    done
+fi
 
 # --- build the new images before touching anything that runs ---------------------------------
 # Always, also with --no-start or a new .env: the data move below runs in the observer image.
