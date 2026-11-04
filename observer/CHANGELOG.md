@@ -4,9 +4,15 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
-## Unreleased
+## 0.6.0 - 2026-11-04
 
-Deployment: one install folder, the collector on its own.
+Deployment: one install folder, the collector on its own. The portal: tabs
+regrouped, a log file, searchable model fields.
+
+Update from 0.5.0: unpack the bundle and run
+`heatpumpsn-observer-0.6.0/scripts/update.sh --dir ~/heatpumpsn-observer
+--from ~/heatpumpsn-observer-0.5.0` (see `deploy/README.md`); the collector
+restarts once for the move of the data into `data/`.
 
 * The collector has its own image (`Dockerfile.collector`: only its modules,
   pinned packages, an import check while building) and its own version
@@ -33,6 +39,19 @@ Deployment: one install folder, the collector on its own.
   `own-tools-skills`, `all-tools-skills`) and point to the state export for
   the house description, registry, settings and checks; the Status tab lists
   what the state export holds.
+* Portal tabs regrouped: Signals holds the LLM's proposed descriptions (a
+  signal with a proposal is marked and opens it in the editor); Agent has
+  the sub-tabs House, Analyses and Library; Settings has LLM, Rules and Log.
+  The address keeps the tab (`#house`, `#log`, …) and each tab remembers its
+  last sub-tab.
+* A log file: `data/logs/observer.log` (rotating, 5 × 2 MB) gets the
+  warnings and errors of the portal, every refused request with its message
+  and LLM failures; Settings → Log reads it (level, search, refresh every
+  5 s; `GET /api/log`). Messages at the top keeps every message the page
+  showed in this browser tab, failed requests included.
+* Model fields search the provider's model list as you type (every word
+  must appear: `flash free`), on Settings → LLM and on the House tab, where
+  a model chosen for the next draft leaves the settings unchanged.
 * `config.py` (configuration loading) out of `cli.py`, shared with the
   collector; the release's `observer init` no longer writes a `data/.env`
   template (only the generated read-only token goes there).
