@@ -1,6 +1,7 @@
 # HeatpumpsN observer — handover
 
-Entry point for continuing the observer in a new session. Updated 2026-11-01.
+Entry point for continuing the observer in a new session. Updated 2026-11-04
+(release 0.6.0). **Start with §2.2 (state on 2026-11-04) and §4 (next steps).**
 Open work is in [`ISSUES.md`](ISSUES.md); the roadmap in
 [`../plans/observer_agentic_plan.md`](../plans/observer_agentic_plan.md); usage
 in [`README.md`](README.md). The controller has its own handover:
@@ -46,10 +47,16 @@ Signals tab writes the entries. The generic starter file is
   `house/` (your review, owner knowledge, accepted understanding and model, archive), `data/` (catalog,
   settings, proposals, log). `observer init` creates a data directory from
   `observer/defaults/`.
-* **Running:** `observer serve` (portal `http://127.0.0.1:8090/`, no login yet),
-  started with `setsid nohup ~/Work/HeatpumpsN/observer/.venv/bin/observer serve
-  > ~/.local/share/heatpumpsn-observer/data/serve.log 2>&1 &`. Stop it with
-  `kill $(pgrep -x observer)` (not `pkill -f`, which matches its own shell).
+* **Running (development, this machine):** two processes from the checkout's
+  venv since 0.5.0: `observer collect` (MQTT → InfluxDB, started 2026-11-03
+  10:54) and `observer serve --no-ingest` (portal `http://127.0.0.1:8090/`,
+  HTTP Basic password from `OBSERVER_PORTAL_PASSWORD`). Start each with
+  `setsid nohup ~/Work/HeatpumpsN/observer/.venv/bin/observer <collect | serve
+  --no-ingest> > ~/.local/share/heatpumpsn-observer/data/<collect|serve>.log 2>&1 &`.
+  Restart **only the portal** after code changes (`kill <pid of serve>`, find it
+  with `pgrep -a observer`; not `pkill -f`, which matches its own shell): the
+  collector keeps recording. Restart the collector only for collector changes
+  (`COLLECTOR_VERSION`), it leaves a gap in the data.
 * **Database:** InfluxDB 2.7 container `observer-influx-dev`
   (`observer/docker-compose.dev.yml`, volume `observer-influx-dev`, port 38086,
   org `heatpumpsn`, bucket `observer`). Holds recorded house data: see §0.1.
@@ -67,25 +74,29 @@ Signals tab writes the entries. The generic starter file is
   `gemini-3.8-flash` too, but only 20 requests a day: fine for the house
   task (2 requests per draft), not for agent runs (10–25 requests).
   `gemini-2.5-pro` answers 404, the pro models 429. All tasks are on
-  flash-lite now (the owner's choice, 2026-11-02).
+  flash-lite now (the owner's choice, 2026-11-02). Since 0.6.0 the House tab
+  can use another model for one draft without changing the settings.
 * **House understanding** (three parts: your review, owner knowledge,
   understanding): a draft from before the knowledge step is waiting; the
   owner's review (notes.md) has content that "Generate a draft" will
-  consolidate. Nothing accepted yet.
-* **Next (plan phases):** C deterministic supervision from the accepted model's
-  checks with alerts to HA (first rule: EMS-ESP offline / heartbeat missing);
-  then the tool layer, sandbox and agents (`plans/observer_agentic_plan.md`).
-  Copy the old HA InfluxDB year in once (read-only token) before HA's InfluxDB
-  integration is removed.
+  consolidate. **Nothing accepted yet**; supervision from the house model and
+  the agents wait for it.
+* **Next:** §4.
 
 
 ### 1.8 Releases (2026-11-02)
 
 * Observer: tags `observer-v<version>` on gume/HeatpumpsN (public), GitHub
   Release with the deploy bundle by `.github/workflows/observer-release.yml`;
-  0.2.0 published, 0.3.0 tagged locally (update check, packs from URL).
+  releases up to 0.5.0 published; 0.6.0 see §2.2. Release steps: CHANGELOG
+  entry, version in `pyproject.toml` and the image in
+  `deploy/docker-compose.yml`, commit, `scripts/release.sh --tag` (tests,
+  bundle in `dist/`, annotated tag), the owner pushes the branch **and the
+  tag** (`git push origin main observer-v<version>`; a plain push leaves the
+  tag behind and the workflow does not run). Release only when worthwhile,
+  not per small change.
 * Library: gume/observer-library (public), tags `v<version>`, workflow
-  publishes the pack; v0.2.0 tagged locally, to be pushed.
+  publishes the pack; v0.3.0 is the latest (control_metrics, mixer_what_if).
 * The observer checks both for newer releases (banner; packs install with
   one click). Pushing stays with the owner.
 
@@ -133,6 +144,40 @@ bucket was removed on the owner's request.)
 * A harvest proposal (`identify_short_cycles`, overlapping `on_periods`)
   waits in run `20261102-024337-question`, not added.
 
+### 2.2 State on 2026-11-04 (releases 0.4.0 – 0.6.0)
+
+* **Releases:** 0.4.0 (supervision, alerts to HA, tool and skill editors,
+  limited LLM waits), 0.5.0 (collector process, mixer model identification,
+  signed parameter path with rollback, closed-loop backtest with the
+  controller's MPC core, `obs.sim`), 0.6.0 (one install folder with
+  `scripts/update.sh` / `cleanup.sh`, the collector in its own image with
+  `COLLECTOR_VERSION` 1.0.0 and `collector.lock`, regrouped portal tabs, a log
+  file, searchable model fields). Details: `CHANGELOG.md`.
+* **Git:** `main` (bea86c6) is pushed. The tag **`observer-v0.6.0` was not
+  pushed yet** (checked 2026-11-04): `git push origin observer-v0.6.0` starts
+  the release workflow. The bundle is in `dist/heatpumpsn-observer-0.6.0.tar.gz`.
+* **GitHub SSH:** GitHub removes `ssh-rsa` (SHA-1) and
+  `diffie-hellman-group-exchange-sha256` (brownouts 2026-11-04 and
+  2026-12-09, removal 2027-01-13). The owner's client (Gume-Zen) now pushes
+  with an ed25519 key (`~/.ssh/github_ed25519`); magnum has no key of its own
+  and pushes through the forwarded agent (`ssh -A`). A tmux pane keeps a stale
+  `SSH_AUTH_SOCK` after a reconnect: push from a fresh shell.
+* **Portal (0.6.0):** tabs Status, Alerts, Signals (with the LLM's proposed
+  descriptions), Agent (House, Analyses, Library), Parameters, Settings (LLM,
+  Rules, Log). The tab is in the address (`#house`, `#log`). Every message the
+  page showed is under *Messages* at the top (this browser tab only); the
+  server's log is `<data dir>/logs/observer.log` (rotating, Settings → Log,
+  `GET /api/log`), in the release `data/logs/observer.log`.
+* **Development portal runs old code:** the `serve --no-ingest` process was
+  started 2026-11-03 19:34, before the 0.6.0 portal changes (no `logs/`
+  folder in the data directory yet). Restart the portal (not the collector)
+  to see them. The 0.6.0 page was checked with the API and a script, **not
+  clicked through in a browser**: do that after the restart.
+* **Parameter path:** sending is off (`parameters.push_enabled` is not set in
+  the data directory's config.yaml); no set has been sent to the real
+  controller yet. The controller's slow log is being recorded; until enough
+  exists, identification uses the published values.
+
 ## 3. Working on it
 
 | What | Where |
@@ -158,3 +203,35 @@ slots from `.env`), `service.py`, `web.py`, `static/index.html`;
 `agent/` (`data.py` read-only queries, `tools.py`, `sandbox.py`,
 `skills.py`, `runner.py` loop and audit record, `manager.py` background
 runs, `mcp_server.py`); `skills/<name>/` (recipes and helpers).
+Added since: `config.py` (configuration loading, shared with the collector),
+`collector.py` (`observer collect`, `COLLECTOR_VERSION`), `supervision.py`
+(checks and alerts), `identify.py` (mixer model from recorded data, a copy of
+the firmware model), `parameters.py` (proposals, approval, signed push,
+rollback), `sim/` (the controller's MPC core compiled for the host via
+`mpc_shim.cpp` / `fwcore.py`, plant, boiler, closed loop, `replay.py`
+backtest), `dbarchive.py`, `state.py` (state export/import), `updates.py`
+(release and pack update checks), `logfile.py` (the log file and
+`/api/log`).
+
+## 4. Next steps (2026-11-04)
+
+Status against the plans: [`ISSUES.md`](ISSUES.md) (updated for 0.6.0). In
+order:
+
+1. **Push the tag** `observer-v0.6.0` (owner) and check the GitHub Release.
+2. **Restart the development portal** and click through the 0.6.0 page
+   (sub-tabs, model picker on Settings → LLM and House, Messages, Log).
+3. **Accept a house understanding**: generate a draft with a stronger model
+   for that one draft (House tab), review, accept. Unblocks checks from the
+   house model and makes agent reports trustworthy.
+4. **First parameter push on the real plant**: `parameters.push_enabled`,
+   `OBSERVER_CONTROLLER_SECRET`, approve one proposal, check the controller's
+   acknowledgement and a roll back. Any firmware upload to the S2 needs the
+   owner's explicit go.
+5. **Supervision from the house model** (phase C rest): checks derived from
+   the accepted model, drift beyond the mixer, an alert starting an agent
+   investigation.
+6. **Old HA history** (one year): a converter to the export format for
+   `db import`, before HA's InfluxDB integration is removed.
+7. Operations: scheduled backups (`db export` + state export), retention or
+   downsampling, an "observer alive" entity in HA.
