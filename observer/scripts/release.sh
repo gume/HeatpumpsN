@@ -6,7 +6,7 @@
 #
 # The bundle holds what a release machine needs: the package, the two
 # Dockerfiles (observer, collector), deploy/ (compose, env.example, guide),
-# scripts/update.sh and cleanup.sh, README, CHANGELOG and native/ (the
+# scripts/update.sh and cleanup.sh, README, INSTALL, CHANGELOG and native/ (the
 # firmware's MPC core, scripts/native.sh). Checks: the compose file names this
 # version and the collector's version, the collector lock is current. Checks: a
 # clean working tree for --tag, the version has a CHANGELOG entry, tests pass.
@@ -28,7 +28,7 @@ if [ -x .venv/bin/python ]; then .venv/bin/python -m pytest -q; else python3 -m 
 mkdir -p dist
 tmp=$(mktemp -d)
 mkdir "$tmp/$name"
-files="observer pyproject.toml README.md CHANGELOG.md Dockerfile Dockerfile.collector collector-requirements.txt collector.lock .dockerignore deploy scripts/update.sh scripts/cleanup.sh"
+files="observer pyproject.toml README.md INSTALL.md CHANGELOG.md Dockerfile Dockerfile.collector collector-requirements.txt collector.lock .dockerignore deploy scripts/update.sh scripts/cleanup.sh"
 if [ "$1" = "--tag" ]; then           # exactly the committed state
     git -C "$(git rev-parse --show-toplevel)" archive HEAD:observer -- $files | tar -x -C "$tmp/$name"
     scripts/native.sh --head

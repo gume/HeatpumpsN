@@ -4,6 +4,13 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## Unreleased
+
+* `INSTALL.md`: what the observer is, installing from scratch, updating,
+  rolling back and cleaning up, in one short guide (also in the bundle).
+* Release workflow: the MPC core was copied into the bundle twice
+  (`native/native/`).
+
 ## 0.6.0 - 2026-11-04
 
 Deployment: one install folder, the collector on its own. The portal: tabs

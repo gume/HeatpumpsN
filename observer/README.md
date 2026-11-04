@@ -1,5 +1,7 @@
 # HeatpumpsN observer
 
+Installing and updating a release: [`INSTALL.md`](INSTALL.md).
+
 Supervises the heating system from the outside. Primary goals:
 
 1. **Observe and optimise:** store everything relevant with its real

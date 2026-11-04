@@ -1,12 +1,7 @@
 # Deploying the observer (release)
 
-**Making a release** (development machine): raise `version` in
-`pyproject.toml`, add a CHANGELOG entry, commit, then
-
-```bash
-scripts/release.sh --tag            # tests, dist/heatpumpsn-observer-<version>.tar.gz, tag observer-v<version>
-git push origin observer-v<version> # GitHub Actions: tests, bundle, image build, GitHub Release with the bundle
-```
+The short install and update guide is [`../INSTALL.md`](../INSTALL.md); this
+page has the details.
 
 **Making a release** (development machine): raise `version` in
 `pyproject.toml` and the observer image tag in `deploy/docker-compose.yml`,
