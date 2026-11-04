@@ -95,10 +95,15 @@ class Settings:
                 yaml.safe_dump(self.data, fp, sort_keys=False, allow_unicode=True)
         return self.view()
 
-    def client(self, task: str) -> LlmClient | None:
-        """The configured client for a task, or None when its provider or model is missing."""
+    def client(self, task: str, provider: str | None = None, model: str | None = None) -> LlmClient | None:
+        """The configured client for a task, or None when its provider or model is missing.
+
+        provider/model: another choice for this one request (e.g. the House tab's model field)."""
         t = self.data["tasks"].get(task) or {}
-        slot, model = str(t.get("provider") or ""), t.get("model") or ""
+        if provider or (model or "").strip():           # a choice for this request: both or nothing from settings
+            slot, model = str(provider or t.get("provider") or ""), (model or "").strip()
+        else:
+            slot, model = str(t.get("provider") or ""), t.get("model") or ""
         info = provider_slots().get(slot)
         if not info or not model:
             return None

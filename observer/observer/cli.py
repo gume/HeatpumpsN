@@ -170,13 +170,17 @@ def cmd_serve(cfg: dict, args) -> None:
         writer, kind = NullWriter(), "external"     # a separate collector stores the data (observer collect)
     else:
         writer, kind = _writer(cfg, args.dry_run)
+    from .logfile import setup as log_to_file
+
+    log.info("log file %s", log_to_file(cfg))
     service = Service(cfg, writer, kind)
     service.start(_mqtt_args(cfg))
     web = cfg.get("web", {})
     host, port = args.host or web.get("host", "127.0.0.1"), args.port or int(web.get("port", 8090))
     log.info("portal on http://%s:%s/", host, port)
     try:
-        uvicorn.run(create_app(service), host=host, port=port, log_level="warning")
+        # log_config=None: uvicorn's own messages (errors, tracebacks) reach the log file too
+        uvicorn.run(create_app(service), host=host, port=port, log_level="warning", log_config=None)
     finally:
         service.stop()
 

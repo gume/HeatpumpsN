@@ -38,6 +38,20 @@
                cursor: pointer; font: inherit; }
   nav button.active { background: var(--panel-2); border-color: var(--line); color: var(--text); }
   #mq { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #subnav { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid var(--line-soft); padding-bottom: 8px; }
+  #subnav:empty { display: none; }
+  #msgs-btn { flex: 0 0 auto; font-size: 12px; padding: 4px 10px; }
+  #msgs-btn.has-err { color: var(--err); border-color: var(--err); }
+  #msgs-dlg { width: min(900px, 94vw); }
+  #msgs-list > div { border-bottom: 1px solid var(--line-soft); padding: 6px 0; white-space: pre-wrap; word-break: break-word; }
+  .mp-wrap { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .mp { position: relative; display: inline-block; }
+  .mp-list { position: absolute; z-index: 30; left: 0; top: 100%; min-width: 100%; max-width: 70vw; max-height: 300px; overflow: auto;
+             background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .mp-list div { padding: 4px 10px; cursor: pointer; font: 12px var(--mono); white-space: nowrap; }
+  .mp-list div:hover, .mp-list div.on { background: var(--panel-2); }
+  .mp-list .mp-head { cursor: default; color: var(--muted); font-family: inherit; border-bottom: 1px solid var(--line-soft); }
+  #log-rows td { vertical-align: top; } #log-rows pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px var(--mono); }
   main { padding: 16px; max-width: 1400px; margin: 0 auto; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 12px 14px; }
@@ -102,19 +116,17 @@
   <nav>
     <button data-view="status" class="active">Status</button>
     <button data-view="alerts">Alerts <span id="alert-badge"></span></button>
-    <button data-view="signals">Signals</button>
-    <button data-view="proposals">Proposals</button>
-    <button data-view="house">House</button>
-    <button data-view="agent">Agent</button>
-    <button data-view="library">Library</button>
+    <button data-view="signals">Signals <span id="prop-badge"></span></button>
+    <button data-view="agent" title="House understanding, analyses (questions and runs) and the tool library">Agent</button>
     <button data-view="parameters">Parameters</button>
     <button data-view="settings">Settings</button>
-    <button data-view="rules">Rules</button>
   </nav>
   <span id="mq">…</span>
+  <button class="btn" id="msgs-btn" title="Every message this page showed, and failed requests (the server's log: Settings → Log)">Messages <span id="msgs-n"></span></button>
 </header>
 <div id="upd" class="hidden" style="background:var(--panel-2);border-bottom:1px solid var(--warn);padding:8px 16px;font-size:13px"></div>
 <main>
+  <div id="subnav"></div>
   <section id="view-status">
     <div class="cards" id="cards"></div>
     <div class="table-wrap"><table>
@@ -172,7 +184,7 @@
       <select id="f-state">
         <option value="stored" selected>Stored</option><option value="all">All signals</option>
         <option value="unstored">Not stored</option><option value="undescribed">Undescribed</option>
-        <option value="nodesc">Stored, no description</option>
+        <option value="nodesc">Stored, no description</option><option value="proposed">With an LLM proposal</option>
       </select>
       <select id="f-source"><option value="">All sources</option></select>
       <select id="f-unit"><option value="">All units</option></select>
@@ -181,6 +193,21 @@
       <input id="f-q" type="search" placeholder="Search id, name, location…" size="24">
       <span class="dim" id="f-count"></span>
     </div>
+    <details id="prop-box" style="margin:0 0 10px">
+      <summary><strong>Proposed descriptions</strong> <span id="prop-n" class="dim"></span>
+        <span class="dim">— the LLM suggests name, quantity, location and role for undescribed signals; a signal with a
+        proposal is marked in the table</span></summary>
+<div class="bar">
+        <button class="btn primary" id="ask">Ask the LLM</button>
+        <label style="display:flex;align-items:center;gap:6px">about up to <input id="ask-n" type="number" value="40" min="1" max="200" style="width:70px"> undescribed signals</label>
+        <span class="dim" id="ask-msg"></span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Signal</th><th>Proposed name</th><th>Quantity · unit</th><th>Location · circuit · role</th>
+          <th>Store</th><th class="num">Confidence</th><th></th></tr></thead>
+        <tbody id="proposals"></tbody>
+      </table></div>
+      </details>
     <div class="bar hidden" id="bulk">
       <strong id="bulk-n"></strong>
       <button class="btn" data-bulk="store">Store</button>
@@ -199,18 +226,6 @@
     </table></div>
   </section>
 
-  <section id="view-proposals" class="hidden">
-    <div class="bar">
-      <button class="btn primary" id="ask">Ask the LLM</button>
-      <label style="display:flex;align-items:center;gap:6px">about up to <input id="ask-n" type="number" value="40" min="1" max="200" style="width:70px"> undescribed signals</label>
-      <span class="dim" id="ask-msg"></span>
-    </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Signal</th><th>Proposed name</th><th>Quantity · unit</th><th>Location · circuit · role</th>
-        <th>Store</th><th class="num">Confidence</th><th></th></tr></thead>
-      <tbody id="proposals"></tbody>
-    </table></div>
-  </section>
 
   <section id="view-house" class="hidden">
     <p class="dim">How the observer understands the house, in three parts: <strong>your review</strong> (free text, any time),
@@ -231,8 +246,10 @@
       <button class="btn" id="h-accept">Accept and archive</button>
       <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="h-clear" checked> clear my review after accepting (it is archived)</label>
       <select id="h-archive"><option value="">Archived versions…</option></select>
-      <span class="dim" id="h-msg"></span>
     </div>
+    <div class="bar"><span class="dim">Model for the draft:</span><span id="h-model" class="mp-wrap"></span>
+      <span class="dim" id="h-model-note"></span></div>
+    <div class="bar" style="margin-top:0"><span class="dim" id="h-status"></span> <span id="h-msg"></span></div>
     <div id="h-body"></div>
   </section>
 
@@ -327,13 +344,29 @@
     <h3 class="sec">Providers</h3>
     <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Name</th><th>Endpoint</th><th>Key</th></tr></thead><tbody id="s-providers"></tbody></table></div>
     <h3 class="sec">Models per task</h3>
-    <div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Model</th><th></th></tr></thead><tbody id="s-tasks"></tbody></table></div>
+    <p class="dim" style="margin:0 0 6px">Click into a model field to see the provider's models; type to search them
+      (every word must appear: <span class="mono">free</span>, <span class="mono">opus</span>, <span class="mono">flash free</span>).</p>
+    <div class="table-wrap" style="overflow:visible"><table><thead><tr><th>Task</th><th colspan="2">Provider · model</th><th></th></tr></thead><tbody id="s-tasks"></tbody></table></div>
     <h3 class="sec">Waiting for answers</h3>
     <div class="bar"><label>Response limit (seconds)<input id="s-timeout" type="number" min="10" max="3600" step="10" style="width:110px"></label>
       <label style="display:flex;align-items:center;gap:6px;align-self:flex-end"><input type="checkbox" id="s-stream"> stream answers</label>
       <span class="dim" style="align-self:flex-end">Streamed: the longest silence allowed while the answer arrives. Not streamed: the whole wait.
         A request that runs into the limit is not repeated; you get the choice to retry, wait or switch the model.</span></div>
     <div class="actions" style="margin-top:10px"><span class="dim" id="s-msg"></span><button class="btn primary" id="s-save">Save settings</button></div>
+  </section>
+
+  <section id="view-log" class="hidden">
+    <p class="dim">The portal's log file (<span class="mono" id="log-path"></span>): warnings and errors of all its parts,
+      every refused request with its message, LLM failures. What this page showed is also under <em>Messages</em> at the top.
+      The data collector logs to its container: <span class="mono">docker compose logs collector</span>.</p>
+    <div class="bar">
+      <select id="log-level"><option value="INFO">Everything</option><option value="WARNING" selected>Warnings and errors</option><option value="ERROR">Errors</option></select>
+      <input id="log-q" type="search" placeholder="Search the log…" size="24">
+      <select id="log-n"><option>200</option><option selected>500</option><option>2000</option></select>
+      <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="log-follow" checked> refresh every 5 s</label>
+      <span class="dim" id="log-count"></span>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Time</th><th>Level</th><th>Source</th><th>Message</th></tr></thead><tbody id="log-rows"></tbody></table></div>
   </section>
 
   <section id="view-rules" class="hidden">
@@ -346,6 +379,12 @@
 </main>
 
 <dialog id="llm-dlg"></dialog>
+<dialog id="msgs-dlg"><form method="dialog">
+  <h2 style="margin-top:0">Messages of this page</h2>
+  <p class="dim" style="margin:0 0 8px">Newest first; kept while this browser tab is open. The server's own log: Settings → Log.</p>
+  <div id="msgs-list"></div>
+  <div class="actions"><button class="btn" type="button" id="msgs-clear">Clear</button><button class="btn primary" value="close">Close</button></div>
+</form></dialog>
 <dialog id="edit">
   <form method="dialog" id="edit-form">
     <h2 id="e-title">Signal</h2>
@@ -400,12 +439,63 @@ function redraw(el, html) {
   el.innerHTML = html;
   for (const [d, k] of detailsKeys(el)) if (open.has(k)) d.open = true;
 }
-function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
+// Every message the page shows is kept (Messages at the top): toasts, failed requests and the
+// message lines (#…-msg), so one that is replaced a moment later can still be read.
+const messages = [];
+let msgsSeen = 0;
+try { messages.push(...JSON.parse(sessionStorage.getItem('obs-messages') || '[]')); msgsSeen = messages.length; } catch {}
+const ERRORISH = /error|fail|not available|cannot|can't|refused|rejected|denied|invalid|missing|unreachable|timed? ?out|HTTP \d|quota|exceeded/i;
+function remember(text, kind = '', where = '') {
+  text = String(text || '').trim();
+  if (!text) return;
+  kind = kind || (ERRORISH.test(text) ? 'error' : 'info');
+  const now = Date.now(), last = messages[messages.length - 1];
+  if (last && last.text === text && now - last.t < 3000) return;         // the same message from two paths
+  messages.push({ t: now, kind, text, where });
+  if (messages.length > 300) messages.splice(0, messages.length - 300);
+  try { sessionStorage.setItem('obs-messages', JSON.stringify(messages)); } catch {}
+  showMsgCount();
+}
+function showMsgCount() {
+  const fresh = messages.slice(msgsSeen), errs = fresh.filter((m) => m.kind === 'error').length;
+  $('#msgs-n').textContent = fresh.length ? `(${fresh.length})` : '';
+  $('#msgs-btn').classList.toggle('has-err', errs > 0);
+}
+function showMessages() {
+  msgsSeen = messages.length; showMsgCount();
+  $('#msgs-list').innerHTML = messages.length ? [...messages].reverse().map((m) => `<div>
+      <span class="dim">${new Date(m.t).toLocaleString()}</span> <span class="${m.kind === 'error' ? 'err' : 'dim'}">${m.kind}</span>
+      ${m.where ? `<span class="dim mono">${esc(m.where)}</span>` : ''}<br>${esc(m.text)}</div>`).join('')
+    : '<p class="dim">No messages yet.</p>';
+  if (!$('#msgs-dlg').open) $('#msgs-dlg').showModal();
+}
+$('#msgs-btn').addEventListener('click', showMessages);
+$('#msgs-clear').addEventListener('click', () => { messages.length = 0; msgsSeen = 0;
+  try { sessionStorage.removeItem('obs-messages'); } catch {} showMsgCount(); showMessages(); });
+function toast(msg, ms = 2500) {
+  const t = $('#toast'), err = ms >= 5000 || ERRORISH.test(msg);
+  remember(msg, err ? 'error' : 'info', 'notice');
+  t.textContent = msg; t.style.display = 'block'; t.style.borderColor = err ? 'var(--err)' : '';
+  t.title = 'Messages at the top keep it';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', err ? Math.max(ms, 8000) : ms);
+}
+$('#toast').addEventListener('click', () => { $('#toast').style.display = 'none'; showMessages(); });
+function watchMessageLines() {
+  for (const el of document.querySelectorAll('[id$="-msg"]')) {
+    new MutationObserver(() => {
+      const text = el.textContent.trim();
+      if (text && text !== el._said) remember(text, '', el.id.replace(/-msg$/, ''));
+      el._said = text;
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  }
+}
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const e = new Error(data.detail || `HTTP ${r.status}`);
+    const detail = typeof data.detail === 'string' ? data.detail : data.detail ? JSON.stringify(data.detail) : `HTTP ${r.status}`;
+    remember(`${opts.method || 'GET'} ${path.split('?')[0]} → ${r.status}: ${detail}`, 'error', 'request');
+    const e = new Error(detail);
     if (data.llm) e.llm = data.llm;           // the model cannot answer now: see llmDialog
     throw e;
   }
@@ -447,7 +537,9 @@ async function llmDialog(info, retry, cancel = () => {}) {
     else if (v === 'switch') {
       const model = $('#llm-model').value;
       try { await api('/api/settings', { method: 'PUT', body: JSON.stringify({ tasks: { [info.task]: { provider: slot, model } } }) });
-            toast(`Task now uses ${model}.`); retry(); }
+            toast(`Task now uses ${model}.`);
+            if (info.task === 'house') { housePicker = null; $('#h-model').innerHTML = ''; }   // the new default wins
+            retry(); }
       catch (err) { toast(err.message, 5000); cancel(); }
     } else cancel();
   };
@@ -466,16 +558,37 @@ $('#bulk-role').innerHTML = '<option value="">role…</option>' + ROLES.filter(B
 $('#bulk-quantity').innerHTML = '<option value="">quantity…</option>' + QUANTITIES.filter(Boolean).map((r) => `<option>${r}</option>`).join('');
 const selected = new Set();
 
+// Top tabs and their sub-tabs: [section id, label]. `view` is always a section id.
+const GROUPS = {
+  status: [['status', 'Status']], alerts: [['alerts', 'Alerts']], signals: [['signals', 'Signals']],
+  agent: [['house', 'House'], ['agent', 'Analyses'], ['library', 'Library']],
+  parameters: [['parameters', 'Parameters']],
+  settings: [['settings', 'LLM'], ['rules', 'Rules'], ['log', 'Log']],
+};
+const groupOf = (v) => Object.keys(GROUPS).find((g) => GROUPS[g].some(([id]) => id === v));
+const lastSub = {};
+try { Object.assign(lastSub, JSON.parse(localStorage.getItem('obs-subtabs') || '{}')); } catch {}
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => show(b.dataset.view)));
-function show(v) {
+// show('agent') opens the Agent tab (its last sub-tab); show('agent', true) the section "agent" (Analyses).
+function show(v, isSection = false) {
+  if (!isSection && GROUPS[v]) v = lastSub[v] || GROUPS[v][0][0];
+  if (!groupOf(v)) v = 'status';
+  const g = groupOf(v);
   view = v;
+  lastSub[g] = v;
+  try { localStorage.setItem('obs-subtabs', JSON.stringify(lastSub)); } catch {}
+  if (location.hash.slice(1) !== v) history.replaceState(null, '', '#' + v);
   document.querySelectorAll('nav button').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === v);
-    if (b.dataset.view === v) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });   // narrow screens scroll the tabs
+    b.classList.toggle('active', b.dataset.view === g);
+    if (b.dataset.view === g) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });   // narrow screens scroll the tabs
   });
-  for (const id of ['status', 'alerts', 'signals', 'proposals', 'house', 'agent', 'library', 'parameters', 'settings', 'rules']) $(`#view-${id}`).classList.toggle('hidden', id !== v);
+  $('#subnav').innerHTML = GROUPS[g].length > 1 ? GROUPS[g].map(([id, label]) =>
+    `<button class="btn ${id === v ? 'primary' : ''}" data-sub="${id}">${label}</button>`).join('') : '';
+  for (const id of Object.values(GROUPS).flat().map(([id]) => id)) $(`#view-${id}`).classList.toggle('hidden', id !== v);
   refresh();
 }
+$('#subnav').addEventListener('click', (e) => { const b = e.target.closest('[data-sub]'); if (b) show(b.dataset.sub, true); });
+window.addEventListener('hashchange', () => { const v = location.hash.slice(1); if (v && v !== view) show(v, true); });
 
 let updShown = '';
 async function showUpdates(list) {
@@ -620,21 +733,25 @@ async function loadSignals() {
 }
 function renderSignals() {
   const state = $('#f-state').value, src = $('#f-source').value, q = $('#f-q').value.trim().toLowerCase();
+  const proposed = new Set(proposals.map((p) => p.signal));
   const unit = $('#f-unit').value, qty = $('#f-quantity').value, dev = $('#f-device').value;
   const rows = signals.filter((s) => (!src || s.source === src) && (!unit || (unit === '__none' ? !s.unit : s.unit === unit))
     && (!qty || s.quantity === qty) && (!dev || s.device === dev)
     && (state === 'all' || (state === 'stored' && s.store) || (state === 'unstored' && !s.store)
-        || (state === 'undescribed' && s.resolved_by === 'none') || (state === 'nodesc' && s.store && !s.info.description))
+        || (state === 'undescribed' && s.resolved_by === 'none') || (state === 'nodesc' && s.store && !s.info.description)
+        || (state === 'proposed' && proposed.has(s.id)))
     && (!q || [s.id, s.info.name, s.meta.name, s.info.location, s.info.description, s.meta.device].join(' ').toLowerCase().includes(q)));
   shown = rows;
   $('#f-count').textContent = `${rows.length} of ${signals.length}`;
+  const propMark = (s) => proposed.has(s.id) ? ` <span class="pill" data-prop style="color:var(--accent);border-color:currentColor;cursor:pointer"
+      title="The LLM proposed a description: click to review, edit and accept it">proposal</span>` : '';
   $('#signals').innerHTML = rows.slice(0, 600).map((s) => {
     const name = s.info.name ? esc(s.info.name) : s.meta.name ? `<span class="dim">${esc(s.meta.name)}</span>` : '';
     const value = s.value != null ? `${+s.value.toFixed(3)} ${esc(s.unit)}` : esc((s.text || '').slice(0, 24));
     const where = [s.info.location, s.info.circuit, s.info.role].filter(Boolean).map(esc).join(' · ');
     const by = s.resolved_by === 'none' ? '<span class="dim">—</span>' : s.resolved_by === 'signal' ? 'own entry' : `<span class="dim" title="${esc(s.resolved_by)}">rule</span>`;
     return `<tr data-id="${esc(s.id)}"><td><input type="checkbox" class="sel" ${selected.has(s.id) ? 'checked' : ''}></td>
-      <td>${s.store ? '<span class="pill store">stored</span>' : ''}</td><td>${name}${s.info.description ? '' : ' <span class="dim" title="no description">·</span>'}</td>
+      <td>${s.store ? '<span class="pill store">stored</span>' : ''}</td><td>${name}${s.info.description ? '' : ' <span class="dim" title="no description">·</span>'}${propMark(s)}</td>
       <td class="mono">${esc(s.id)}</td><td class="num">${value}</td><td class="num ${s.age_s > 3600 ? 'dim' : ''}">${age(s.age_s)}</td>
       <td>${esc(s.quantity)}</td><td>${where}</td><td>${by}</td></tr>`;
   }).join('');
@@ -670,6 +787,8 @@ $('#f-q').addEventListener('input', renderSignals);
 $('#signals').addEventListener('click', (e) => {
   const tr = e.target.closest('tr'); if (!tr) return;
   if (e.target.classList.contains('sel')) { e.target.checked ? selected.add(tr.dataset.id) : selected.delete(tr.dataset.id); updateBulk(); return; }
+  const p = e.target.closest('[data-prop]') && proposals.find((x) => x.signal === tr.dataset.id);
+  if (p) { editProposal(p); return; }                       // the row's LLM proposal: review it in the editor
   openEdit(signals.find((s) => s.id === tr.dataset.id));
 });
 
@@ -718,10 +837,15 @@ $('#e-revert').addEventListener('click', async () => {
 });
 
 let proposals = [];
+let propBoxTouched = false;
+$('#prop-box').addEventListener('toggle', (e) => { if (e.isTrusted !== false) propBoxTouched = true; });
 async function loadProposals() {
   proposals = await api('/api/proposals');
   $('#ask').disabled = !llm.propose;
-  if (!llm.propose) $('#ask-msg').textContent = 'No model set for bulk proposals (Settings).';
+  $('#ask').title = llm.propose ? '' : 'No model set for bulk proposals (Settings → LLM)';
+  $('#prop-n').textContent = proposals.length ? `(${proposals.length} open)` : '(none open)';
+  $('#prop-badge').innerHTML = proposals.length ? `<span class="pill" style="color:var(--accent);border-color:currentColor">${proposals.length}</span>` : '';
+  if (!propBoxTouched && proposals.length && !$('#prop-box').open) { $('#prop-box').open = true; propBoxTouched = false; }
   $('#proposals').innerHTML = proposals.length ? proposals.map((p, i) => `<tr data-i="${i}">
     <td class="mono">${esc(p.signal)}</td><td>${esc(p.name)}</td><td>${esc([p.quantity, p.unit].filter(Boolean).join(' · '))}</td>
     <td>${esc([p.location, p.circuit, p.role].filter(Boolean).join(' · '))}</td><td>${p.store ? 'yes' : 'no'}</td>
@@ -736,21 +860,22 @@ $('#proposals').addEventListener('click', async (e) => {
   try {
     if (b.dataset.act === 'accept') { await api(`/api/proposal/accept?id=${id}`, { method: 'POST' }); toast('Accepted.'); }
     if (b.dataset.act === 'reject') { await api(`/api/proposal?id=${id}`, { method: 'DELETE' }); toast('Rejected.'); }
-    if (b.dataset.act === 'edit') {
-      if (!signals.length) signals = await api('/api/signals');
-      const s = signals.find((x) => x.id === p.signal) || { id: p.signal, info: {}, meta: {}, store: false };
-      openEdit(s, p, (entry) => api(`/api/proposal/accept?id=${id}`, { method: 'POST', body: JSON.stringify(entry) }));
-      return;
-    }
-    loadProposals();
+    if (b.dataset.act === 'edit') { await editProposal(p); return; }
+    await loadProposals(); renderSignals();
   } catch (err) { toast(err.message, 5000); }
 });
+async function editProposal(p) {
+  const id = encodeURIComponent(p.signal);
+  if (!signals.length) signals = await api('/api/signals');
+  const s = signals.find((x) => x.id === p.signal) || { id: p.signal, info: {}, meta: {}, store: false };
+  openEdit(s, p, (entry) => api(`/api/proposal/accept?id=${id}`, { method: 'POST', body: JSON.stringify(entry) }));
+}
 $('#ask').addEventListener('click', async () => {
   $('#ask').disabled = true; $('#ask-msg').textContent = 'Asking… this can take a few minutes.';
   try { const r = await withLlm(() => api('/api/proposals/run', { method: 'POST', body: JSON.stringify({ limit: +$('#ask-n').value || 40 }) }));
         $('#ask-msg').textContent = `${r.proposals} new proposals.`; }
   catch (err) { $('#ask-msg').textContent = err.message; }
-  $('#ask').disabled = false; loadProposals();
+  $('#ask').disabled = false; await loadProposals(); renderSignals();
 });
 
 // Minimal Markdown for descriptions and reports: headings, lists, tables, bold, code, paragraphs.
@@ -794,8 +919,10 @@ async function loadHouse() {
   if (document.activeElement !== $('#h-notes')) $('#h-notes').value = house.notes || '';
   $('#h-archive').innerHTML = '<option value="">Archived versions…</option>' + house.archive.map((a) => `<option>${esc(a)}</option>`).join('');
   const d = house.draft, cur = house.current;
-  $('#h-accept').disabled = !d; $('#h-rebuild').disabled = !d || !llm.house; $('#h-generate').disabled = !llm.house;
-  $('#h-msg').textContent = !llm.house ? 'No model set for the house understanding (Settings).'
+  await houseModelPicker();
+  const canAsk = !!(llm.house || housePicker.model);
+  $('#h-accept').disabled = !d; $('#h-rebuild').disabled = !d || !canAsk; $('#h-generate').disabled = !canAsk;
+  $('#h-status').textContent = !canAsk ? 'No model for the house understanding: choose one here or in Settings → LLM.'
     : d ? `Draft from ${d.generated}${d.model_name ? ` (${d.model_name})` : ''}${d.edited || d.knowledge_edited ? ', edited' : ''}: waiting for your acceptance.`
     : cur.description ? `Accepted version ${cur.accepted || ''}.` : 'No understanding yet: generate a draft.';
   const knowledge = d ? d.knowledge_md : cur.knowledge;
@@ -845,12 +972,41 @@ $('#h-notes-save').addEventListener('click', async () => {
   try { await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }); $('#h-notes-msg').textContent = 'Saved.'; }
   catch (err) { $('#h-notes-msg').textContent = err.message; }
 });
+// The model for the house draft: Settings → LLM (task "house") by default, another one for this draft.
+let housePicker = null, houseDefault = { provider: '', model: '' };
+async function houseModelPicker() {
+  if (housePicker) return;
+  const st = await api('/api/settings');
+  const t = st.tasks.find((x) => x.task === 'house') || {};
+  houseDefault = { provider: t.provider || '', model: t.model || '' };
+  const note = () => {
+    const own = housePicker && (housePicker.provider !== houseDefault.provider || housePicker.model !== houseDefault.model);
+    $('#h-model-note').innerHTML = own ? `for the next draft only (Settings → LLM keeps <span class="mono">${esc(houseDefault.model || 'none')}</span>)
+        <a href="#" id="h-model-reset">back to the default</a>` : 'the default from Settings → LLM';
+    const r = $('#h-model-reset');
+    if (r) r.onclick = (e) => { e.preventDefault(); housePicker = null; $('#h-model').innerHTML = ''; houseModelPicker(); };
+    const canAsk = !!(llm.house || (housePicker && housePicker.model));
+    $('#h-generate').disabled = !canAsk;
+  };
+  housePicker = modelPicker($('#h-model'), st.providers, houseDefault.provider, houseDefault.model, note);
+  note();
+}
+function houseModelChoice() {
+  if (!housePicker || !housePicker.model) return {};
+  const same = housePicker.provider === houseDefault.provider && housePicker.model === houseDefault.model;
+  return same ? {} : { provider: housePicker.provider, model: housePicker.model };
+}
 async function generateHouse(fromKnowledge) {
   if (!fromKnowledge) await api('/api/house/notes', { method: 'PUT', body: JSON.stringify({ text: $('#h-notes').value }) }).catch(() => {});
   for (const b of ['#h-generate', '#h-rebuild']) $(b).disabled = true;
-  $('#h-msg').textContent = fromKnowledge ? 'Building the understanding…' : 'Consolidating your review, then building the understanding… a minute or more.';
-  try { await withLlm(() => api('/api/house/generate', { method: 'POST', body: JSON.stringify({ from_draft_knowledge: fromKnowledge }) })); toast('Draft ready.'); }
-  catch (err) { $('#h-msg').textContent = err.message; }
+  const choice = houseModelChoice();
+  $('#h-msg').className = 'dim';
+  $('#h-msg').textContent = (fromKnowledge ? 'Building the understanding…' : 'Consolidating your review, then building the understanding… a minute or more.')
+    + (choice.model ? ` (model ${choice.model})` : '');
+  try {
+    await withLlm(() => api('/api/house/generate', { method: 'POST', body: JSON.stringify({ from_draft_knowledge: fromKnowledge, ...houseModelChoice() }) }));
+    $('#h-msg').textContent = ''; toast('Draft ready.');
+  } catch (err) { $('#h-msg').className = 'err'; $('#h-msg').textContent = err.message; }
   houseEditing = null; loadHouse();
 }
 $('#h-generate').addEventListener('click', () => generateHouse(false));
@@ -883,41 +1039,60 @@ async function loadSettings() {
       <td class="mono">${esc(p.base_url)}</td><td>${p.has_key ? 'set' : '<span class="dim">none</span>'}</td></tr>`).join('')
     : '<tr><td colspan="4" class="dim">No provider in .env (OBSERVER_LLM_BASE_URL).</td></tr>';
   $('#s-tasks').innerHTML = settingsView.tasks.map((t) => `<tr data-task="${esc(t.task)}"><td>${esc(t.label)}</td>
-      <td><select class="s-prov"><option value=""></option>${prov.map((p) => `<option value="${esc(p.slot)}" ${p.slot === t.provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
-      <td><select class="s-pick" style="display:none;margin-bottom:4px;max-width:100%"></select>
-        <input class="s-model" value="${esc(t.model)}" placeholder="model name" size="28"></td>
-      <td>${t.ready ? '<span class="ok">ready</span>' : '<span class="dim">not set</span>'} <button class="btn btn-sm s-list" type="button">List models</button></td></tr>`).join('');
+      <td colspan="2"><span class="mp-wrap s-pick"></span></td>
+      <td>${t.ready ? '<span class="ok">ready</span>' : '<span class="dim">not set</span>'}</td></tr>`).join('');
+  taskPickers = {};
+  for (const t of settingsView.tasks) {
+    taskPickers[t.task] = modelPicker($(`#s-tasks tr[data-task="${t.task}"] .s-pick`), prov, t.provider, t.model,
+      () => { $('#s-msg').textContent = 'Not saved yet.'; });
+  }
 }
+let taskPickers = {};
+// --- model picker: provider + a model field that also searches the provider's list ----------
+// Every word typed must appear in the name: "free", "opus", "flash free". Used on Settings → LLM and the House tab.
 const modelCache = {};
-function fillPick(tr, models) {
-  const pick = tr.querySelector('.s-pick'), input = tr.querySelector('.s-model');
-  const cur = input.value.trim();
-  pick.innerHTML = `<option value="">— choose one of ${models.length} models —</option>` +
-    models.map((m) => `<option value="${esc(m)}" ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('');
-  pick.style.display = 'block';
+async function modelsOf(slot) {
+  if (!slot) return [];
+  return modelCache[slot] || (modelCache[slot] = await api(`/api/settings/models?provider=${encodeURIComponent(slot)}`));
 }
-$('#s-tasks').addEventListener('click', async (e) => {
-  if (!e.target.classList.contains('s-list')) return;
-  const tr = e.target.closest('tr');
-  const slot = tr.querySelector('.s-prov').value;
-  if (!slot) { toast('Choose a provider first.'); return; }
-  try {
-    const models = modelCache[slot] || (modelCache[slot] = await api(`/api/settings/models?provider=${encodeURIComponent(slot)}`));
-    // Every task row on the same provider gets the list.
-    document.querySelectorAll('#s-tasks tr').forEach((row) => { if (row.querySelector('.s-prov').value === slot) fillPick(row, models); });
-    toast(`${models.length} models: choose one in the list above the model field, then Save settings.`, 4000);
-    tr.querySelector('.s-pick').focus();
-  } catch (err) { toast(err.message, 5000); }
-});
-$('#s-tasks').addEventListener('change', (e) => {
-  if (e.target.classList.contains('s-pick') && e.target.value) e.target.closest('tr').querySelector('.s-model').value = e.target.value;
-});
+function modelPicker(el, providers, provider, model, onChange = () => {}) {
+  el.innerHTML = `<select class="mp-prov"><option value=""></option>${providers.map((p) =>
+      `<option value="${esc(p.slot)}" ${p.slot === provider ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+    <span class="mp"><input class="mp-model" value="${esc(model || '')}" size="30" autocomplete="off" spellcheck="false"
+      placeholder="model, or search: free, opus…" title="Type to search the provider's models: every word must appear (e.g. free, opus, flash free)">
+      <div class="mp-list hidden"></div></span>`;
+  const sel = el.querySelector('.mp-prov'), input = el.querySelector('.mp-model'), list = el.querySelector('.mp-list');
+  let models = [], active = -1, typed = false;
+  const render = () => {
+    const terms = typed ? input.value.toLowerCase().split(/\s+/).filter(Boolean) : [];
+    const hits = models.filter((m) => terms.every((t) => m.toLowerCase().includes(t)));
+    active = Math.min(active, hits.length - 1);
+    list.innerHTML = `<div class="mp-head">${sel.value ? `${hits.length} of ${models.length} models` : 'choose a provider first'}${terms.length ? ` matching "${esc(terms.join(' '))}"` : ''}</div>` +
+      hits.slice(0, 300).map((m, i) => `<div data-m="${esc(m)}" class="${i === active ? 'on' : ''}">${esc(m)}</div>`).join('');
+    list.classList.remove('hidden');
+  };
+  const load = async () => {
+    try { models = await modelsOf(sel.value); } catch (err) { models = []; toast(`Model list: ${err.message}`, 6000); }
+    render();
+  };
+  const pick = (m) => { input.value = m; typed = false; list.classList.add('hidden'); onChange(); };
+  input.addEventListener('focus', () => { typed = false; load(); });
+  input.addEventListener('input', () => { typed = true; active = -1; render(); onChange(); });
+  input.addEventListener('keydown', (e) => {
+    const items = [...list.querySelectorAll('[data-m]')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, Math.min(items.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1))); render(); }
+    else if (e.key === 'Enter' && items[active]) { e.preventDefault(); pick(items[active].dataset.m); }
+    else if (e.key === 'Escape') list.classList.add('hidden');
+  });
+  input.addEventListener('blur', () => setTimeout(() => list.classList.add('hidden'), 150));
+  list.addEventListener('mousedown', (e) => { const d = e.target.closest('[data-m]'); if (d) { e.preventDefault(); pick(d.dataset.m); } });
+  sel.addEventListener('change', () => { input.value = ''; onChange(); input.focus(); });
+  return { get provider() { return sel.value; }, get model() { return input.value.trim(); } };
+}
 $('#s-save').addEventListener('click', async () => {
   const body = { providers: {}, tasks: {}, response: { timeout_s: +$('#s-timeout').value || 120, stream: $('#s-stream').checked } };
   document.querySelectorAll('.s-name').forEach((i) => { body.providers[i.dataset.slot] = { name: i.value }; });
-  document.querySelectorAll('#s-tasks tr').forEach((tr) => {
-    body.tasks[tr.dataset.task] = { provider: tr.querySelector('.s-prov').value, model: tr.querySelector('.s-model').value };
-  });
+  for (const [task, p] of Object.entries(taskPickers)) body.tasks[task] = { provider: p.provider, model: p.model };
   try { await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) }); $('#s-msg').textContent = 'Saved.'; await loadStatus(); loadSettings(); }
   catch (err) { $('#s-msg').textContent = err.message; }
 });
@@ -1500,11 +1675,25 @@ async function loadRules() {
     <td>${esc([r.location, r.circuit, r.role].filter(Boolean).join(' · '))}</td><td>${r.store === false ? 'no' : 'yes'}</td><td>${esc(r.description)}</td></tr>`).join('');
 }
 
+// --- the server's log file (Settings → Log) ---------------------------------------
+async function loadLog() {
+  const q = new URLSearchParams({ level: $('#log-level').value, q: $('#log-q').value.trim(), lines: $('#log-n').value });
+  const d = await api(`/api/log?${q}`);
+  $('#log-path').textContent = d.path;
+  $('#log-count').textContent = `${d.entries.length} of ${d.matching} matching`;
+  const cls = { ERROR: 'err', CRITICAL: 'err', WARNING: 'warn' };
+  $('#log-rows').innerHTML = d.entries.length ? [...d.entries].reverse().map((e) => `<tr><td style="white-space:nowrap">${esc(e.time)}</td>
+      <td class="${cls[e.level] || 'dim'}">${esc(e.level)}</td><td class="mono dim">${esc(e.name)}</td><td><pre>${esc(e.message)}</pre></td></tr>`).join('')
+    : '<tr><td colspan="4" class="dim">Nothing in the log matches.</td></tr>';
+}
+for (const id of ['#log-level', '#log-n']) $(id).addEventListener('change', () => loadLog().catch(() => {}));
+$('#log-q').addEventListener('input', () => { clearTimeout($('#log-q')._t); $('#log-q')._t = setTimeout(() => loadLog().catch(() => {}), 300); });
+
 async function refresh() {
   try {
     await loadStatus();
-    if (view === 'signals' && !$('#edit').open) await loadSignals();
-    if (view === 'proposals') await loadProposals();
+    if (view === 'signals' && !$('#edit').open) { await loadProposals(); await loadSignals(); }
+    if (view === 'log') await loadLog();
     if (view === 'house' && !houseEditing) await loadHouse();
     if (view === 'alerts') await loadAlerts();
     if (view === 'agent') await loadAgent();
@@ -1514,8 +1703,13 @@ async function refresh() {
     if (view === 'rules') await loadRules();
   } catch (err) { $('#mq').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
 }
-refresh();
-setInterval(() => { if (view === 'status' || view === 'alerts') refresh(); else loadStatus().catch(() => {}); }, 5000);
+watchMessageLines();
+showMsgCount();
+show(location.hash.slice(1) || 'status', true);
+setInterval(() => {
+  if (view === 'status' || view === 'alerts' || (view === 'log' && $('#log-follow').checked)) refresh();
+  else loadStatus().catch(() => {});
+}, 5000);
 </script>
 </body>
 </html>

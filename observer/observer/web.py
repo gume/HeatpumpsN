@@ -6,6 +6,7 @@ agent runs (read-only tools, sandboxed code); it has no path to the plant.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
@@ -17,6 +18,7 @@ from .llm import LlmUnavailable
 from .service import Service
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
+log = logging.getLogger("observer.web")
 
 
 def create_app(service: Service) -> FastAPI:
@@ -26,7 +28,18 @@ def create_app(service: Service) -> FastAPI:
         """The model cannot answer now: the portal offers retry, wait or another model."""
         from fastapi.responses import JSONResponse
 
+        log.warning("%s %s: LLM not available: %s %s", request.method, request.url.path, exc.info(), exc)
         return JSONResponse({"detail": str(exc), "llm": exc.info()}, status_code=503)
+
+    from fastapi.exception_handlers import http_exception_handler
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(StarletteHTTPException)
+    async def logged_http_error(request, exc):
+        """Every refused request goes to the log file with its message (the page may show it only briefly)."""
+        if exc.status_code >= 400 and exc.status_code not in (401, 404):
+            log.warning("%s %s -> %s: %s", request.method, request.url.path, exc.status_code, exc.detail)
+        return await http_exception_handler(request, exc)
 
     user = os.environ.get("OBSERVER_PORTAL_USER", "admin")
     password = os.environ.get("OBSERVER_PORTAL_PASSWORD", "")
@@ -114,9 +127,15 @@ def create_app(service: Service) -> FastAPI:
 
     @app.post("/api/house/generate")
     async def generate_house(body: dict | None = Body(None)):
-        keep = bool((body or {}).get("from_draft_knowledge"))
+        body = body or {}
+        keep = bool(body.get("from_draft_knowledge"))
+        client = None
+        if body.get("model"):                    # the House tab's own choice; default: the task's settings
+            client = service.settings.client("house", str(body.get("provider") or ""), str(body["model"]))
+            if client is None:
+                raise HTTPException(400, f"provider {body.get('provider')!r} is not configured in .env")
         try:
-            return await run_in_threadpool(lambda: service.generate_house(from_draft_knowledge=keep))
+            return await run_in_threadpool(lambda: service.generate_house(client, from_draft_knowledge=keep))
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
         except FileNotFoundError as exc:
@@ -299,6 +318,12 @@ def create_app(service: Service) -> FastAPI:
         return {"ok": True}
 
     # --- settings ---------------------------------------------------------------
+    @app.get("/api/log")
+    def read_log(lines: int = Query(300, ge=1, le=5000), level: str = Query(""), q: str = Query("")):
+        from .logfile import read
+
+        return read(service.cfg, lines, level, q)
+
     @app.get("/api/settings")
     def settings():
         return service.settings.view()
