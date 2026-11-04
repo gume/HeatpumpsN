@@ -4,8 +4,16 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
-## Unreleased
+## 0.6.1 - 2026-11-04
 
+Fixes for the move from 0.5.0 and an install guide. Coming from 0.5.0, use
+this bundle rather than 0.6.0: `heatpumpsn-observer-0.6.1/scripts/update.sh
+--dir ~/heatpumpsn-observer --from ~/heatpumpsn-observer-0.5.0`. From 0.6.0:
+`~/heatpumpsn-observer/app/scripts/update.sh heatpumpsn-observer-0.6.1.tar.gz`
+(the collector keeps running).
+
+* `data/.env` from 0.5.0 may hold LLM keys: `INSTALL.md` says how to move
+  them to the install folder's `.env`.
 * `INSTALL.md`: what the observer is, installing from scratch, updating,
   rolling back and cleaning up, in one short guide (also in the bundle).
 * `update.sh`: a first install with a new `.env` did not build the images

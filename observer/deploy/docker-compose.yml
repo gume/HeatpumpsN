@@ -80,7 +80,7 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
-    image: heatpumpsn-observer:0.6.0              # the observer version (pyproject.toml)
+    image: heatpumpsn-observer:0.6.1              # the observer version (pyproject.toml)
     restart: unless-stopped
     depends_on:
       influxdb:

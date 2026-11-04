@@ -65,8 +65,8 @@ from the development machine (`observer/dist/`).
 **First install** (Docker with the compose plugin):
 
 ```bash
-tar xzf heatpumpsn-observer-0.6.0.tar.gz
-heatpumpsn-observer-0.6.0/scripts/update.sh --dir ~/heatpumpsn-observer
+tar xzf heatpumpsn-observer-0.6.1.tar.gz
+heatpumpsn-observer-0.6.1/scripts/update.sh --dir ~/heatpumpsn-observer
 # .env is created from the example: fill it in - INFLUX_ADMIN_PASSWORD and
 # INFLUX_ADMIN_TOKEN (openssl rand -hex 32), OBSERVER_MQTT_HOST/PORT (the home
 # broker), OBSERVER_PORTAL_PASSWORD, TZ - then
@@ -78,8 +78,8 @@ docker compose ps            # all three healthy after about a minute
 `heatpumpsn-observer_observer-data`): once,
 
 ```bash
-tar xzf heatpumpsn-observer-0.6.0.tar.gz
-heatpumpsn-observer-0.6.0/scripts/update.sh --dir ~/heatpumpsn-observer --from ~/heatpumpsn-observer-0.5.0
+tar xzf heatpumpsn-observer-0.6.1.tar.gz
+heatpumpsn-observer-0.6.1/scripts/update.sh --dir ~/heatpumpsn-observer --from ~/heatpumpsn-observer-0.5.0
 ```
 
 It takes `.env` from the old folder, builds the images, stops the old
