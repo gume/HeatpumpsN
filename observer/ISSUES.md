@@ -1,19 +1,19 @@
 # Observer issues
 
-## Missing against the plans (checked 2026-11-02)
+## Missing against the plans (checked 2026-11-04, release 0.6.0)
 
 Plans: `plans/master_plan.md` (observer role, P4), `plans/observer_node.md`
 (§9 responsibilities), `plans/observer_agentic_plan.md` (phases A–H).
 
 | Plan item | State |
 | --- | --- |
-| Ingest and store (node §9.1, phase A) | done; release deployment ready |
-| Reviewed house understanding (phase B) | done; **nothing accepted yet** (a draft waits) |
-| **Supervision with alerts to HA** (node §9.4, phase C): checks from the accepted model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **first version** (unreleased): event, stale, range, stuck and scheduled agent checks, alerts to HA; still missing: checks derived from the accepted house model, drift detection, an agent investigation triggered by an alert |
-| **Identification from live data** (node §9.2, master P4): transport delay from pulse events, valve characteristic f(pos, T_boiler, T_return), gradient statistics | **missing as an automated job**; tools exist (`fopdt_fit`, `plant_identification` skill), the offline work in `floor_simulator/log_analysis` did it once on HA history |
-| **Parameter generation, validation on held-out data, push** (node §9.3, master 9.9, phase G) | **missing**: no backtest against recorded data/simulator, no approval flow, no signed push to the controller's `cmd/mpc/params` (the firmware side exists) |
-| Parameter versioning with rollback (node §9.4) | missing (depends on the push) |
-| Tool layer, sandbox, agents (phases D–F) | first version done; agents are started by hand, not by supervision; in the release container with `docker-compose.sandbox.yml` (0.3.1) |
+| Ingest and store (node §9.1, phase A) | done; the collector in its own container and image (0.5.0, 0.6.0); one install folder with `update.sh` / `cleanup.sh` (0.6.0) |
+| Reviewed house understanding (phase B) | done; **nothing accepted yet** (a draft waits); a stronger model can be chosen for one draft on the House tab (0.6.0) |
+| **Supervision with alerts to HA** (node §9.4, phase C): checks from the accepted model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **first version** (0.4.0): event, stale, range, stuck and scheduled agent checks, alerts to HA; drift alert for the mixer model (0.5.0); still missing: checks derived from the accepted house model, drift detection beyond the mixer, an agent investigation triggered by an alert |
+| **Identification from live data** (node §9.2, master P4): transport delay from pulse events, valve characteristic f(pos, T_boiler, T_return), gradient statistics | **first version** (0.5.0): the controller's mixer model (law, transport delay, sensor lags, per pump scenario) re-identified daily or on the Parameters tab; the slow log (exact model inputs) is stored, until enough of it exists the published values are used; still missing: **gradient statistics** (safe gradient limits, pulse size caps) |
+| **Parameter generation, validation on held-out data, push** (node §9.3, master 9.9, phase G) | **first version** (0.5.0): proposal only when clearly better on held-out data, closed-loop backtest with the controller's MPC core, approval in the portal, HMAC-signed push to `cmd/mpc/params` with the controller's acknowledgement; **sending is off** (`parameters.push_enabled`) and **not yet tried against the real controller**; no optimisation agent that proposes parameter sets or boiler settings itself |
+| Parameter versioning with rollback (node §9.4) | done (0.5.0): every sent set keeps the one it replaced for a roll back |
+| Tool layer, sandbox, agents (phases D–F) | first version done; simulator for the agent (`obs.sim`, 0.5.0); agents are started by hand or by a scheduled check, not by an alert; in the release container with `docker-compose.sandbox.yml` (0.3.1) |
 | Sharing skills between houses (phase H) | separate repository, versions, packs done; no remote, no update pull |
 | Portal login (prerequisite for approvals) | HTTP Basic password done; no roles (a read-only user) |
 | Old HA history (one year) into the observer | **missing**: a converter from `analysis/heatpumps.duckdb` / HA InfluxDB to the export format (signal mapping) would let `db import` take it |
@@ -24,7 +24,8 @@ Operational gaps of the release: automated backups (a scheduled `db export`
 plus state export), disk planning (~1.4 million samples a day: about 1 GB a
 year as export files, several GB in InfluxDB; no downsampling or retention
 policy yet), monitoring of the observer itself (an HA entity for "observer
-alive").
+alive"; the portal already alarms when the collector is silent). A log file
+exists since 0.6.0 (`data/logs/observer.log`, Settings → Log).
 
 ## Open items
 
@@ -37,9 +38,13 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    (20 requests/day) would fit the house task (2 requests per draft).
    Generate a draft with the review, check the owner knowledge, accept the
    first version.
-2. **Portal has no login**; it listens on `127.0.0.1`. Needed before it may
-   approve parameter pushes (prerequisite for plan phase E).
-3. **Read-only InfluxDB token** for tools and agents (prerequisite for phase E).
+2. **Portal roles**: the portal has an HTTP Basic password
+   (`OBSERVER_PORTAL_PASSWORD`); a read-only user (view without approving
+   parameter pushes) is missing.
+3. **First parameter push**: set `parameters.push_enabled` and
+   `OBSERVER_CONTROLLER_SECRET`, approve one proposal and check the
+   controller's acknowledgement and a roll back on the real plant (S2 upload
+   rules apply if the firmware side needs a change).
 4. **Old HA InfluxDB year**: copy it in once (read-only token) before HA's
    InfluxDB integration is removed.
 5. **EMS-ESP** (3.8.4): does not reconnect after a broker restart until
