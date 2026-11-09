@@ -225,7 +225,8 @@ def _law_lsq(segs, g, knots, delay_s, tau_fwd, tau_inc, prior_xk, coverage, warm
     return xk
 
 
-def fit_scenario(segs: list[dict], g: dict, current: dict, delays=None, taus_fwd=None, taus_inc=None) -> dict:
+def fit_scenario(segs: list[dict], g: dict, current: dict, delays=None, taus_fwd=None, taus_inc=None,
+                 refine: bool = True) -> dict:
     """Search delay and lags on a grid, the law by least squares; the best free-run fit wins."""
     knots = np.asarray(current["knots_pct"], float)
     prior = np.asarray(current["xk"], float)
@@ -247,7 +248,8 @@ def fit_scenario(segs: list[dict], g: dict, current: dict, delays=None, taus_fwd
                     best = (e, cand)
     # refine the lags around the best grid point
     e0, cand = best
-    for tau_fwd in np.linspace(max(1, cand["tau_fwd_s"] * 0.6), cand["tau_fwd_s"] * 1.4, 7):
+    for tau_fwd in (np.linspace(max(1, cand["tau_fwd_s"] * 0.6), cand["tau_fwd_s"] * 1.4, 7)
+                    if refine else []):
         for tau_inc in np.linspace(max(0, cand["tau_inc_s"] * 0.6), max(10, cand["tau_inc_s"] * 1.4), 5):
             xk = _law_lsq(segs, g, knots, cand["delay_s"], tau_fwd, tau_inc, prior, coverage)
             c = {**cand, "xk": xk.tolist(), "tau_fwd_s": round(float(tau_fwd), 2), "tau_inc_s": round(float(tau_inc), 2)}
@@ -273,8 +275,13 @@ def split_holdout(segs: list[dict], share: float = 0.3) -> tuple[list[dict], lis
 
 
 def identify(g: dict, current_sets: dict, min_train_h: float = 2.0, min_hold_h: float = 0.5,
-             min_gain: float = 0.15, min_gain_k: float = 0.15) -> dict:
-    """Identify every scenario with enough data; compare with the current set on held-out data."""
+             min_gain: float = 0.15, min_gain_k: float = 0.15, fixed_timing: bool = False) -> dict:
+    """Identify every scenario with enough data; compare with the current set on held-out data.
+
+    `fixed_timing` keeps the current delay and lags and identifies only the valve law. The
+    published state values (the fallback when the slow log is short) are 10 s means of rounded
+    signals: good enough to fit the law, too smeared to identify the timing, and a timing found
+    there is worse in closed-loop replay than the one identified from the exact slow log."""
     started = time.time()
     segs = segments(g)
     out = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "range": [float(g["t"][0]), float(g["t"][-1])],
@@ -295,7 +302,11 @@ def identify(g: dict, current_sets: dict, min_train_h: float = 2.0, min_hold_h: 
             if th < min_train_h or hh < min_hold_h:
                 r["status"] = f"not enough data (needs {min_train_h} h to fit and {min_hold_h} h to check)"
             else:
-                fit = fit_scenario(train, g, current)
+                fit = fit_scenario(train, g, current,
+                                   delays=[current["delay_s"]] if fixed_timing else None,
+                                   taus_fwd=[current["tau_fwd_s"]] if fixed_timing else None,
+                                   taus_inc=[current["tau_inc_s"]] if fixed_timing else None,
+                                   refine=not fixed_timing)
                 cur_hold, n = rmse(hold, current, g)
                 new_hold, _ = rmse(hold, fit["params"], g)
                 cur_train, _ = rmse(train, current, g)

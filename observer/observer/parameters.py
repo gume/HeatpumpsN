@@ -136,9 +136,10 @@ class ParameterManager:
         if g is None or slow_hours < self.min_slow_hours:   # not enough exact inputs yet: the published values
             g = identify.fetch(data, self.window, source="state")
             source = "state"
-        result = identify.identify(g, sets)
+        result = identify.identify(g, sets, fixed_timing=(source == "state"))
         result.update(source=source, inputs="exact (slow log)" if source == "slow" else
-                      f"approximate (published values; the slow log has {slow_hours:.1f} h so far)")
+                      f"approximate (published values; the slow log has {slow_hours:.1f} h so far; "
+                      "timing kept from the current set)")
         with open(self.runs_path, "a", encoding="utf-8") as fp:
             fp.write(json.dumps({k: v for k, v in result.items()}, ensure_ascii=False) + "\n")
         self._proposals_from(result, g, source)

@@ -70,6 +70,20 @@ def test_identification_recovers_a_changed_plant_and_proposes():
     assert all(b >= a for a, b in zip(new["xk"], new["xk"][1:]))       # monotone
 
 
+def test_approximate_inputs_keep_the_current_timing():
+    """The state fallback fits only the law: its 10 s means cannot identify delay and lags."""
+    true = {**CURRENT, "delay_s": 70.0, "tau_fwd_s": 50.0,
+            "xk": [0.02, 0.10, 0.25, 0.27, 0.30, 0.33, 0.35, 0.35, 0.35, 0.55, 1.0]}
+    g = synthetic(true)
+    r = I.identify(g, {"floor": CURRENT}, fixed_timing=True)["scenarios"]["floor"]
+    assert r["status"] == "proposal", r
+    new = r["identified"]
+    assert new["delay_s"] == CURRENT["delay_s"]
+    assert new["tau_fwd_s"] == CURRENT["tau_fwd_s"]
+    assert new["tau_inc_s"] == CURRENT["tau_inc_s"]
+    assert new["xk"][4] == pytest.approx(0.30, abs=0.03)     # the law is still identified
+
+
 def test_no_proposal_when_the_current_model_fits():
     g = synthetic(CURRENT, seed=3)
     r = I.identify(g, {"floor": CURRENT})["scenarios"]["floor"]
