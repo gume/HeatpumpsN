@@ -183,13 +183,13 @@ bucket was removed on the owner's request.)
 Full findings: [`docs/mixer-identification-2026-11-09.md`](docs/mixer-identification-2026-11-09.md).
 Nothing was pushed to the controller.
 
-* **Git:** `main` is 7 commits ahead of `origin/main` (6f0c59e):
+* **Git:** `main` is ahead of `origin/main` (6f0c59e). The work since:
   `237de36` mpc three-strike retry block, `d76c841` portal unblock button and
   banner, `b2b4a34` state fallback when a slow-log signal is missing,
   `60e8ecd` identify only the law on the state fallback, `7eb5eaa` mpc doc and
   log-check comment, `8788c75` this findings document and the observer
-  handover, `1cb5ea7` the firmware handover/issues. The owner pushes; no
-  tag/release was made.
+  handover, `1cb5ea7` the firmware handover/issues, plus the small handover
+  fixes. The owner pushes; no tag/release was made.
 * **Slow log is recorded now:** 55 k samples, 2026-11-01 10:46 – 2026-11-09
   15:40, 39.57 h of usable floor segments. The collector hot-reloads
   `registry.yaml`, so a Signals edit needs no restart. The development
@@ -266,7 +266,7 @@ Status against the plans: [`ISSUES.md`](ISSUES.md). In order:
 2. **Record the boiler setpoint**: set
    `ems-esp/boiler_data#heatingtemp` to `store: true` (Signals tab) if the
    70 -> 60 °C change should have a history.
-3. **Push the 7 commits** (owner; no tag/release was made). The 0.6.1 release
+3. **Push the commits** (owner; no tag/release was made). The 0.6.1 release
    still has the tag push from §2.2 to do if wanted.
 4. **First parameter push on the real plant**, only with a proposal whose
    backtest is recommended or explicitly accepted: `parameters.push_enabled`,
