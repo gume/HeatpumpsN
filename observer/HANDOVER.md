@@ -215,6 +215,10 @@ Nothing was pushed to the controller.
 * **Development portal restarted** 2026-11-09 15:22 with the current code
   (the collector kept running). InfluxDB `observer-influx-dev` was restarted
   after it was found down; the volume was not touched.
+* **Passwords:** the owner keeps the development credentials until the
+  development phase ends and restricts network access to the sites instead.
+  This data directory has no `OBSERVER_PORTAL_PASSWORD`, and the portal is
+  bound to `127.0.0.1`; set one before exposing it.
 * **Uploads prepared, nothing sent:** the S2 needs the firmware image (retry
   strikes + unblock API) and the filesystem image (`app.js.gz`); a parameter
   push would use `cmd/mpc/params` and needs `parameters.push_enabled` plus
