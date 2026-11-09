@@ -836,12 +836,17 @@ function renderDashboard() {
           <div class="metric-row"><span class="k">Model bias</span><span class="v">${fmtNum(mpc.bias, 2)} K</span></div>
           ${mpc.boost ? '<div class="metric-row"><span class="k">Heat-up boost</span><span class="v">active</span></div>' : ''}
           <div class="metric-row"><span class="k">Last anomaly</span><span class="v">${esc(mpc.anomaly || 'none')} (${num(mpc.anomalies, 0)} total, ${num(mpc.retries, 0)} retries)</span></div>
-          ${mpc.mode === 'cautious' ? `<div class="metric-row"><span class="k">Stable for</span><span class="v">${Math.round(num(mpc.stableS, 0) / 60)} / 30 min</span></div>` : ''}`}` : '';
+          ${mpc.retryBlocked ? `<div class="metric-row"><span class="k">Automatic retries</span><span class="v">blocked (${num(mpc.retryStrikes, 0)}/${num(mpc.retryStrikeLimit, 0)} failures)</span></div>` : ''}
+          ${mpc.mode === 'cautious' ? `<div class="metric-row"><span class="k">Stable for</span><span class="v">${Math.round(num(mpc.stableS, 0) / 60)} / 20 min</span></div>` : ''}`}` : '';
 
   const modeTone = mode.current === 'test' ? 'err' : mode.current === 'summer' ? 'ok' : 'warn';
   const wifiTone = wifi.connected ? (num(wifi.rssi, 0) > -75 ? 'ok' : 'warn') : 'err';
 
   return `<div class="stack">
+    ${mpc.retryBlocked ? `<div class="banner err" role="alert" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <div><strong>Predictive control is blocked.</strong> Automatic retries stopped after ${num(mpc.retryStrikes, 0)} of ${num(mpc.retryStrikeLimit, 0)} failures of the same anomaly (${esc(mpc.anomaly || 'unknown')}). The mixer keeps running the cautious fallback until MPC is resumed.</div>
+      <button class="btn btn-sm btn-ok" type="button" data-action="mpc-unblock">Unblock and resume MPC</button>
+    </div>` : ''}
     <div class="grid auto">
       ${metricCard('Mode', modeLabel(mode.current), `source: ${esc(mode.source || '—')}`, modeTone)}
       ${metricCard('Uptime', fmtUptime(live.uptime), `heap ${fmtBytes(system.freeHeap)}`)}
@@ -2633,6 +2638,24 @@ async function saveSettingsForm(form) {
   }
 }
 
+async function unblockMpc() {
+  const ok = await confirmDialog(
+    'Resume predictive control?',
+    'The retry latch will be cleared and MPC will plan again on the next control tick. If the model is still wrong, the anomaly supervisor falls back again and the strike counter keeps counting.',
+    'Resume MPC',
+    false
+  );
+  if (!ok) return;
+  try {
+    await apiPost('/api/mpc/unblock');
+    toast('MPC retries unblocked; predictive control resumed.', 'ok', 5000);
+    await refreshState();
+    renderCurrent();
+  } catch (err) {
+    toast(err.message, 'err', 6000);
+  }
+}
+
 async function activateTest() {
   const ok = await confirmDialog(
     'Activate Test Mode?',
@@ -2969,6 +2992,9 @@ async function handleViewClick(event) {
   switch (action) {
     case 'test-activate':
       await activateTest();
+      break;
+    case 'mpc-unblock':
+      await unblockMpc();
       break;
     case 'test-deactivate':
       await deactivateTest();

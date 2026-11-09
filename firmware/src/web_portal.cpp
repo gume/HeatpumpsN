@@ -3246,6 +3246,21 @@ void handle_mpc_mode(AsyncWebServerRequest* request, JsonVariant& json) {
   send_json(request, 200, doc);
 }
 
+// Operator unblock: clear the retry latch and resume predictive control now.
+// Distinct from a plain mode request so the event log shows who intervened.
+void handle_mpc_unblock(AsyncWebServerRequest* request) {
+  char err[128];
+  if (!mpc::apply_mode("mpc", "rest", err, sizeof(err))) {
+    send_error(request, 400, err);
+    return;
+  }
+  log_event(1, 1343, "MPC retries unblocked from the portal; predictive control resumed");
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["requested"] = "mpc";
+  send_json(request, 200, doc);
+}
+
 // Summary of the last panic stored in the coredump partition. Decode the
 // addresses with the matching firmware.elf:
 //   xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <pc> <bt...>
@@ -3996,6 +4011,7 @@ void register_routes() {
               [](AsyncWebServerRequest* request, JsonVariant& json) {
                 handle_mpc_mode(request, json);
               });
+  g_server.on(AsyncURIMatcher::exact("/api/mpc/unblock"), HTTP_POST, handle_mpc_unblock);
   g_server.on(AsyncURIMatcher::exact("/api/system/coredump"), HTTP_GET, handle_coredump_get);
   g_server.on(AsyncURIMatcher::exact("/api/system/coredump/clear"), HTTP_POST, handle_coredump_clear);
 
