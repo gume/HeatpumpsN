@@ -1,7 +1,7 @@
 # HeatpumpsN observer — handover
 
-Entry point for continuing the observer in a new session. Updated 2026-11-04
-(release 0.6.0). **Start with §2.2 (state on 2026-11-04) and §4 (next steps).**
+Entry point for continuing the observer in a new session. Updated 2026-11-09.
+**Start with §2.3 (state on 2026-11-09) and §4 (next steps).**
 Open work is in [`ISSUES.md`](ISSUES.md); the roadmap in
 [`../plans/observer_agentic_plan.md`](../plans/observer_agentic_plan.md); usage
 in [`README.md`](README.md). The controller has its own handover:
@@ -178,6 +178,46 @@ bucket was removed on the owner's request.)
   controller yet. The controller's slow log is being recorded; until enough
   exists, identification uses the published values.
 
+### 2.3 State on 2026-11-09 (identification, retry handling, upload prep)
+
+Full findings: [`docs/mixer-identification-2026-11-09.md`](docs/mixer-identification-2026-11-09.md).
+Nothing was pushed to the controller.
+
+* **Git:** `main` is 5 commits ahead of `origin/main` (6f0c59e):
+  `237de36` mpc three-strike retry block, `d76c841` portal unblock button and
+  banner, `b2b4a34` state fallback when a slow-log signal is missing,
+  `60e8ecd` identify only the law on the state fallback, `7eb5eaa` mpc doc and
+  log-check comment. The owner pushes; no tag/release was made.
+* **Slow log is recorded now:** 55 k samples, 2026-11-01 10:46 – 2026-11-09
+  15:40, 39.57 h of usable floor segments. The collector hot-reloads
+  `registry.yaml`, so a Signals edit needs no restart. The development
+  InfluxDB was down for part of 2026-11-09; the collector backfilled after the
+  restart (watch for gaps around such outages).
+* **Re-identification on the exact slow log:** the free-timing fit is clearly
+  better on held-out data (1.346 -> 0.801 K) but the closed-loop backtest says
+  **not recommended** (twice the starts/reversals). Keeping the current timing
+  and fitting only the law is **neutral** (0.873 -> 0.782 K on the current
+  plant, more movement). **Current parameters stay.** Proposal `edd054c886`
+  was left in Parameters with the not-recommended backtest; do not approve it.
+* **State fallback fixed:** published values are 10 s means of rounded
+  signals and cannot identify delay/lags; `identify(fixed_timing=True)` now
+  fits only the law when the slow log is too short (test added).
+* **Boiler setpoint 70 -> 60 °C on 2026-11-08:** pre-change data (33.8 h) says
+  the current model is as good; post-change data (5.7 h) hints at a different
+  law but is too short. Re-identify after several days at 60 °C.
+* **Storage gap:** `ems-esp/boiler_data#heatingtemp` (boiler heating-water
+  setpoint) is still `store: false` in this data directory's `registry.yaml`
+  (last modified 2026-11-03), so the 70 -> 60 change has no history in the
+  database (only the catalog's current value, 60). Set it to `store: true` if
+  the setpoint change should be visible next time.
+* **Development portal restarted** 2026-11-09 15:22 with the current code
+  (the collector kept running). InfluxDB `observer-influx-dev` was restarted
+  after it was found down; the volume was not touched.
+* **Uploads prepared, nothing sent:** the S2 needs the firmware image (retry
+  strikes + unblock API) and the filesystem image (`app.js.gz`); a parameter
+  push would use `cmd/mpc/params` and needs `parameters.push_enabled` plus
+  `OBSERVER_CONTROLLER_SECRET`. Wait for the owner's explicit go.
+
 ## 3. Working on it
 
 | What | Where |
@@ -213,25 +253,32 @@ backtest), `dbarchive.py`, `state.py` (state export/import), `updates.py`
 (release and pack update checks), `logfile.py` (the log file and
 `/api/log`).
 
-## 4. Next steps (2026-11-04)
+## 4. Next steps (2026-11-09)
 
-Status against the plans: [`ISSUES.md`](ISSUES.md) (updated for 0.6.0). In
-order:
+Status against the plans: [`ISSUES.md`](ISSUES.md). In order:
 
-1. **Push the tag** `observer-v0.6.0` (owner) and check the GitHub Release.
-2. **Restart the development portal** and click through the 0.6.0 page
-   (sub-tabs, model picker on Settings → LLM and House, Messages, Log).
-3. **Accept a house understanding**: generate a draft with a stronger model
+1. **Review the identification proposal** `edd054c886` (Parameters tab):
+   backtest not recommended; dismiss it unless it is wanted as a record.
+   Re-run the identification after several days at the 60 °C boiler setpoint
+   and compare all data with post-change data.
+2. **Record the boiler setpoint**: set
+   `ems-esp/boiler_data#heatingtemp` to `store: true` (Signals tab) if the
+   70 -> 60 °C change should have a history.
+3. **Push the 5 commits** (owner; no tag/release was made). The 0.6.1 release
+   still has the tag push from §2.2 to do if wanted.
+4. **First parameter push on the real plant**, only with a proposal whose
+   backtest is recommended or explicitly accepted: `parameters.push_enabled`,
+   `OBSERVER_CONTROLLER_SECRET`, approve, check the controller's
+   acknowledgement and a roll back. A firmware upload to the S2 needs the
+   owner's explicit go (see `../firmware/HANDOVER.md`).
+5. **Accept a house understanding**: generate a draft with a stronger model
    for that one draft (House tab), review, accept. Unblocks checks from the
    house model and makes agent reports trustworthy.
-4. **First parameter push on the real plant**: `parameters.push_enabled`,
-   `OBSERVER_CONTROLLER_SECRET`, approve one proposal, check the controller's
-   acknowledgement and a roll back. Any firmware upload to the S2 needs the
-   owner's explicit go.
-5. **Supervision from the house model** (phase C rest): checks derived from
+6. **Supervision from the house model** (phase C rest): checks derived from
    the accepted model, drift beyond the mixer, an alert starting an agent
-   investigation.
-6. **Old HA history** (one year): a converter to the export format for
+   investigation. The mixer drift alert already fires when the re-identified
+   model is much better on held-out data; that alone is not enough to push.
+7. **Old HA history** (one year): a converter to the export format for
    `db import`, before HA's InfluxDB integration is removed.
-7. Operations: scheduled backups (`db export` + state export), retention or
+8. Operations: scheduled backups (`db export` + state export), retention or
    downsampling, an "observer alive" entity in HA.
