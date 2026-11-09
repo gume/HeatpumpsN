@@ -211,7 +211,10 @@ Nothing was pushed to the controller.
   `registry.yaml` (last modified 2026-11-03), so the 70 -> 60 change has no
   history in the database (only the catalog's current value, 60). It was set
   to `store: true` on 2026-11-09 15:58 and the collector reloaded the registry;
-  history starts there. The exact 70 -> 60 time is not recoverable.
+  history starts there. The exact 70 -> 60 time is not recoverable. The portal
+  keeps the registry it loaded in memory, so it still showed `store: false`
+  until it was restarted at 16:03 (collector untouched); it now shows
+  `store: true`, 60 °C.
 * **Development portal restarted** 2026-11-09 15:22 with the current code
   (the collector kept running). InfluxDB `observer-influx-dev` was restarted
   after it was found down; the volume was not touched.
