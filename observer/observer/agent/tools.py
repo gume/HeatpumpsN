@@ -130,13 +130,21 @@ class Toolbox:
 
     def house_context(self) -> dict:
         h = self.service.house()
-        text = h.get("description") or ""
-        checks = ((h.get("model") or {}).get("checks")) or []
-        return {"status": "draft maintained by the owner" if text else "no house description yet",
-                "configured_context": self.context.strip(),
-                "description_md": text[:TEXT_LIMIT], "checks": checks[:40],
-                "owner_input_md": (h.get("user_input") or "")[:4000],
-                "previous_description_available": bool(h.get("can_undo"))}
+        cur, draft = h.get("current") or {}, h.get("draft") or {}
+        owner = h.get("owner") or {}
+        if cur.get("description"):
+            text = cur["description"]
+            status = f"accepted by the owner ({cur['accepted']})" if cur.get("accepted") else "accepted by the owner"
+            checks = ((cur.get("model") or {}).get("checks")) or []
+        elif draft:
+            text, status = draft.get("description_md", ""), "DRAFT, not yet accepted by the owner"
+            checks = ((draft.get("model") or {}).get("checks")) or []
+        else:
+            text, status, checks = "", "no house description yet", []
+        return {"status": status, "configured_context": self.context.strip(),
+                "owner_description_md": (owner.get("description") or cur.get("knowledge") or "")[:6000],
+                "house_description_md": text[:TEXT_LIMIT], "checks": checks[:40],
+                "previous_owner_description_available": bool(owner.get("can_undo"))}
 
     def find_signals(self, text: str = "", location: str = "", circuit: str = "", role: str = "",
                      quantity: str = "", source: str = "", stored_only: bool = True, limit: int = 40) -> dict:
@@ -363,8 +371,8 @@ class Toolbox:
         time_doc = "'now', a relative duration like -6h / -2d, or an ISO time (UTC unless an offset is given)"
         return [
             Tool("house_context", "The house description (circuits, rooms, sensors, expected behaviour, checks), "
-                 "the owner's input (facts not in the data: building, comfort targets, history; authoritative) "
-                 "and whether a previous version exists. Read it first.", _obj({}), self.house_context),
+                 "the owner's description (facts not in the data: building, comfort targets, history; authoritative) "
+                 "and whether a previous owner description exists. Read it first.", _obj({}), self.house_context),
             Tool("find_signals", "Search the signal registry: ids, names, units, location (floor), circuit, role. "
                  "Use the returned exact ids with the data tools.",
                  _obj({"text": {"type": "string", "description": "words that must all appear in id, name, "

@@ -45,9 +45,9 @@ Signals tab writes the entries. The generic starter file is
   `OBSERVER_HOME`, default `~/.local/share/heatpumpsn-observer` (never in git):
   `config.yaml`, `.env` (secrets: InfluxDB token, LLM endpoints and keys),
   `registry.yaml` (this house's sensor selection and descriptions),
-  `house/` (description draft, input, previous version, model), `data/` (catalog,
-  settings, proposals, log). `observer init` creates a data directory from
-  `observer/defaults/`.
+  `house/` (owner's description with its previous version, house description
+  draft and model), `data/` (catalog, settings, proposals, log). `observer init`
+  creates a data directory from `observer/defaults/`.
 * **Running (development, this machine):** two processes from the checkout's
   venv since 0.5.0: `observer collect` (MQTT → InfluxDB, started 2026-11-03
   10:54) and `observer serve --no-ingest` (portal `http://127.0.0.1:8090/`,
@@ -76,9 +76,12 @@ Signals tab writes the entries. The generic starter file is
   task (1 request per update), not for agent runs (10–25 requests).
   `gemini-2.5-pro` answers 404, the pro models 429. All tasks are on
   flash-lite now (the owner's choice, 2026-11-02).
-* **House description:** the House tab keeps a saved draft plus the owner's
-  input. *Update draft* merges the input (authoritative on conflicts) and keeps
-  the previous version for undo and reference. Nothing needs to be accepted.
+* **House description:** the House tab keeps the owner's description (current
+  and previous, for undo) and the house description built from it and the
+  sensors. *Update owner's description* merges the raw input (authoritative on
+  conflicts) and keeps the previous version; the raw input itself is not
+  stored. *Create house description* makes a draft that is accepted and
+  archived when it is right.
 * **Next:** §4.
 
 
@@ -281,9 +284,10 @@ Status against the plans: [`ISSUES.md`](ISSUES.md). In order:
    acknowledgement and a roll back. A firmware upload to the S2 needs the
    owner's explicit go (see `../firmware/HANDOVER.md`).
 5. **Write the house description**: switch the *house* task to a stronger model
-   (Settings), write the known facts in the House tab and press *Update draft*.
-   A good model and description unblock checks from the model and make agent
-   reports trustworthy.
+   (Settings), write the known facts in the House tab, press *Update owner's
+   description*, then *Create house description* and accept the draft. A good
+   model and description unblock checks from the model and make agent reports
+   trustworthy.
 6. **Supervision from the house model** (phase C rest): checks derived from
    the model, drift beyond the mixer, an alert starting an agent
    investigation. The mixer drift alert already fires when the re-identified

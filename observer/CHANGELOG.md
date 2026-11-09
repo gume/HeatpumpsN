@@ -4,6 +4,31 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## 0.7.1 - 2026-11-10
+
+The House tab is two parts again, as in 0.6.1: the owner's description and the
+house description built from it and the sensors. Update from 0.7.0:
+`~/heatpumpsn-observer/app/scripts/update.sh
+heatpumpsn-observer-0.7.1.tar.gz` (the collector keeps running). The house
+files in `data/house/` are read as they are: `knowledge.md` is the owner's
+description, `description.md` and `model.yaml` are the accepted house
+description. The old `input.md` is ignored and not stored any more.
+
+* House: the raw input is no longer saved. *Update owner's description* turns
+  it into `knowledge.md` through the house LLM task, with the input
+  authoritative on conflicts. The previous version stays in
+  `knowledge_previous.md` for *Undo* and as a reference; *Clear* empties the
+  current version, and a manual edit of the current version is kept the same
+  way.
+* House: *Create house description* builds a draft from the owner's
+  description and the sensor names, parameters and data. The draft can be
+  edited; *Accept and archive* makes it the accepted version and keeps the
+  owner's description, the questions and the recommendations in
+  `house/archive/<time>/`.
+* House: the questions, recommendations, unknown signal ids and the machine
+  model are shown again, and the House tab can pick its own model for the
+  update and the house description.
+
 ## 0.7.0 - 2026-11-09
 
 The house description becomes a draft you change in steps. Update from 0.6.1:

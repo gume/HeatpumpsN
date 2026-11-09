@@ -1,6 +1,6 @@
 [project]
 name = "observer"
-version = "0.7.0"
+version = "0.7.1"
 description = "HeatpumpsN observer: ingests the heating system's MQTT data, stores it raw in InfluxDB, supervises and optimises"
 requires-python = ">=3.10"
 dependencies = [

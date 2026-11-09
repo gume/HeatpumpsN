@@ -29,30 +29,35 @@ read, check and extend.
 
 **Inputs:** the house context (configuration), the signal registry (names,
 units, locations, circuits, roles, descriptions), the catalog (all signals
-seen, including unselected ones), the owner's input, the current draft, the
-previous version, and data summaries (value ranges, update rates).
+seen, including unselected ones), the owner's raw input, the owner's current
+and previous description, the accepted house description, and data summaries
+(value ranges, update rates).
 
-**Output (kept as a draft in the house's data directory):**
+**Two parts (in the house's data directory):**
 
-* `description.md` — prose for a human: what the system is, every circuit and
-  room, which sensors measure what and where, how the parts interact
-  (expected behaviour), and what is uncertain;
-* `model.yaml` — the same understanding in machine form: systems, measurement
-  points, relations (redundant, order, causal, balance), checks, gaps.
+1. `knowledge.md` — the owner's description: the facts the sensors cannot know
+   (building, hydraulics, rooms, comfort targets, history, known issues).
+   `knowledge_previous.md` is the version before the last update, edit or
+   clear. The raw input is **not stored**.
+2. `description.md` — the house description for a human: what the system is,
+   every circuit and room, which sensors measure what and where, how the parts
+   interact (expected behaviour), and what is uncertain. `model.yaml` is the
+   same understanding in machine form: systems, measurement points, relations
+   (redundant, order, causal, balance), checks, gaps.
 
-**Draft loop:**
+**Cycle:**
 
-1. The owner writes **input** (corrections, missing facts, instructions) in the
-   House tab. It is saved with the house's operational data
-   (`<OBSERVER_HOME>/house/input.md`, outside git).
-2. *Update draft* merges the input into the current description. The input is
-   authoritative on conflicts; the previous version is available as a
-   reference (for example "bring back the radiators from the previous
-   version"), so knowledge accumulates instead of being lost.
-3. The version before the update is kept (`<OBSERVER_HOME>/house/previous.md`)
-   for *Undo last update* and as the reference above. *Clear draft* starts over
-   without deleting that previous version. Nothing has to be accepted or
-   archived. Analysis and agents read the current draft and its model.
+1. The owner writes raw input (corrections, missing facts, instructions) in the
+   House tab and presses *Update owner's description*. The LLM merges it into
+   `knowledge.md`; the input is authoritative on conflicts and the previous
+   version is available as a reference (for example "bring back the radiators
+   from the previous version"). The actual version can be edited by hand;
+   *Clear* empties it and keeps the previous version; *Undo* swaps them.
+2. *Create house description* builds a draft from the owner's description and
+   the sensors. It can be edited; *Accept and archive* makes it the accepted
+   version and keeps it in `house/archive/<time>/` with the owner's description
+   and the questions of that time. Analysis and agents read the accepted
+   version, or the draft when there is no accepted one.
 
 ## 3. Tools
 
@@ -142,15 +147,15 @@ optimisation.
   the library version, changelog, checks); an observer uses it as a library
   folder or as an imported pack (.tgz). House items, history, packs, audit
   flags and test results in `<OBSERVER_HOME>/library/`; the house's
-  description draft, input, previous version and model in
-  `<OBSERVER_HOME>/house/`, never in git.
+  owner's description (current and previous), house description draft, accepted
+  version and model in `<OBSERVER_HOME>/house/`, never in git.
 
 ## 7. Phases
 
 | Phase | Deliverable |
 | --- | --- |
 | A (done) | data collection, registry, catalog, LLM descriptions, per-task model settings |
-| B (done) | house description draft with saved input, previous version, undo/clear and model |
+| B (done) | owner's description updated from raw input (not stored), clear/undo/manual edit; house description built from it and the sensors, draft, accept/archive and model |
 | C (first version) | supervision: event, stale, range and stuck checks without LLM, scheduled agent runs, alerts to HA over MQTT discovery; still to come: checks generated from the house model, drift detection, agent investigation triggered by an alert |
 | D (first version) | core tools (MCP + function calling); library of analysis tools with manifests, tests and audit flags; seed tools and skills incl. plant identification |
 | E (first version) | sandbox: bubblewrap (rootless, no network) with the read-only data socket; limits; workspaces, query logs, audit records |

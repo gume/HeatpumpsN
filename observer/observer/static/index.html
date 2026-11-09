@@ -148,8 +148,9 @@
         <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer;align-self:flex-end">Import a file…<input type="file" id="db-import" accept=".parquet" style="display:none"></label>
       </div>
       <div id="db-job" style="margin:6px 0"></div>
-      <p class="dim" style="margin:8px 0 4px">The observer's <strong>state</strong> moves separately: the house description
-        draft (input, previous version and model), the registry (which signals are stored and what they mean), the catalog,
+      <p class="dim" style="margin:8px 0 4px">The observer's <strong>state</strong> moves separately: the owner's
+        description (current and previous), the house description (draft, accepted version and model), the registry
+        (which signals are stored and what they mean), the catalog,
         the checks, the model settings, the house context, and all tools and skills (own ones and installed packs, with
         audits). No secrets, no recorded data. Export here, import on the other observer (it replaces those files there and
         keeps the old ones in <span class="mono">backup/</span>).</p>
@@ -228,22 +229,28 @@
 
 
   <section id="view-house" class="hidden">
-    <p class="dim">The observer's description of the house, saved as a draft. Write corrections, missing facts or
-      instructions in <strong>your input</strong>; <strong>Update draft</strong> merges them into the current draft.
-      Your input wins on conflicts. The version before the update is kept for undo and can be referenced in your
-      input (for example "bring back the radiators from the previous version").</p>
+    <p class="dim">How the observer understands the house, in two parts: <strong>your description</strong> (facts the
+      sensors cannot know) and the <strong>house description</strong> built from it and the sensor data. Your raw input
+      is not saved: it is turned into the owner's description by <strong>Update</strong>, and the previous version stays
+      available for undo and as a reference (for example "bring back the radiators from the previous version"). The
+      house description is a draft until you accept it; accepting archives it with the owner's description.</p>
     <div class="card" style="margin-bottom:12px">
-      <h3 class="sec" style="margin-top:0">Your input</h3>
-      <p class="dim" style="margin:0 0 6px">Always saved with the draft. Facts, corrections and instructions in your own words.</p>
+      <h3 class="sec" style="margin-top:0">Your raw input</h3>
+      <p class="dim" style="margin:0 0 6px">Corrections, missing facts, answers to the questions, comfort targets,
+        changes in the house. Any language, any form. Not saved; <strong>Update</strong> merges it into your description.</p>
       <textarea id="h-input" rows="7" style="width:100%"></textarea>
-      <div class="actions" style="margin-top:8px"><span class="dim" id="h-input-msg"></span><button class="btn" id="h-input-save">Save input</button></div>
+      <div class="actions" style="margin-top:8px"><span class="dim" id="h-input-msg">not saved</span>
+        <button class="btn" id="h-input-clear" title="Clear the raw input (it is not saved anyway)">Clear input</button>
+        <button class="btn primary" id="h-update">Update owner's description</button></div>
     </div>
     <div class="bar">
-      <button class="btn primary" id="h-update">Update draft</button>
-      <button class="btn" id="h-clear">Clear draft</button>
-      <button class="btn" id="h-undo">Undo last update</button>
-      <span class="dim" id="h-msg"></span>
+      <button class="btn primary" id="h-generate" title="Build the house description from the owner's description and the sensor data">Create house description</button>
+      <button class="btn" id="h-accept">Accept and archive</button>
+      <select id="h-archive"><option value="">Archived versions…</option></select>
+      <span class="dim" id="h-status"></span> <span id="h-msg"></span>
     </div>
+    <div class="bar"><span class="dim">Model for the owner update and house description:</span><span id="h-model" class="mp-wrap"></span>
+      <span class="dim" id="h-model-note"></span></div>
     <div id="h-body"></div>
   </section>
 
@@ -903,57 +910,167 @@ function md(text) {
   return out.join('');
 }
 
-let house = null;
+let house = null, houseEditing = null;   // null, 'owner', 'description' or 'archive'
+let houseLastChanges = [];
+function houseCanAsk() { return !!(llm.house || (housePicker && housePicker.model)); }
+function houseInputReady() {
+  const typed = !!($('#h-input').value || '').trim();
+  const owner = !!(house && house.owner && house.owner.description);
+  return typed || !owner;                      // the first click with an empty input may create it
+}
 async function loadHouse() {
   house = await api('/api/house');
   if (!signals.length) signals = await api('/api/signals');
   const name = (id) => { const s = signals.find((x) => x.id === id); return (s && (s.info.name || s.meta.name)) || id; };
   const chips = (ids) => (ids || []).map((id) => `<span class="chip" title="${esc(id)}">${esc(name(id))}</span>`).join('');
-  if (document.activeElement !== $('#h-input')) $('#h-input').value = house.user_input || '';
-  $('#h-update').disabled = !llm.house || !$('#h-input').value.trim();
-  $('#h-clear').disabled = !house.description;
-  $('#h-undo').disabled = !house.can_undo;
-  $('#h-msg').textContent = !llm.house ? 'No model set for the house description (Settings).'
-    : house.description ? 'Draft saved. The previous version is kept for undo.'
-    : 'No draft yet: write your input and press Update draft.';
-  const model = house.model || {};
+  await houseModelPicker();
+  const canAsk = houseCanAsk();
+  const owner = house.owner || {}, cur = house.current || {}, d = house.draft;
+  const ownerDoc = owner.description || '';
+  const doc = d ? { description: d.description_md, model: d.model, questions: d.questions, recommendations: d.recommendations, unknown_ids: d.unknown_ids }
+                : { description: cur.description, model: cur.model };
+  $('#h-archive').innerHTML = '<option value="">Archived versions…</option>' + house.archive.map((a) => `<option>${esc(a)}</option>`).join('');
+  $('#h-update').disabled = !canAsk || !houseInputReady();
+  $('#h-generate').disabled = !canAsk;
+  $('#h-accept').disabled = !d;
+  $('#h-status').textContent = !canAsk ? 'No model for the house description: choose one here or in Settings → LLM.'
+    : d ? `Draft from ${d.generated}${d.model_name ? ` (${d.model_name})` : ''}${d.edited ? ', edited' : ''}: waiting for your acceptance.`
+    : cur.description ? `Accepted version ${cur.accepted || ''}.` : 'No house description yet: write your description and create it.';
+  const model = (doc && doc.model) || {};
   const rows = (list, cols) => list && list.length ? `<div class="table-wrap"><table><tbody>${list.map(cols).join('')}</tbody></table></div>` : '<p class="dim">none</p>';
+  const editor = (id, text, save, label) => `<textarea id="${id}" rows="24" style="width:100%;font-family:var(--mono);font-size:12px">${esc(text)}</textarea>
+      <div class="actions" style="margin-top:8px"><button class="btn" id="h-cancel">Cancel</button><button class="btn primary" id="${save}">${label}</button></div>`;
+  const changes = houseLastChanges.length ? `<details style="margin-top:6px"><summary>What changed with the last update (${houseLastChanges.length})</summary><ul>${houseLastChanges.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : '';
   $('#h-body').innerHTML = `
-    ${house.unknown_ids && house.unknown_ids.length ? `<div class="card" style="border-color:var(--warn);margin-bottom:10px"><strong class="warn">The draft names ${house.unknown_ids.length} signal id(s) that do not exist</strong>
-      <div class="mono" style="margin-top:4px">${house.unknown_ids.map(esc).join('<br>')}</div><p class="dim" style="margin:6px 0 0">Correct them in your input and update the draft.</p></div>` : ''}
-    ${house.description ? `<div class="card md">${md(house.description)}</div>` : '<p class="dim">The draft is empty.</p>'}
-    ${house.can_undo ? `<details style="margin-top:12px"><summary>Previous version (for reference and undo)</summary>
-      ${house.previous ? `<div class="card md" style="margin-top:8px">${md(house.previous)}</div>` : '<p class="dim">(the previous version was empty)</p>'}</details>` : ''}
-    <details style="margin-top:12px"><summary>Machine model: ${(model.systems || []).length} systems, ${(model.relations || []).length} relations, ${(model.checks || []).length} checks</summary>
+    <div class="card" style="margin-bottom:12px">
+      <div class="bar" style="margin:0 0 6px"><h3 class="sec" style="margin:0">1 · Owner's description</h3>${ownerDoc ? '<span class="pill store">current</span>' : ''}
+        ${houseEditing !== 'owner' ? '<button class="btn" id="h-edit-owner" style="margin-left:auto">Edit</button>' : ''}
+        <button class="btn" id="h-owner-undo" ${owner.can_undo ? '' : 'disabled'}>Undo</button>
+        <button class="btn" id="h-owner-clear" ${ownerDoc ? '' : 'disabled'}>Clear</button></div>
+      <p class="dim" style="margin:0 0 6px">What you told us that the sensors cannot know. The previous version stays available for reference and undo.</p>
+      ${houseEditing === 'owner' ? editor('h-owner-text', ownerDoc, 'h-save-owner', 'Save manual edit')
+        : ownerDoc ? `<div class="md">${md(ownerDoc)}</div>` : '<p class="dim">Nothing yet: write your raw input and press Update.</p>'}
+      ${changes}
+      ${owner.can_undo ? `<details style="margin-top:6px"><summary>Previous owner's description (for reference and undo)</summary>
+        ${owner.previous ? `<div class="card md" style="margin-top:8px">${md(owner.previous)}</div>` : '<p class="dim">(the previous version was empty)</p>'}</details>` : ''}
+    </div>
+    <div class="card">
+      <div class="bar" style="margin:0 0 6px"><h3 class="sec" style="margin:0">2 · House description</h3>${doc && doc.description ? (d ? '<span class="pill" style="color:var(--warn);border-color:var(--warn)">draft</span>' : '<span class="pill store">accepted</span>') : ''}
+        ${d && houseEditing !== 'description' ? '<button class="btn" id="h-edit-d" style="margin-left:auto">Edit</button>' : ''}</div>
+      <p class="dim" style="margin:0 0 6px">Built from your description and the sensor names, parameters and data. Accept it when it is right.</p>
+      ${houseEditing === 'description' && d ? editor('h-text', d.description_md || '', 'h-save', 'Save in the draft')
+        : doc && doc.description ? `<div class="md">${md(doc.description)}</div>` : '<p class="dim">No house description yet.</p>'}
+    </div>
+    ${d && doc.unknown_ids && doc.unknown_ids.length ? `<div class="card" style="border-color:var(--warn);margin-top:10px"><strong class="warn">The text names ${doc.unknown_ids.length} signal id(s) that do not exist</strong>
+      <div class="mono" style="margin-top:4px">${doc.unknown_ids.map(esc).join('<br>')}</div><p class="dim" style="margin:6px 0 0">Correct them with Edit, or create the house description again.</p></div>` : ''}
+    ${d && doc.questions && doc.questions.length ? `<h3 class="sec">Questions for you</h3><div class="card"><ol>${doc.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol>
+      <p class="dim" style="margin:6px 0 0">Answer them in your raw input, press Update, then create the house description again.</p></div>` : ''}
+    ${d && doc.recommendations && doc.recommendations.length ? `<h3 class="sec">Recommendations</h3>${rows(doc.recommendations, (r) => `<tr>
+      <td class="${r.priority === 'high' ? 'warn' : 'dim'}">${esc(r.priority)}</td><td>${r.kind === 'existing_signal' ? 'use existing' : 'new sensor'}</td>
+      <td>${r.signal ? chips([r.signal]) + ' ' : ''}${esc(r.what)}</td><td class="dim">${esc(r.why)}</td></tr>`)}` : ''}
+    ${doc && doc.description ? `<details style="margin-top:12px"><summary>Machine model: ${(model.systems || []).length} systems, ${(model.relations || []).length} relations, ${(model.checks || []).length} checks</summary>
       <h3 class="sec">Relations</h3>${rows(model.relations, (r) => `<tr><td><span class="pill">${esc(r.type)}</span></td><td>${chips(r.signals)}</td><td>${esc(r.condition)}</td><td>${esc(r.expectation)}<div class="dim">${esc(r.why)}</div></td></tr>`)}
       <h3 class="sec">Checks</h3>${rows(model.checks, (c) => `<tr><td class="${c.severity === 'alarm' ? 'err' : c.severity === 'warning' ? 'warn' : 'dim'}">${esc(c.severity)}</td><td>${esc(c.name)}</td><td>${chips(c.signals)}</td><td>${esc(c.condition)}</td></tr>`)}
-    </details>`;
+    </details>` : ''}`;
+  if ($('#h-edit-owner')) $('#h-edit-owner').addEventListener('click', () => { houseEditing = 'owner'; loadHouse(); });
+  if ($('#h-edit-d')) $('#h-edit-d').addEventListener('click', () => { houseEditing = 'description'; loadHouse(); });
+  if ($('#h-save-owner')) $('#h-save-owner').addEventListener('click', async () => {
+    try { await api('/api/house/owner', { method: 'PUT', body: JSON.stringify({ text: $('#h-owner-text').value }) });
+          houseEditing = null; houseLastChanges = []; toast("Owner's description saved.", 4000); loadHouse(); }
+    catch (err) { toast(err.message, 5000); }
+  });
+  if ($('#h-save')) $('#h-save').addEventListener('click', async () => {
+    try { await api('/api/house/draft', { method: 'PUT', body: JSON.stringify({ description: $('#h-text').value }) });
+          houseEditing = null; toast('House description saved in the draft.', 4000); loadHouse(); }
+    catch (err) { toast(err.message, 5000); }
+  });
+  if ($('#h-cancel')) $('#h-cancel').addEventListener('click', () => { houseEditing = null; loadHouse(); });
+  if ($('#h-owner-clear')) $('#h-owner-clear').addEventListener('click', async () => {
+    if (!confirm("Clear the owner's description? The previous version stays available for undo.")) return;
+    try { await api('/api/house/owner/clear', { method: 'POST' }); houseLastChanges = [];
+          toast("Owner's description cleared."); loadHouse(); }
+    catch (err) { toast(err.message, 5000); }
+  });
+  if ($('#h-owner-undo')) $('#h-owner-undo').addEventListener('click', async () => {
+    try { await api('/api/house/owner/undo', { method: 'POST' }); houseLastChanges = [];
+          toast("Restored the previous owner's description."); loadHouse(); }
+    catch (err) { toast(err.message, 5000); }
+  });
 }
-$('#h-input').addEventListener('input', () => {
-  $('#h-update').disabled = !llm.house || !$('#h-input').value.trim();
-});
-$('#h-input-save').addEventListener('click', async () => {
-  try { await api('/api/house/input', { method: 'PUT', body: JSON.stringify({ text: $('#h-input').value }) }); $('#h-input-msg').textContent = 'Saved.'; }
-  catch (err) { $('#h-input-msg').textContent = err.message; }
+$('#h-input').addEventListener('input', () => { $('#h-update').disabled = !houseCanAsk() || !houseInputReady(); });
+$('#h-input-clear').addEventListener('click', () => {
+  $('#h-input').value = ''; $('#h-update').disabled = !houseCanAsk() || !houseInputReady(); $('#h-input').focus();
 });
 $('#h-update').addEventListener('click', async () => {
   const text = $('#h-input').value;
-  if (!text.trim()) { toast('Write your input first.'); return; }
-  $('#h-update').disabled = true; $('#h-msg').textContent = 'Updating… a minute or more with a strong model.';
+  if (!text.trim() && !houseInputReady()) { toast('Write what to add or change.'); return; }
+  $('#h-update').disabled = true; $('#h-msg').className = 'dim';
+  $('#h-msg').textContent = 'Updating the owner\'s description… a minute or more with a strong model.';
   try {
-    const r = await api('/api/house/update', { method: 'POST', body: JSON.stringify({ text }) });
-    toast(r.notes ? `Draft updated: ${r.notes}` : 'Draft updated.', 5000);
-  } catch (err) { $('#h-msg').textContent = err.message; }
+    const r = await withLlm(() => api('/api/house/owner/update', { method: 'POST', body: JSON.stringify({ text, ...houseModelChoice() }) }));
+    houseLastChanges = r.changes || [];
+    $('#h-input').value = ''; $('#h-input-msg').textContent = 'not saved';
+    $('#h-msg').textContent = '';
+    toast(houseLastChanges.length ? `Owner's description updated (${houseLastChanges.length} change(s)).` : "Owner's description updated.", 5000);
+  } catch (err) { $('#h-msg').className = 'err'; $('#h-msg').textContent = err.message; }
   loadHouse();
 });
-$('#h-clear').addEventListener('click', async () => {
-  if (!confirm('Clear the draft? Your input is kept and the previous version stays available for undo.')) return;
-  try { await api('/api/house/clear', { method: 'POST' }); toast('Draft cleared.'); loadHouse(); }
+// The model for the owner update and the house description: Settings → LLM (task "house") by default.
+let housePicker = null, houseDefault = { provider: '', model: '' };
+async function houseModelPicker() {
+  if (housePicker) return;
+  const st = await api('/api/settings');
+  const t = st.tasks.find((x) => x.task === 'house') || {};
+  houseDefault = { provider: t.provider || '', model: t.model || '' };
+  const note = () => {
+    const own = housePicker && (housePicker.provider !== houseDefault.provider || housePicker.model !== houseDefault.model);
+    $('#h-model-note').innerHTML = own ? `for the next update and house description (Settings → LLM keeps <span class="mono">${esc(houseDefault.model || 'none')}</span>)
+        <a href="#" id="h-model-reset">back to the default</a>` : 'the default from Settings → LLM';
+    const r = $('#h-model-reset');
+    if (r) r.onclick = (e) => { e.preventDefault(); housePicker = null; $('#h-model').innerHTML = ''; houseModelPicker(); };
+    $('#h-generate').disabled = !houseCanAsk();
+    $('#h-update').disabled = !houseCanAsk() || !houseInputReady();
+  };
+  housePicker = modelPicker($('#h-model'), st.providers, houseDefault.provider, houseDefault.model, note);
+  note();
+}
+function houseModelChoice() {
+  if (!housePicker || !housePicker.model) return {};
+  const same = housePicker.provider === houseDefault.provider && housePicker.model === houseDefault.model;
+  return same ? {} : { provider: housePicker.provider, model: housePicker.model };
+}
+async function generateHouse() {
+  for (const b of ['#h-generate', '#h-update']) $(b).disabled = true;
+  const choice = houseModelChoice();
+  $('#h-msg').className = 'dim';
+  $('#h-msg').textContent = 'Building the house description from your description and the sensors… a minute or more.'
+    + (choice.model ? ` (model ${choice.model})` : '');
+  try {
+    await withLlm(() => api('/api/house/generate', { method: 'POST', body: JSON.stringify(houseModelChoice()) }));
+    $('#h-msg').textContent = ''; toast('House description draft ready.');
+  } catch (err) { $('#h-msg').className = 'err'; $('#h-msg').textContent = err.message; }
+  houseEditing = null; loadHouse();
+}
+$('#h-generate').addEventListener('click', generateHouse);
+$('#h-accept').addEventListener('click', async () => {
+  if (!confirm("Accept this draft? The house description and the owner's description are archived together.")) return;
+  try { const r = await api('/api/house/accept', { method: 'POST', body: '{}' });
+        toast(`Accepted and archived (${r.archived}).`); houseEditing = null; loadHouse(); }
   catch (err) { toast(err.message, 5000); }
 });
-$('#h-undo').addEventListener('click', async () => {
-  try { await api('/api/house/undo', { method: 'POST' }); toast('Restored the previous version.'); loadHouse(); }
-  catch (err) { toast(err.message, 5000); }
+$('#h-archive').addEventListener('change', async (e) => {
+  if (!e.target.value) { houseEditing = null; loadHouse(); return; }
+  try {
+    const a = await api(`/api/house/archive?stamp=${encodeURIComponent(e.target.value)}`);
+    houseEditing = 'archive';
+    $('#h-body').innerHTML = `<div class="bar"><button class="btn" id="h-back">Back to current</button>
+        <span class="dim">Archived version ${esc(a.stamp)}${a.review && a.review.model_name ? ` (${esc(a.review.model_name)})` : ''}.</span></div>
+      ${a.knowledge ? `<h3 class="sec">Owner's description at that time</h3><div class="card md">${md(a.knowledge)}</div>` : ''}
+      <h3 class="sec">House description</h3><div class="card md">${md(a.description)}</div>
+      ${a.review && a.review.questions && a.review.questions.length ? `<h3 class="sec">Questions at that time</h3><div class="card"><ol>${a.review.questions.map((q) => `<li>${esc(q)}</li>`).join('')}</ol></div>` : ''}`;
+    $('#h-back').addEventListener('click', () => { houseEditing = null; loadHouse(); });
+  } catch (err) { toast(err.message, 5000); }
+  e.target.value = '';
 });
 
 let settingsView = null;
@@ -1621,7 +1738,7 @@ async function refresh() {
     await loadStatus();
     if (view === 'signals' && !$('#edit').open) { await loadProposals(); await loadSignals(); }
     if (view === 'log') await loadLog();
-    if (view === 'house') await loadHouse();
+    if (view === 'house' && !houseEditing) await loadHouse();
     if (view === 'alerts') await loadAlerts();
     if (view === 'agent') await loadAgent();
     if (view === 'library') await loadLibrary();

@@ -115,25 +115,27 @@ def create_app(service: Service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    # --- the house description draft ------------------------------------------
+    # --- the owner's description and the house description --------------------
+    def house_client(body: dict | None):
+        body = body or {}
+        if not body.get("model"):                # the House tab's own choice; default: the task's settings
+            return None
+        client = service.settings.client("house", str(body.get("provider") or ""), str(body["model"]))
+        if client is None:
+            raise HTTPException(400, f"provider {body.get('provider')!r} is not configured in .env")
+        return client
+
     @app.get("/api/house")
     def house():
         return service.house()
 
-    @app.put("/api/house/input")
-    def save_user_input(text: str = Body(..., embed=True)):
-        service.save_user_input(text)
-        return {"ok": True}
-
-    @app.post("/api/house/update")
-    async def update_house(text: str | None = Body(None, embed=True)):
-        def run():
-            if text is not None:
-                service.save_user_input(text)      # the input is saved with the draft
-            return service.update_house()
-
+    @app.post("/api/house/owner/update")
+    async def update_owner(body: dict | None = Body(None)):
+        body = body or {}
+        client = house_client(body)
         try:
-            return await run_in_threadpool(run)
+            return await run_in_threadpool(
+                lambda: service.update_owner(str(body.get("text") or ""), client=client))
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
         except LlmUnavailable:
@@ -141,16 +143,54 @@ def create_app(service: Service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    @app.post("/api/house/clear")
-    def clear_house():
-        return service.clear_house()
+    @app.put("/api/house/owner")
+    def save_owner(text: str = Body(..., embed=True)):
+        return service.save_owner(text)
 
-    @app.post("/api/house/undo")
-    def undo_house():
+    @app.post("/api/house/owner/clear")
+    def clear_owner():
+        return service.clear_owner()
+
+    @app.post("/api/house/owner/undo")
+    def undo_owner():
         try:
-            return service.undo_house()
+            return service.undo_owner()
         except FileNotFoundError as exc:
             raise HTTPException(404, "nothing to undo") from exc
+
+    @app.post("/api/house/generate")
+    async def generate_house(body: dict | None = Body(None)):
+        client = house_client(body)
+        try:
+            return await run_in_threadpool(lambda: service.generate_house(client))
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except LlmUnavailable:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, f"LLM request failed: {exc}") from exc
+
+    @app.put("/api/house/draft")
+    def edit_draft(body: dict = Body(...)):
+        try:
+            service.edit_draft(body.get("description"))
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no draft") from exc
+        return {"ok": True}
+
+    @app.post("/api/house/accept")
+    def accept_house(body: dict | None = Body(None)):
+        try:
+            return {"archived": service.accept_house()}
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "no draft to accept") from exc
+
+    @app.get("/api/house/archive")
+    def archived(stamp: str = Query(...)):
+        try:
+            return service.archived(stamp)
+        except KeyError as exc:
+            raise HTTPException(404, "no such archived version") from exc
 
     # --- mixer model: identification, proposals, sending, rollback ----------------------
     @app.get("/api/parameters")

@@ -1,8 +1,8 @@
 """Move an observer's state (not its recorded data) to another machine.
 
 The state is what makes this observer know this house: the registry (which
-signals are stored and what they mean), the catalog, the house
-description (draft, input, previous version, model),
+signals are stored and what they mean), the catalog, the owner's description
+(current and previous), the house description (draft, accepted version, model),
 the house part of the library (items, history, packs, audit flags, test
 results), the per-task model settings and the house context from
 config.yaml. Not included: secrets (.env), machine-specific settings

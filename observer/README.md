@@ -22,7 +22,7 @@ send later is a validated controller parameter set (plan:
 | --- | --- |
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
-| `docker-compose.dev.yml`, scripts | `house/`: description draft, your input, the previous version, model |
+| `docker-compose.dev.yml`, scripts | `house/`: owner's description (current and previous), house description draft, accepted version and model |
 | `observer/sandbox_lib/`: the `obs` library for sandboxed code (tools and skills: the separate observer-library repository) | `data/`: catalog, settings, proposals, log |
 | | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, their history, imported packs, audit flags, test results |
 | | `sandbox/venv`: the sandbox's Python environment |
@@ -123,28 +123,32 @@ write a draft description in your own words and press **Polish with LLM**: the
 model rewrites it using the signal's metadata, unit, rule and neighbouring
 signals, and says what it changed; you review and save.
 
-## House description (draft)
+## House description
 
-* `description.md`: the current draft (overview, boiler and DHW, each circuit,
-  rooms, outdoor, controller and devices, how the parts interact, uncertain
-  points);
-* `input.md`: the owner's input: corrections, missing facts and instructions.
-  Always saved;
-* `previous.md`: the draft before the last update or clear, for undo and as a
-  reference in the input;
-* `model.yaml`: the same understanding in machine form (systems, points,
-  relations, checks, gaps), read by analysis and anomaly checks.
+The House tab has two parts:
 
-**Cycle:** write what should change in **your input** → *Update draft* merges
-the input into the current draft (with the previous version available as a
-reference, and the input authoritative on conflicts) and saves the result →
-*Clear draft* starts over while keeping the previous version → *Undo last
-update* swaps back. Signal ids named in the text that do not exist are flagged
-above the draft. No review is stored: the draft and the input are the house's
-operational data.
+1. **The owner's description** (`house/knowledge.md`): the facts the sensors
+   cannot know. Write a raw input (corrections, missing facts, answers to the
+   questions, comfort targets, changes in the house) and press *Update owner's
+   description*. The LLM merges it into the current version; the input wins on
+   conflicts. The version before the update stays in
+   `house/knowledge_previous.md` for *Undo* and as a reference (for example
+   "bring back the radiators from the previous version"). The actual version
+   can also be edited by hand. *Clear* empties it and keeps the previous
+   version. **The raw input is not stored.**
+2. **The house description** (`house/description.md` and `house/model.yaml`):
+   built from the owner's description and the sensor names, parameters and
+   data. *Create house description* puts a draft in
+   `data/house_draft.yaml`; you can edit it, then *Accept and archive* makes it
+   the accepted version. Every accepted version is kept in
+   `house/archive/<time>/` with the owner's description and the questions of
+   that time. Signal ids named in the draft that do not exist are flagged
+   above it.
 
-The quality depends on the model: the house description benefits from a
-strong reasoning model (Settings).
+`model.yaml` is the same house description in machine form (systems, points,
+relations, checks, gaps), read by analysis and anomaly checks. The quality
+depends on the model: the house description benefits from a strong reasoning
+model (Settings).
 
 ## LLM providers and models
 

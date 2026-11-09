@@ -45,5 +45,5 @@ def events(start="-24h", stop="now", min_severity=0, text="", limit=500):
 
 
 def house():
-    """The house description draft, the owner's input and the machine model."""
+    """The house description, the owner's description (current and previous) and the machine model."""
     return call("house")

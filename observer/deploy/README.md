@@ -92,7 +92,7 @@ unchanged (both names are links in the install folder).
 **Every later update** (from the install folder):
 
 ```bash
-~/heatpumpsn-observer/app/scripts/update.sh heatpumpsn-observer-0.7.0.tar.gz
+~/heatpumpsn-observer/app/scripts/update.sh heatpumpsn-observer-0.7.1.tar.gz
 ```
 
 It builds the new images first (a failing build changes nothing), keeps the
