@@ -222,10 +222,12 @@ Nothing was pushed to the controller.
   development phase ends and restricts network access to the sites instead.
   This data directory has no `OBSERVER_PORTAL_PASSWORD`, and the portal is
   bound to `127.0.0.1`; set one before exposing it.
-* **Uploads prepared, nothing sent:** the S2 needs the firmware image (retry
-  strikes + unblock API) and the filesystem image (`app.js.gz`); a parameter
-  push would use `cmd/mpc/params` and needs `parameters.push_enabled` plus
-  `OBSERVER_CONTROLLER_SECRET`. Wait for the owner's explicit go.
+* **Controller updated:** the owner gave the go and the S2 received the
+  firmware and portal files on 2026-11-09 (18:40 / 18:44) from
+  `localhost:30080`; it now publishes `retryBlocked`, `retryStrikes` and
+  `retryStrikeLimit`, which this observer records. Nothing was pushed from
+  the observer; a parameter push would use `cmd/mpc/params` and needs
+  `parameters.push_enabled` plus `OBSERVER_CONTROLLER_SECRET`.
 
 ## 3. Working on it
 

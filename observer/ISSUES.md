@@ -50,7 +50,9 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    its proposal `edd054c886` has a **not recommended** closed-loop backtest
    (twice the motor starts/reversals), so it was not approved and nothing was
    sent. The current parameters stay until a proposal is recommended or the
-   owner accepts one explicitly.
+   owner accepts one explicitly. The controller side is ready: the S2 got the
+   2026-11-09 firmware and portal by OTA (the retry-block banner, the unblock
+   API and the `retry*` status fields are live); still nothing was pushed.
 4. **Boiler setpoint history**: `ems-esp/boiler_data#heatingtemp` was
    `store: false` in the data directory's registry, so the 70 -> 60 °C change
    on 2026-11-08 has no database history. It is set to `store: true` since
