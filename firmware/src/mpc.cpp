@@ -176,9 +176,18 @@ void publish_status(float compute_ms) {
 void log_transition(uint8_t from, uint8_t to, const Status& st) {
   char detail[96];
   if (to == MODE_HOMING) {
-    snprintf(detail, sizeof(detail), "MPC anomaly: %s; homing mixer, then cautious control",
-             anomaly_name(st.anomaly));
-    web::log_event(2, 1340, detail);
+    if (st.retry_blocked) {
+      snprintf(detail, sizeof(detail),
+               "MPC anomaly: %s; automatic retries blocked after %u failures, homing mixer",
+               anomaly_name(st.anomaly), static_cast<unsigned>(st.retry_strikes));
+      web::log_event(2, 1341, detail);
+    } else {
+      snprintf(detail, sizeof(detail),
+               "MPC anomaly: %s (%u/%u retry failures); homing mixer, then cautious control",
+               anomaly_name(st.anomaly), static_cast<unsigned>(st.retry_strikes),
+               static_cast<unsigned>(st.retry_strike_limit));
+      web::log_event(2, 1340, detail);
+    }
   } else if (from == MODE_CAUTIOUS && to == MODE_MPC) {
     snprintf(detail, sizeof(detail), "MPC resumed after stable cautious control (retry %u)",
              static_cast<unsigned>(st.retries));
@@ -536,6 +545,9 @@ void status_json(JsonObject out, bool with_trajectory) {
   out["homing"] = homing;
   out["modeForS"] = static_cast<uint32_t>(now_s - st.mode_since_s);
   out["stableS"] = static_cast<uint32_t>(st.stable_s);
+  out["retryBlocked"] = st.retry_blocked;
+  out["retryStrikes"] = st.retry_strikes;
+  out["retryStrikeLimit"] = st.retry_strike_limit;
   out["bias"] = st.bias;
   out["tincWater"] = st.tinc_water;
   out["modelFwd"] = st.model_fwd;

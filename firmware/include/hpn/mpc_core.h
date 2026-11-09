@@ -133,6 +133,11 @@ struct Status {
   uint32_t anomalies;
   double mode_since_s;
   float stable_s;           // cautious: time within band (exit criterion)
+  // Automatic cautious -> MPC retries stop after kRetryStrikeLimit failures of
+  // the same anomaly shortly after a retry. Only a mode request clears it.
+  bool retry_blocked;
+  uint8_t retry_strikes;        // consecutive failures of the same anomaly
+  uint8_t retry_strike_limit;
 };
 
 class Controller {
@@ -207,6 +212,9 @@ class Controller {
   double c_last_move_s_ = 0.0;
   double c_last_close_s_ = -1e9;
   bool retry_blocked_ = false;
+  uint8_t retry_strikes_ = 0;
+  uint8_t retry_anomaly_ = AN_NONE;
+  void sync_retry_status();
 };
 
 }  // namespace mpc

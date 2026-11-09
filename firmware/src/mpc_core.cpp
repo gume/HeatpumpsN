@@ -54,9 +54,15 @@ constexpr float kCautiousCloseBand = 1.0f;
 constexpr float kCautiousHotK = 2.5f;
 constexpr float kCautiousSupplyK = 3.0f;
 constexpr float kCautiousStableBand = 1.5f;
-constexpr float kCautiousStableS = 1800.0f;
+// Log check (6 days, 8 anomalies): every overshoot hit 2-5 min after the floor
+// pump started, not after the retry itself, so 20 min of stable cautious
+// control is enough to prove the loop is quiet before handing it back.
+constexpr float kCautiousStableS = 1200.0f;
 constexpr float kRetryAfterAnomalyS = 3600.0f;
 constexpr float kRetryProbationS = 7200.0f;
+// Failures of the same anomaly this many times within the probation window and
+// the automatic retries stop until the operator resumes MPC explicitly.
+constexpr uint8_t kRetryStrikeLimit = 3;
 
 // Identified mixing law (Step 4 v2) and timing.
 constexpr float kDefaultKnots[kKnots] = {0.0f, 25.0f, 50.0f, 52.5f, 55.0f, 57.5f,
@@ -168,6 +174,7 @@ bool validate(const ParamSet& p, const char** err) {
 Controller::Controller() : p_(default_params(SC_FLOOR)) {
   memset(&st_, 0, sizeof(st_));
   st_.mode = MODE_MPC;
+  sync_retry_status();
   memset(ring_, 0, sizeof(ring_));
   memset(plan_pred_, 0, sizeof(plan_pred_));
 }
@@ -203,10 +210,20 @@ void Controller::enter(uint8_t mode, double now_s) {
   }
 }
 
+void Controller::sync_retry_status() {
+  st_.retry_blocked = retry_blocked_;
+  st_.retry_strikes = retry_strikes_;
+  st_.retry_strike_limit = kRetryStrikeLimit;
+}
+
 void Controller::request_mode(uint8_t mode, double now_s) {
   switch (mode) {
     case MODE_MPC:
+      // An explicit request is the operator's unblock: start with a clean slate.
       retry_blocked_ = false;
+      retry_strikes_ = 0;
+      retry_anomaly_ = AN_NONE;
+      sync_retry_status();
       st_.anomaly = AN_NONE;
       reset_model();
       enter(MODE_MPC, now_s);
@@ -228,8 +245,18 @@ void Controller::force_anomaly(uint8_t anomaly, double now_s) {
   st_.anomaly = anomaly;
   st_.anomalies++;
   if (now_s - retry_s_ < kRetryProbationS) {
-    retry_blocked_ = true;   // failed again soon after an automatic retry
+    // A failure this soon after an automatic retry means the retry did not fix
+    // anything. Count consecutive failures of the same anomaly; a different one
+    // is a new problem and starts its own count.
+    retry_strikes_ =
+        (retry_strikes_ > 0 && anomaly == retry_anomaly_) ? retry_strikes_ + 1 : 1;
+    retry_anomaly_ = anomaly;
+    if (retry_strikes_ >= kRetryStrikeLimit) retry_blocked_ = true;
+  } else {
+    retry_strikes_ = 0;   // failed long after the retry, not the same problem
+    retry_anomaly_ = AN_NONE;
   }
+  sync_retry_status();
   last_anomaly_s_ = now_s;
   enter(MODE_HOMING, now_s);
 }
@@ -492,6 +519,13 @@ Command Controller::cautious(const Inputs& in) {
 
 Command Controller::tick(const Inputs& in) {
   st_.scenario = in.scenario;
+  // A retry that survived the probation window fixed the problem: clear the
+  // strike count. Once blocked, only an explicit mode request clears it.
+  if (!retry_blocked_ && retry_strikes_ > 0 && in.now_s - retry_s_ >= kRetryProbationS) {
+    retry_strikes_ = 0;
+    retry_anomaly_ = AN_NONE;
+  }
+  sync_retry_status();
   if (last_tick_s_ >= 0.0 && in.now_s - last_tick_s_ > kResumeGapS) {
     // Control was suspended (DHW, flush, no demand): the plan is stale.
     plan_len_ = 0;
