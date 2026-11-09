@@ -7,7 +7,16 @@ the owner's "go", bench off.
 
 ## To do
 
-Nothing open in this group. Done and on the S2 since 2026-11-01 (commit 9fcb58c):
+1. **Upload the 2026-11-09 firmware + portal** (waiting for the owner's
+   explicit go). It brings the three-strike MPC retry block (20 min stable
+   run), the non-dismissible blocked-retry banner and the **Unblock and
+   resume MPC** button. Checklist and images in
+   [`HANDOVER.md`](HANDOVER.md) §2.2. Nothing is on the S2 yet.
+2. **Owner's password decision** (2026-11-09): the factory `admin/admin`
+   stays during development; the site's network access is restricted instead.
+   Revisit before the development phase ends.
+
+Done and on the S2 since 2026-11-01 (commit 9fcb58c):
 
 * F1 floor setpoint 15–50 °C, 0.5 K grid (HA discovery, MQTT command snapped
   to 0.5, portal default, saved values clamped on load);
@@ -36,5 +45,6 @@ Nothing open in this group. Done and on the S2 since 2026-11-01 (commit 9fcb58c)
 9. `lastWatchdog` in `/api/status` keeps the last withhold across resets (the
    old false alarm until a new one replaces it).
 10. **S2 upgrade checklist leftovers** (`docs/esphome-upgrade.md`): change the
-    factory passwords (5), verify sensor roles while heating (6.2), relay
-    counter preset (7), configuration export as backup (8).
+    factory passwords (5; deferred by the owner until development ends, see
+    *To do* above), verify sensor roles while heating (6.2), relay counter
+    preset (7), configuration export as backup (8).

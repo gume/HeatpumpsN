@@ -1,7 +1,7 @@
 # HeatpumpsN controller firmware — handover
 
 Entry point for continuing the controller work (firmware, portal, floor
-simulator, Home Assistant side) in a new session. Updated 2026-11-01.
+simulator, Home Assistant side) in a new session. Updated 2026-11-09.
 Open work is in [`ISSUES.md`](ISSUES.md). The observer has its own handover:
 [`../observer/HANDOVER.md`](../observer/HANDOVER.md); the old-system data
 analysis too: [`../analysis/handover.md`](../analysis/handover.md).
@@ -85,7 +85,9 @@ Upgrade checklist (`docs/esphome-upgrade.md`):
 
 - [x] 1–4: ESPHome OTA, maintenance page, partition migration, portal files
 - [x] relays and LEDs checked; MQTT connected to `mqtt.home`; temperatures plausible; heating runs
-- [ ] 5: change the factory passwords (still admin/admin; tools below assume them)
+- [ ] 5: change the factory passwords (still admin/admin; tools below assume
+      them). **Owner's decision 2026-11-09:** deferred until development ends;
+      the site's network access is restricted in the meantime.
 - [ ] 6.2: verify the sensor roles while heating
 - [ ] 7: relay counter preset (`esp32s2_counter_preset`, ESPHome values 1:1)
 - [ ] 8: configuration export as backup
@@ -102,6 +104,42 @@ Facts about this board:
   `freeHeap`, `minFreeHeap`, `largestFreeBlock` in `/api/status`
   (last seen: ~41 KB free, low-water mark ~35 KB).
 - Controller log streaming to MQTT is on, so the observer records its events.
+
+### 2.2 Pending upload (2026-11-09), not on the S2 yet
+
+Built from `7eb5eaa` (firmware) and the portal files; **no upload has been
+made**. The owner will start it; an OTA firmware + filesystem upload, or a
+parameter-only push, waits for an explicit go.
+
+* **MPC retry handling:**
+  * a failed automatic retry no longer blocks MPC for good: the same anomaly
+    is counted, a different one starts a new count, and the third failure
+    within the 2 h probation blocks it (event 1340 carries the count);
+  * a retry that survives the probation clears the count;
+  * cautious stable run 30 -> **20 min**; the log check behind it is in
+    `docs/predictive-mixer.md` §3 (6 of 8 overshoots 3.5-4.9 min after the
+    floor pump start; two late, one 87 s after a retry);
+  * status publishes `retryBlocked`, `retryStrikes`, `retryStrikeLimit`.
+* **Portal:** a permanent warning banner on the dashboard while retries are
+  blocked (not dismissible) and an **Unblock and resume MPC** button
+  (`POST /api/mpc/unblock`, event 1343). The mixer card shows the counter.
+* **Images:** `pio run -e esp32s2` and `-t buildfs`; `data/js/app.js.gz` was
+  regenerated (the filesystem carries only the gzip copy). Latest builds:
+  RAM 23.5 %, flash 75.0 %.
+* **Upload checklist when the owner says go:**
+  1. pumps/boiler in a safe state, or explicit intent (OTA carries the same
+     risk as flashing; rollback is available);
+  2. `HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py
+     .pio/build/esp32s2/firmware.bin localhost:30081`;
+  3. the same with `.pio/build/esp32s2/littlefs.bin` for the portal (the
+     admin-requested reboot confirms the new image without waiting 2 min);
+  4. check `/api/status` for `retryBlocked`/`retryStrikes` and the dashboard
+     banner/button; the lights and mixer state as after any flash.
+* **Parameter-only path:** the observer sends approved sets to
+  `cmd/mpc/params`; it is off (`parameters.push_enabled`) and no set is
+  approved. The 2026-11-09 re-identification says the current mixer
+  parameters stay (backtest not recommended), so there is nothing to push
+  yet.
 
 ## 3. Repository map (controller side)
 
