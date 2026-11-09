@@ -101,13 +101,14 @@ backtests. The setpoint itself is not in the database: see section 6.
 * **Slow log is now stored.** 55 k samples, full span above; the collector
   hot-reloads `registry.yaml`, so no restart is needed after a Signals edit.
   This is the input the identification needs.
-* **`ems-esp/boiler_data#heatingtemp` (the boiler heating-water setpoint) is
-  still `store: false`** in the data directory's `registry.yaml` (last modified
-  2026-11-03). The catalog holds its current value (60 °C) and a count, but the
-  database has no history after 2026-11-01 16:49, so the exact 70 -> 60 time
-  cannot be read back. If the owner set it to store in the Signals tab, the
-  change did not reach this file; set it to `store: true` to record the next
-  change. The split above therefore uses the owner's date, not the signal.
+* **`ems-esp/boiler_data#heatingtemp` (the boiler heating-water setpoint) was
+  `store: false`** in the data directory's `registry.yaml` (last modified
+  2026-11-03), so the database had no history after 2026-11-01 16:49 and the
+  exact 70 -> 60 time cannot be read back. The owner's store request did not
+  reach the file; it is now set to `store: true` (2026-11-09 15:58, the
+  collector reloaded it and stores 60 °C from then on). The split above
+  therefore uses the owner's date, not the signal; the next setpoint change
+  will be visible.
 * The development InfluxDB was down for part of 2026-11-09. The collector kept
   retrying and backfilled when it came back; the slow log is complete to
   15:40. Expect gaps around such outages and check the span before a run.
@@ -138,8 +139,8 @@ three and then waits for the operator.
 1. Keep the current `floor` parameters; do not approve `edd054c886`.
 2. Optionally dismiss the proposal in Parameters if it is not wanted as a
    record.
-3. Set `ems-esp/boiler_data#heatingtemp` to `store: true` if the setpoint
-   history matters (Signals tab).
+3. `ems-esp/boiler_data#heatingtemp` is set to `store: true` now (done); its
+   history starts 2026-11-09 15:59.
 4. Re-identify after several days at 60 °C; compare all/post-change data and
    the backtest verdicts.
 5. Nothing to upload for this finding: the slow-log/state fallback fix and the

@@ -51,10 +51,10 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    (twice the motor starts/reversals), so it was not approved and nothing was
    sent. The current parameters stay until a proposal is recommended or the
    owner accepts one explicitly.
-4. **Boiler setpoint history**: `ems-esp/boiler_data#heatingtemp` is
-   `store: false` in the data directory's registry (the 70 -> 60 °C change on
-   2026-11-08 has no database history). Set it to store and re-identify after
-   several days at 60 °C.
+4. **Boiler setpoint history**: `ems-esp/boiler_data#heatingtemp` was
+   `store: false` in the data directory's registry, so the 70 -> 60 °C change
+   on 2026-11-08 has no database history. It is set to `store: true` since
+   2026-11-09 15:58; re-identify after several days at 60 °C.
 5. **Old HA InfluxDB year**: copy it in once (read-only token) before HA's
    InfluxDB integration is removed.
 6. **EMS-ESP** (3.8.4): does not reconnect after a broker restart until

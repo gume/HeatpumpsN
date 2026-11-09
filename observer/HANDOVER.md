@@ -207,11 +207,12 @@ Nothing was pushed to the controller.
 * **Boiler setpoint 70 -> 60 °C on 2026-11-08:** pre-change data (33.8 h) says
   the current model is as good; post-change data (5.7 h) hints at a different
   law but is too short. Re-identify after several days at 60 °C.
-* **Storage gap:** `ems-esp/boiler_data#heatingtemp` (boiler heating-water
-  setpoint) is still `store: false` in this data directory's `registry.yaml`
-  (last modified 2026-11-03), so the 70 -> 60 change has no history in the
-  database (only the catalog's current value, 60). Set it to `store: true` if
-  the setpoint change should be visible next time.
+* **Storage gap, now closed:** `ems-esp/boiler_data#heatingtemp` (boiler
+  heating-water setpoint) was `store: false` in this data directory's
+  `registry.yaml` (last modified 2026-11-03), so the 70 -> 60 change has no
+  history in the database (only the catalog's current value, 60). It was set
+  to `store: true` on 2026-11-09 15:58 and the collector reloaded the registry;
+  history starts there. The exact 70 -> 60 time is not recoverable.
 * **Development portal restarted** 2026-11-09 15:22 with the current code
   (the collector kept running). InfluxDB `observer-influx-dev` was restarted
   after it was found down; the volume was not touched.
