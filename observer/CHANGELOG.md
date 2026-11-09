@@ -4,6 +4,33 @@ Releases are git tags `observer-v<version>` (the version in `pyproject.toml`).
 Each release has a deploy bundle `heatpumpsn-observer-<version>.tar.gz`
 (see `deploy/README.md`).
 
+## 0.7.0 - 2026-11-09
+
+The house description becomes a draft you change in steps. Update from 0.6.1:
+`~/heatpumpsn-observer/app/scripts/update.sh
+heatpumpsn-observer-0.7.0.tar.gz` (the collector keeps running). The house
+files in `data/house/` are read as they are: `notes.md` is the initial input
+until `input.md` is saved, and the accepted description becomes the draft.
+
+* House: the generate / accept / archive flow is replaced by a saved draft
+  (`description.md`) and a saved input (`input.md`). *Update draft* merges the
+  input into the draft through the house LLM task; the input wins on
+  conflicts, and `previous.md` stays available for undo and as a reference
+  (for example "bring back the radiators from the previous version").
+  *Clear draft* empties the draft but keeps the input and the previous
+  version; *Undo last update* swaps them back. No review or archive data is
+  stored.
+* House: `model.yaml` is saved with the draft, and signal ids named in the
+  text that do not exist are flagged above the draft.
+* Settings: the house task takes its model like every other task, so the
+  description can use a stronger model than signal descriptions.
+* Identification: a slow-log signal that was never stored no longer crashes
+  the job (`KeyError: 'pos'`); it counts as no data and falls back to the
+  published values.
+* Identification: when the published values are the source, only the valve
+  law is searched and the current delay and sensor lags are kept
+  (re-identifying on the smoothed values moved the timing implausibly).
+
 ## 0.6.1 - 2026-11-04
 
 Fixes for the move from 0.5.0 and an install guide. Coming from 0.5.0, use
