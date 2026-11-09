@@ -168,11 +168,10 @@ bucket was removed on the owner's request.)
   page showed is under *Messages* at the top (this browser tab only); the
   server's log is `<data dir>/logs/observer.log` (rotating, Settings → Log,
   `GET /api/log`), in the release `data/logs/observer.log`.
-* **Development portal runs old code:** the `serve --no-ingest` process was
-  started 2026-11-03 19:34, before the 0.6.0 portal changes (no `logs/`
-  folder in the data directory yet). Restart the portal (not the collector)
-  to see them. The 0.6.0 page was checked with the API and a script, **not
-  clicked through in a browser**: do that after the restart.
+* **Development portal:** restarted 2026-11-09 15:22 with the current code
+  (the collector kept running). The 0.6.0/0.6.1 page was checked with the API
+  and a script, **not clicked through in a browser**: worth doing in the next
+  session.
 * **Parameter path:** sending is off (`parameters.push_enabled` is not set in
   the data directory's config.yaml); no set has been sent to the real
   controller yet. The controller's slow log is being recorded; until enough
