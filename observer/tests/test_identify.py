@@ -136,3 +136,40 @@ def test_sending_needs_push_enabled(tmp_path):
     with pytest.raises(RuntimeError, match="disabled"):
         m.approve("p1")
     assert svc.mqtt.sent == [] and m._proposal("p1")["status"] == "proposed"
+
+
+class _Series:
+    def __init__(self, times, values):
+        self.times, self.values = times, values
+
+
+class _DataSource:
+    """Only the signals it is given; everything else has no rows, like a partial slow log."""
+
+    def __init__(self, out: dict):
+        self.out = out
+
+    def series(self, ids, start, stop="now", every="raw", agg="mean", limit=5_000_000):
+        return {k: v for k, v in self.out.items() if k in ids}
+
+
+def test_fetch_tolerates_a_missing_slow_signal():
+    """A slow-log signal with no rows must read as NaN, not crash with KeyError: 'pos'."""
+    import datetime as dt
+
+    base = dt.datetime(2026, 11, 3, tzinfo=dt.timezone.utc)
+    times = [base + dt.timedelta(seconds=I.DT * i) for i in range(30)]
+    data = _DataSource({
+        I.SIGNALS["inc"]: _Series(times, [50.0] * 30),
+        I.SIGNALS["ret"]: _Series(times, [30.0] * 30),
+        I.SIGNALS["fwd"]: _Series(times, [32.0] * 30),
+        # I.SIGNALS["pos"] deliberately absent
+    })
+    g = I.fetch(data, "-1h", "now", source="slow")
+    assert np.isnan(g["pos"]).all()
+    assert I.segments(g) == []
+
+
+def test_fetch_without_any_data_still_raises():
+    with pytest.raises(ValueError, match="no data"):
+        I.fetch(_DataSource({}), "-1h", "now", source="slow")

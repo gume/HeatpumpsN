@@ -127,10 +127,13 @@ class ParameterManager:
         sets = self.current_sets()
         if not sets:
             raise RuntimeError("the controller's parameter sets are not known yet (state/mpc/params/<set> not seen)")
-        g = identify.fetch(data, self.window, source="slow")
-        slow_hours = sum(s["hours"] for s in identify.segments(g))
+        try:
+            g = identify.fetch(data, self.window, source="slow")
+            slow_hours = sum(s["hours"] for s in identify.segments(g))
+        except ValueError:                              # the slow log has no rows at all yet
+            g, slow_hours = None, 0.0
         source = "slow"
-        if slow_hours < self.min_slow_hours:            # not enough exact inputs yet: the published values
+        if g is None or slow_hours < self.min_slow_hours:   # not enough exact inputs yet: the published values
             g = identify.fetch(data, self.window, source="state")
             source = "state"
         result = identify.identify(g, sets)

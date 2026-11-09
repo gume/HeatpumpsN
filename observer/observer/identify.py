@@ -75,9 +75,15 @@ def fetch(data_source, start: str = "-14d", stop: str = "now", source: str = "sl
     source "slow": the controller's slow log (exact model inputs); "state": the published state values."""
     signals = dict(SIGNALS) if source == "slow" else {**SIGNALS, **STATE_INPUTS}
     raw = data_source.series(list(signals.values()), start, stop, "10s", "mean", limit=5_000_000)
-    inv = {v: k for k, v in signals.items()}
-    series = {inv[s]: ([x.timestamp() for x in r.times], [float(y) if isinstance(y, (int, float)) else np.nan
-                                                          for y in r.values]) for s, r in raw.items()}
+    # Every requested name gets an entry: a signal with no rows in the range must read as
+    # "no data", not key the grid lookup (a missing slow-log signal made identification
+    # crash with KeyError: 'pos' instead of falling back to the published values).
+    series = {}
+    for name, sig in signals.items():
+        r = raw.get(sig)
+        series[name] = (([x.timestamp() for x in r.times],
+                         [float(y) if isinstance(y, (int, float)) else np.nan for y in r.values])
+                        if r is not None else ([], []))
     times = [t for ts, _ in series.values() for t in (ts[:1] + ts[-1:])]
     if not times:
         raise ValueError("no data for the mixer model in this range (is the controller's log streaming on?)")
