@@ -2,21 +2,40 @@
 
 Open work on the controller firmware, portal, simulator and Home Assistant
 side, to be handled later. Newest first within each group. Remember the
-working agreements in [`HANDOVER.md`](HANDOVER.md) §0: no S2 upload without
-the owner's "go", bench off.
+working agreements in [`HANDOVER.md`](HANDOVER.md) §0: no upload without the
+owner's explicit "go", and the only board is the live S2 (extra care).
 
 ## To do
 
-1. **Upload the 2026-11-09 firmware + portal** (waiting for the owner's
-   explicit go). It brings the three-strike MPC retry block (20 min stable
-   run), the non-dismissible blocked-retry banner and the **Unblock and
-   resume MPC** button. Checklist and images in
-   [`HANDOVER.md`](HANDOVER.md) §2.2. Nothing is on the S2 yet.
-2. **Owner's password decision** (2026-11-09): the factory `admin/admin`
+1. **Owner's password decision** (2026-11-09): the factory `admin/admin`
    stays during development; the site's network access is restricted instead.
    Revisit before the development phase ends.
+2. **Mixer parameters, the owner's return** (2026-11-09): the current set
+   stays; the owner will come back to it. The point to answer then is "if MPC
+   does not work with the current parameters there is no use in keeping
+   them". As of 2026-11-09 MPC does work (see below), so nothing was changed.
+   The observer's re-identification proposal `edd054c886` fits the held-out
+   slow log better (1.346 -> 0.801 K) but loses the closed-loop backtest
+   (~2x starts/reversals); it stays unapproved.
 
-Done and on the S2 since 2026-11-01 (commit 9fcb58c):
+Done and on the S2 since 2026-11-09 (uploaded 18:40 firmware, 18:44 portal,
+both from `7eb5eaa`; visit at `http://localhost:30080`):
+
+* three-strike MPC retry block with the 20 min cautious stable run, the
+  permanent blocked-retry banner and the **Unblock and resume MPC** button;
+* the boot homing of the mixer always raises `mix_no_response` for a moment
+  ("mixer commanded but the external encoder did not respond"); it clears when
+  the encoder responds and is warning-only. It is a recurring condition in the
+  logs, not caused by the upload. Retry/anomaly counters restart at 0.
+
+Evidence that MPC works with the current parameters (checked 2026-11-09
+before the upload): over 30 days the mode signal is only `mpc` or `cautious`
+(never `legacy`); the S2 had computed 10 008 plans and 4 888 triggers with
+`preferredMode: mpc`; of 9 anomalies and 8 retries every retry survived and
+MPC resumed. So the parameters are not the reason to replace the controller
+logic, and the owner's "no use to keep them" condition is not met yet.
+
+Done and on the S2 since 2026-11-01 (commit `9fcb58c`):
 
 * F1 floor setpoint 15–50 °C, 0.5 K grid (HA discovery, MQTT command snapped
   to 0.5, portal default, saved values clamped on load);

@@ -13,10 +13,13 @@ The owner's standing instructions; they override defaults.
 1. **No firmware or filesystem upload to the live S2 without an explicit
    "go"** from the owner for that specific upload. Build, test (host tests,
    simulator), report, then wait. A previous "go" does not carry over.
-2. **The bench ESP32 (`localhost:30080`) is switched off** and stays off unless
-   really necessary. If an update is risky (boot path, partitions, OTA, memory
-   layout, anything that could stop the S2 from booting or answering), say so
-   and ask for the bench instead of only asking for "go".
+2. **There is no bench controller any more** (2026-11-09): the only ESP32 is
+   the live S2 (legacy v0.1 board), reached at `http://localhost:30080` with
+   the same single web port as before. Everything beyond the host tests and the
+   floor simulator runs on the live plant, so **extra care is required**. If an
+   update is risky (boot path, partitions, OTA, memory layout, anything that
+   could stop the S2 from booting or answering), say what the risk is and what
+   the rollback path is before asking for "go".
 3. **No credentials in the repository**, including the ESPHome OTA password.
    Operational data of the installation stays out of git.
 4. Commit with the attribution line; **do not push** unless asked.
@@ -60,11 +63,13 @@ analyses everything but never commands the plant.
 
 ### 2.1 The live S2 (plant controller)
 
-Reached through a forward at `http://localhost:30081` (when the owner has it
-up). Firmware and portal files at commit `9fcb58c` (setpoint 15–50 °C,
-mixer relay runtime).
+The only controller since 2026-11-09 (the bench is gone). Reached through the
+owner's forward at `http://localhost:30080`; this is the legacy v0.1 LOLIN S2
+mini with one web port. Firmware and portal files were updated there on
+2026-11-09 (see §2.2). Before that it ran commit `9fcb58c` (setpoint 15–50 °C,
+mixer relay runtime) since 2026-11-01.
 
-On the S2 since 2026-11-01:
+On the S2 since 2026-11-01 (and still in the 2026-11-09 image):
 
 * every boot **homes the mixer** (full close stroke, position 0); an encoder
   that disagrees afterwards is distrusted (never used to resync) until it
@@ -102,44 +107,53 @@ Facts about this board:
 - The S2 has no FPU and one core; internal RAM is the limit. PSRAM takes
   ordinary allocations from 512 B, the logs and the state frames. Watch
   `freeHeap`, `minFreeHeap`, `largestFreeBlock` in `/api/status`
-  (last seen: ~41 KB free, low-water mark ~35 KB).
+  (last seen: ~39 KB free, low-water mark 32 KB after the 2026-11-09 update).
 - Controller log streaming to MQTT is on, so the observer records its events.
 
-### 2.2 Pending upload (2026-11-09), not on the S2 yet
+### 2.2 Uploaded 2026-11-09, on the S2
 
-Built from `7eb5eaa` (firmware) and the portal files; **no upload has been
-made**. The owner will start it; an OTA firmware + filesystem upload, or a
-parameter-only push, waits for an explicit go.
+Built from `7eb5eaa` (firmware) and the portal files; the owner gave the go on
+2026-11-09. The plant was idle for it (floor heating, pumps and heater off,
+mixer at 0), which is the safest moment.
 
-* **MPC retry handling:**
-  * a failed automatic retry no longer blocks MPC for good: the same anomaly
-    is counted, a different one starts a new count, and the third failure
-    within the 2 h probation blocks it (event 1340 carries the count);
-  * a retry that survives the probation clears the count;
+* **What it brings:**
+  * MPC retry handling: a failed automatic retry no longer blocks MPC for
+    good; the same anomaly is counted, a different one starts a new count, and
+    the third failure within the 2 h probation blocks it (event 1340 carries
+    the count); a retry that survives the probation clears the count;
   * cautious stable run 30 -> **20 min**; the log check behind it is in
     `docs/predictive-mixer.md` §3 (6 of 8 overshoots 3.5-4.9 min after the
     floor pump start; two late, one 87 s after a retry);
-  * status publishes `retryBlocked`, `retryStrikes`, `retryStrikeLimit`.
-* **Portal:** a permanent warning banner on the dashboard while retries are
-  blocked (not dismissible) and an **Unblock and resume MPC** button
-  (`POST /api/mpc/unblock`, event 1343). The mixer card shows the counter.
+  * status publishes `retryBlocked`, `retryStrikes`, `retryStrikeLimit`;
+  * the portal has a permanent, non-dismissible warning banner while retries
+    are blocked and an **Unblock and resume MPC** button
+    (`POST /api/mpc/unblock`, event 1343); the mixer card shows the counter.
 * **Images:** `pio run -e esp32s2` and `-t buildfs`; `data/js/app.js.gz` was
-  regenerated (the filesystem carries only the gzip copy). Latest builds:
-  RAM 23.5 %, flash 75.0 %.
-* **Upload checklist when the owner says go:**
-  1. pumps/boiler in a safe state, or explicit intent (OTA carries the same
-     risk as flashing; rollback is available);
-  2. `HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py
-     .pio/build/esp32s2/firmware.bin localhost:30081`;
-  3. the same with `.pio/build/esp32s2/littlefs.bin` for the portal (the
-     admin-requested reboot confirms the new image without waiting 2 min);
-  4. check `/api/status` for `retryBlocked`/`retryStrikes` and the dashboard
-     banner/button; the lights and mixer state as after any flash.
+  regenerated (the filesystem carries only the gzip copy). RAM 23.5 %, flash
+  75.0 %; firmware 1 375 920 B, filesystem 393 216 B.
+* **What happened:**
+  1. `tools/http_ota.py` firmware upload -> reboot -> `build Nov  9 2026
+     15:49:49`, `retryBlocked: false`, `retryStrikeLimit: 3`;
+  2. the image confirmed itself 2 min after boot (event 1720), so the
+     filesystem upload followed only after that;
+  3. `tools/http_ota.py` filesystem upload -> reboot; the served `app.js`
+     (150 978 B decompressed) carries the banner and unblock code; `/api/state`
+     reports the new `retry*` fields.
+* **After the uploads:** Wi-Fi and MQTT connected; free heap ~39 KB, low-water
+  ~32 KB, largest free block 14.3 KB (low-water was 19 KB before the OTA);
+  MPC `mode: mpc`, `homing: false`, `retryStrikes: 0`. The boot homing always
+  raises the warning `mix_no_response` ("mixer commanded but the external
+  encoder did not respond"); it clears as soon as the encoder responds and is
+  not latched (seen 2026-11-09 too, and it is a recurring condition in the
+  logs, not OTA-specific). The retry/anomaly counters start at 0 after the
+  reboot.
 * **Parameter-only path:** the observer sends approved sets to
   `cmd/mpc/params`; it is off (`parameters.push_enabled`) and no set is
   approved. The 2026-11-09 re-identification says the current mixer
   parameters stay (backtest not recommended), so there is nothing to push
-  yet.
+  yet. The owner's note stands: if MPC does not work with the current
+  parameters there is no use in keeping them — as of 2026-11-09 it does work
+  (see `ISSUES.md`).
 
 ## 3. Repository map (controller side)
 
@@ -161,8 +175,7 @@ Not tracked on purpose: `.pio/`, `firmware/include/hpn/credentials_local.h`, `ot
 
 | What | Where |
 |---|---|
-| Live S2 (when the owner forwards it) | `http://localhost:30081` (admin/admin until the passwords are changed) |
-| Bench controller | `http://localhost:30080` (switched off, see §0.2) |
+| Live S2 (the only controller, through the owner's forward) | `http://localhost:30080` (admin/admin until the passwords are changed) |
 | MQTT broker (development; home data under `mirror/`) | `localhost:31883` |
 | Observer InfluxDB (recorded plant data, read-only use) | see `../observer/HANDOVER.md` |
 | Serial, flashing over USB | `pio remote …` with an agent running at the board |
@@ -187,8 +200,8 @@ cd firmware
 pio run -e esp32s2                                    # build; all environments build without warnings
 pio run -e esp32s2 -t buildfs                         # portal files image
 # upload to the S2 only after the owner's "go":
-HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/firmware.bin localhost:30081
-HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/littlefs.bin localhost:30081
+HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/firmware.bin localhost:30080
+HPN_PORTAL_PASSWORD=admin python3 tools/http_ota.py .pio/build/esp32s2/littlefs.bin localhost:30080
 
 cd ../floor_simulator && .venv/bin/python -m pytest -q     # incl. firmware MPC + L2 on the host
 ```
