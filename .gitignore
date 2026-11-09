@@ -63,3 +63,7 @@ secrets.h
 
 # Build-time factory credentials (firmware/include/hpn/credentials.h)
 firmware/include/hpn/credentials_local.h
+
+
+# Local tooling config
+opencode.json
