@@ -15,8 +15,9 @@ in [`README.md`](README.md). The controller has its own handover:
    `--yes-delete-all-data`. Schema or tag changes that need a rebuild are
    proposed first, with what would be lost.
 2. **Operational data never goes into git.** Code, docs and generic defaults
-   do; everything of the running installation (registry, house description and
-   notes, catalog, settings, configs, secrets) lives in the data directory.
+   do; everything of the running installation (registry, house description
+   draft and input, catalog, settings, configs, secrets) lives in the data
+   directory.
 3. **The observer never commands the plant.** Its outputs are reports, alerts
    and proposed parameter sets the owner approves (`../plans/master_plan.md`).
 4. Commit with the attribution line; **do not push** unless asked.
@@ -26,8 +27,8 @@ in [`README.md`](README.md). The controller has its own handover:
 A Python service that records every MQTT signal of the house (controller,
 EMS-ESP boiler, MixerMeter, Zigbee2MQTT, Home Assistant states) into its own
 InfluxDB, lets the owner describe and select signals in a web portal, and uses
-an LLM (optional) to propose descriptions and a reviewed description of the
-house. Next it supervises the plant and, later, investigates anomalies and
+an LLM (optional) to propose descriptions and maintain a description draft of
+the house. Next it supervises the plant and, later, investigates anomalies and
 optimises parameters with agents.
 
 **`registry.yaml` in short:** the list of which signals matter and what they
@@ -44,7 +45,7 @@ Signals tab writes the entries. The generic starter file is
   `OBSERVER_HOME`, default `~/.local/share/heatpumpsn-observer` (never in git):
   `config.yaml`, `.env` (secrets: InfluxDB token, LLM endpoints and keys),
   `registry.yaml` (this house's sensor selection and descriptions),
-  `house/` (your review, owner knowledge, accepted understanding and model, archive), `data/` (catalog,
+  `house/` (description draft, input, previous version, model), `data/` (catalog,
   settings, proposals, log). `observer init` creates a data directory from
   `observer/defaults/`.
 * **Running (development, this machine):** two processes from the checkout's
@@ -72,15 +73,12 @@ Signals tab writes the entries. The generic starter file is
   data directory's `.env`); all three tasks on `gemini-3.5-flash-lite`. The
   house description is thin with that model. The owner has
   `gemini-3.8-flash` too, but only 20 requests a day: fine for the house
-  task (2 requests per draft), not for agent runs (10–25 requests).
+  task (1 request per update), not for agent runs (10–25 requests).
   `gemini-2.5-pro` answers 404, the pro models 429. All tasks are on
-  flash-lite now (the owner's choice, 2026-11-02). Since 0.6.0 the House tab
-  can use another model for one draft without changing the settings.
-* **House understanding** (three parts: your review, owner knowledge,
-  understanding): a draft from before the knowledge step is waiting; the
-  owner's review (notes.md) has content that "Generate a draft" will
-  consolidate. **Nothing accepted yet**; supervision from the house model and
-  the agents wait for it.
+  flash-lite now (the owner's choice, 2026-11-02).
+* **House description:** the House tab keeps a saved draft plus the owner's
+  input. *Update draft* merges the input (authoritative on conflicts) and keeps
+  the previous version for undo and reference. Nothing needs to be accepted.
 * **Next:** §4.
 
 
@@ -282,11 +280,12 @@ Status against the plans: [`ISSUES.md`](ISSUES.md). In order:
    `OBSERVER_CONTROLLER_SECRET`, approve, check the controller's
    acknowledgement and a roll back. A firmware upload to the S2 needs the
    owner's explicit go (see `../firmware/HANDOVER.md`).
-5. **Accept a house understanding**: generate a draft with a stronger model
-   for that one draft (House tab), review, accept. Unblocks checks from the
-   house model and makes agent reports trustworthy.
+5. **Write the house description**: switch the *house* task to a stronger model
+   (Settings), write the known facts in the House tab and press *Update draft*.
+   A good model and description unblock checks from the model and make agent
+   reports trustworthy.
 6. **Supervision from the house model** (phase C rest): checks derived from
-   the accepted model, drift beyond the mixer, an alert starting an agent
+   the model, drift beyond the mixer, an alert starting an agent
    investigation. The mixer drift alert already fires when the re-identified
    model is much better on held-out data; that alone is not enough to push.
 7. **Old HA history** (one year): a converter to the export format for

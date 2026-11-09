@@ -29,32 +29,30 @@ read, check and extend.
 
 **Inputs:** the house context (configuration), the signal registry (names,
 units, locations, circuits, roles, descriptions), the catalog (all signals
-seen, including unselected ones), the owner's review notes, the previous
-audited description, and data summaries (value ranges, update rates).
+seen, including unselected ones), the owner's input, the current draft, the
+previous version, and data summaries (value ranges, update rates).
 
-**Output (proposed by the LLM, reviewed by the owner):**
+**Output (kept as a draft in the house's data directory):**
 
 * `description.md` — prose for a human: what the system is, every circuit and
   room, which sensors measure what and where, how the parts interact
   (expected behaviour), and what is uncertain;
 * `model.yaml` — the same understanding in machine form: systems, measurement
-  points, relations (redundant, order, causal, balance), checks, gaps;
-* **questions** — what the model is unsure about, for the owner to answer;
-* **recommendations** — sensors that would improve analysis, and signals that
-  already exist in the catalog but are not used (like the outdoor temperature
-  was).
+  points, relations (redundant, order, causal, balance), checks, gaps.
 
-**Review loop:**
+**Draft loop:**
 
-1. The owner reads the proposed description, edits it directly if needed, and
-   writes **review notes** (corrections, missing facts, answers to the
-   questions). The notes are always open and kept with the house's operational data
-   (`<OBSERVER_HOME>/house/notes.md`, outside git).
-2. Regenerating uses the notes and the previous audited version, so knowledge
-   accumulates instead of being lost.
-3. **Accepting** makes the proposal the audited version and archives it
-   (`<OBSERVER_HOME>/house/archive/<timestamp>/`, with the notes at that moment).
-   Analysis and agents always read the latest audited version.
+1. The owner writes **input** (corrections, missing facts, instructions) in the
+   House tab. It is saved with the house's operational data
+   (`<OBSERVER_HOME>/house/input.md`, outside git).
+2. *Update draft* merges the input into the current description. The input is
+   authoritative on conflicts; the previous version is available as a
+   reference (for example "bring back the radiators from the previous
+   version"), so knowledge accumulates instead of being lost.
+3. The version before the update is kept (`<OBSERVER_HOME>/house/previous.md`)
+   for *Undo last update* and as the reference above. *Clear draft* starts over
+   without deleting that previous version. Nothing has to be accepted or
+   archived. Analysis and agents read the current draft and its model.
 
 ## 3. Tools
 
@@ -113,7 +111,7 @@ another sensor set or no controller; promoting a house item to the package
 
 | Workflow | Character | Uses |
 | --- | --- | --- |
-| **Supervision** | deterministic, continuous | the checks from the audited house model, evaluated by tools every few minutes; alerts over MQTT to Home Assistant |
+| **Supervision** | deterministic, continuous | the checks from the current house model, evaluated by tools every few minutes; alerts over MQTT to Home Assistant |
 | **Anomaly investigation** | agentic, on trigger | when a check fires or something looks unusual: gathers data with tools, tests hypotheses against the house model, reports the likely cause and what to check |
 | **Optimisation** | agentic, scheduled or on request | identifies plant parameters (delays, gains), proposes controller parameter sets or boiler settings, **backtests** them against recorded data and the simulator, and reports the expected gain with evidence |
 | **House understanding** | LLM, on request | §2 |
@@ -138,22 +136,22 @@ optimisation.
 * Recipes and skills are written against the house model's vocabulary
   (circuits, roles, relations), not against one house's signal ids, so they
   can be **shared between houses**; each house maps them through its own
-  audited model.
+  model.
 * Repository layout: shared tools and skills in their own repository
   (observer-library: `tools/<name>/`, `skills/<name>/`, `library.yaml` with
   the library version, changelog, checks); an observer uses it as a library
   folder or as an imported pack (.tgz). House items, history, packs, audit
   flags and test results in `<OBSERVER_HOME>/library/`; the house's
-  description, knowledge, review and archive in `<OBSERVER_HOME>/house/`,
-  never in git.
+  description draft, input, previous version and model in
+  `<OBSERVER_HOME>/house/`, never in git.
 
 ## 7. Phases
 
 | Phase | Deliverable |
 | --- | --- |
 | A (done) | data collection, registry, catalog, LLM descriptions, per-task model settings |
-| B (done) | reviewed house description with notes, questions, recommendations and archive |
-| C (first version) | supervision: event, stale, range and stuck checks without LLM, scheduled agent runs, alerts to HA over MQTT discovery; still to come: checks generated from the accepted house model, drift detection, agent investigation triggered by an alert |
+| B (done) | house description draft with saved input, previous version, undo/clear and model |
+| C (first version) | supervision: event, stale, range and stuck checks without LLM, scheduled agent runs, alerts to HA over MQTT discovery; still to come: checks generated from the house model, drift detection, agent investigation triggered by an alert |
 | D (first version) | core tools (MCP + function calling); library of analysis tools with manifests, tests and audit flags; seed tools and skills incl. plant identification |
 | E (first version) | sandbox: bubblewrap (rootless, no network) with the read-only data socket; limits; workspaces, query logs, audit records |
 | F (first version) | agent loop: free questions or skills, own data selection, tool and skill creation, harvest of finished runs, pause/resume on LLM quota; still to come: triggering it from supervision (C) |

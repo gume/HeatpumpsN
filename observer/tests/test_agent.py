@@ -32,9 +32,9 @@ class FakeService:
         return rows
 
     def house(self):
-        return {"current": {"description": "# House\nFloor circuit BF.", "model": {"checks": [{"name": "c"}]},
-                            "knowledge": "## Comfort targets\n- BF 21 °C", "accepted": "2026-11-01"},
-                "draft": None, "notes": "BF is the bottom floor."}
+        return {"description": "# House\nFloor circuit BF.", "model": {"checks": [{"name": "c"}]},
+                "user_input": "BF is the bottom floor.", "previous": "", "can_undo": False,
+                "unknown_ids": []}
 
 
 class FakeData:
@@ -113,7 +113,7 @@ def test_events_severity_and_workspace_guard(tmp_path):
     assert tb.call("get_events", {})["count"] == 2
     assert "stay inside" in tb.call("read_file", {"path": "../../.env"})["error"]
     ctx = tb.call("house_context", {})
-    assert ctx["status"].startswith("accepted") and ctx["owner_knowledge_md"].endswith("BF 21 °C")
+    assert ctx["status"].startswith("draft") and ctx["owner_input_md"].endswith("bottom floor.")
 
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "library")

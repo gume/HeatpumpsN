@@ -450,106 +450,58 @@ def validate_model(data: dict, known: set[str]) -> dict:
     return model
 
 
-# --- The reviewed house description ------------------------------------------
+# --- The house description draft ---------------------------------------------
 
-HOUSE_SYSTEM = """You write the description of a house's heating system for its owner,
-who will review it, correct it and add facts. A supervisor later uses the
-same understanding for analysis and anomaly detection.
+HOUSE_UPDATE_SYSTEM = """You maintain the description of a house's heating system for its
+owner and for a supervisor that later analyses the data. You get the house
+context, the current description, the previous version, the owner's new input,
+the described signals (id, name, quantity, unit, location, circuit, role,
+description) and signals that are recorded or seen but not described or not
+stored (candidates).
 
-You get: the house context, the owner knowledge (facts from the owner that
-are not in the sensor data; they are authoritative: follow them, even against
-your own reading), the described signals (id, name, quantity, unit, location,
-circuit, role, description), signals that are recorded or seen but not
-described or not stored (candidates), and the previously accepted
-understanding (keep what is still right, improve the rest).
+Update the description:
+- The owner's input is authoritative. On any conflict with the current or the
+  previous description, follow the owner's input.
+- Keep everything in the current description that the input does not
+  contradict or replace.
+- The owner may refer to the previous version (for example "bring back the
+  radiators from the previous version"). Restore or reuse facts from the
+  previous version when the input asks for it.
+- Do not invent equipment the inputs do not suggest; say what is uncertain.
 
 Answer only with JSON:
 {
  "description_md": "Markdown for the owner. Sections: ## Overview, ## Boiler and hot water, ## Heating circuits (one ### per circuit), ## Rooms, ## Outdoor, ## Controller and measurement devices, ## How the parts interact (expected behaviour, with typical numbers where you can estimate them), ## Uncertain points. Name sensors by their names, with the id in backticks the first time. Plain, concrete sentences.",
- "questions": ["specific questions whose answers would make the description or the analysis better; do not ask what the owner knowledge already answers"],
- "recommendations": [{"kind": "existing_signal" or "new_sensor", "signal": "candidate id (existing_signal only)", "what": "short", "why": "what it would enable", "priority": "high" | "medium" | "low"}],
  "model": {"systems": [{"name", "description", "signals": []}],
            "points": [{"signal", "measures", "use"}],
            "relations": [{"type": "redundant"|"order"|"causal"|"balance", "signals": [], "condition", "expectation", "why"}],
            "checks": [{"name", "signals": [], "condition", "severity": "info"|"warning"|"alarm"}],
-           "gaps": []}
+           "gaps": []},
+ "notes": "short summary of what you changed and which input you followed"
 }
-Use only signal ids from the input in "model" and "signal". Be physically
-plausible; do not invent equipment the inputs do not suggest; say what is
-uncertain instead."""
-
-PRIORITIES = ("high", "medium", "low")
+Use only signal ids from the input in "model". Be physically plausible."""
 
 
-KNOWLEDGE_SYSTEM = """You keep the owner knowledge of a house's heating system: the facts
-the owner told us that are not in the sensor data (building, insulation,
-hydraulics and equipment, rooms and their use, comfort targets and
-schedules, history and changes, known problems, answers to earlier
-questions). A supervisor and its analyses rely on it.
-
-You get the house context, the current owner knowledge (may be empty), the
-owner's new review (free text, possibly informal or in another language) and
-the questions the last understanding asked.
-
-Merge the review into the knowledge:
-* keep every fact of the current knowledge unless the review changes it;
-  newer statements override older ones (say "changed: ..." in `changes`);
-* only facts and wishes of the owner: no sensor values, nothing invented,
-  no advice; keep the owner's uncertainty ("probably", "about");
-* corrections of the understanding ("X is not the boiler flow but ...") are
-  facts: keep them;
-* write in English, short and concrete, in Markdown with these sections when
-  they have content: ## Building, ## Heating system and hydraulics,
-  ## Rooms and use, ## Comfort targets and schedules, ## Sensors and signals
-  (what a signal really measures), ## History and changes, ## Known issues,
-  ## Open points.
-
-Answer only with JSON:
-{"knowledge_md": "the complete merged document", "changes": ["one line per fact added, changed or removed"]}"""
-
-
-def consolidate_knowledge(client: LlmClient, context: str, knowledge_md: str, review: str,
-                          questions: list[str] | None = None) -> dict:
-    """The owner knowledge with the review merged in: {knowledge_md, changes}."""
-    user = json.dumps({"house_context": context.strip(), "current_owner_knowledge": knowledge_md.strip(),
-                       "owner_review": review.strip(), "questions_asked_last_time": questions or []},
-                      ensure_ascii=False, indent=1)
-    data = chat_json(client, KNOWLEDGE_SYSTEM, user)
-    if not isinstance(data, dict) or not isinstance(data.get("knowledge_md"), str) or not data["knowledge_md"].strip():
-        raise ValueError("the answer has no owner knowledge")
-    return {"knowledge_md": data["knowledge_md"].strip(),
-            "changes": [c.strip() for c in data.get("changes", []) if isinstance(c, str) and c.strip()]}
-
-
-def build_house_description(client: LlmClient, context: str, described: dict[str, dict],
-                            candidates: dict[str, dict], knowledge: str, previous_md: str) -> dict:
-    """Validated understanding (description, questions, recommendations, model) from the LLM."""
-    user = json.dumps({"house_context": context.strip(), "owner_knowledge": knowledge.strip(),
-                       "previous_accepted_understanding": previous_md.strip(),
+def update_house_description(client: LlmClient, context: str, described: dict[str, dict],
+                             candidates: dict[str, dict], current_md: str, previous_md: str,
+                             user_input: str) -> dict:
+    """Merge the owner's input into the current description (validated, not saved)."""
+    user = json.dumps({"house_context": context.strip(),
+                       "current_description": current_md.strip(),
+                       "previous_description": previous_md.strip(),
+                       "user_input": user_input.strip(),
                        "described_signals": described, "candidate_signals": candidates},
                       ensure_ascii=False, indent=1)
-    data = chat_json(client, HOUSE_SYSTEM, user)
+    data = chat_json(client, HOUSE_UPDATE_SYSTEM, user)
     if not isinstance(data, dict) or not isinstance(data.get("description_md"), str) or not data["description_md"].strip():
         raise ValueError("the answer has no description")
-    known = set(described) | set(candidates)
-    recs = []
-    for r in data.get("recommendations", []):
-        if not isinstance(r, dict) or r.get("kind") not in ("existing_signal", "new_sensor"):
-            continue
-        if r["kind"] == "existing_signal" and r.get("signal") not in known:
-            continue
-        recs.append({"kind": r["kind"], "signal": r.get("signal") if r["kind"] == "existing_signal" else "",
-                     "what": str(r.get("what") or "").strip(), "why": str(r.get("why") or "").strip(),
-                     "priority": r.get("priority") if r.get("priority") in PRIORITIES else "medium"})
-    # Signal ids the prose names in backticks but that do not exist (a model's
-    # typo would otherwise pass a human review unnoticed).
     import re
+    known = set(described) | set(candidates)
+    # Signal ids the prose names in backticks but that do not exist.
     named = {m for m in re.findall(r"`([^`\s]+)`", data["description_md"]) if "/" in m}
-    unknown = sorted(named - known)
     return {"description_md": data["description_md"].strip(),
-            "unknown_ids": unknown,
-            "questions": [q.strip() for q in data.get("questions", []) if isinstance(q, str) and q.strip()],
-            "recommendations": recs,
+            "unknown_ids": sorted(named - known),
+            "notes": data["notes"].strip() if isinstance(data.get("notes"), str) else "",
             "model": validate_model(data.get("model") or {}, set(described))}
 
 

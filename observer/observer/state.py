@@ -2,7 +2,7 @@
 
 The state is what makes this observer know this house: the registry (which
 signals are stored and what they mean), the catalog, the house
-understanding (review, owner knowledge, accepted versions, archive, draft),
+description (draft, input, previous version, model),
 the house part of the library (items, history, packs, audit flags, test
 results), the per-task model settings and the house context from
 config.yaml. Not included: secrets (.env), machine-specific settings

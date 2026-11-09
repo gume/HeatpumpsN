@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 
@@ -457,46 +458,39 @@ class Service:
                     break
         return polish(client, signal, draft, facts, self.cfg.get("context", ""), related)
 
-    # --- the house understanding -------------------------------------------------------
-    # In the data directory's house/ (never in git):
-    #   notes.md        your review: free text, always editable
-    #   knowledge.md    owner knowledge: facts from your reviews that are not in
-    #                   the data, consolidated by the LLM (accepted version)
-    #   description.md, model.yaml   the accepted house understanding
-    #   archive/<time>/ every accepted version: knowledge, understanding, the
-    #                   review it came from, review.yaml (questions, model used)
-    # The draft (knowledge + understanding) waits in data/house_draft.yaml.
+    # --- the house description draft ---------------------------------------------------
+    # house/ in the data directory: description.md (the current draft),
+    # input.md (the owner's input, always saved), previous.md (the version
+    # before the last update, for undo and as a reference in the input) and
+    # model.yaml (the machine model from the last update).
     def _house(self, name: str) -> str:
         return os.path.join(self.cfg["paths"]["house_dir"], name)
 
     def _read(self, path: str) -> str:
         return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
 
-    def _draft(self) -> dict | None:
-        path = self.cfg["paths"]["house_draft"]
-        if not os.path.exists(path):
-            return None
-        with open(path, encoding="utf-8") as fp:
-            return yaml.safe_load(fp)
-
-    def _save_draft(self, draft: dict) -> None:
-        with open(self.cfg["paths"]["house_draft"], "w", encoding="utf-8") as fp:
-            yaml.safe_dump(draft, fp, sort_keys=False, allow_unicode=True, width=100)
+    def _write(self, name: str, text: str) -> None:
+        os.makedirs(self.cfg["paths"]["house_dir"], exist_ok=True)
+        with open(self._house(name), "w", encoding="utf-8") as fp:
+            fp.write(text.rstrip() + "\n" if text.strip() else "")
 
     def house(self) -> dict:
-        archive_dir = self._house("archive")
-        archive = sorted(os.listdir(archive_dir), reverse=True) if os.path.isdir(archive_dir) else []
         model_text = self._read(self._house("model.yaml"))
-        return {"current": {"description": self._read(self._house("description.md")),
-                            "knowledge": self._read(self._house("knowledge.md")),
-                            "model": yaml.safe_load(model_text) if model_text else None,
-                            "accepted": archive[0] if archive else None},
-                "draft": self._draft(), "notes": self._read(self._house("notes.md")), "archive": archive}
+        description = self._read(self._house("description.md"))
+        # notes.md was the owner's review notes in the old flow; keep reading it
+        # until the owner saves input for the first time.
+        user_input = self._read(self._house("input.md")) or self._read(self._house("notes.md"))
+        known = set(self.ingest.catalog.entries) if hasattr(self.ingest, "catalog") else set()
+        named = {m for m in re.findall(r"`([^`\s]+)`", description) if "/" in m}
+        return {"description": description,
+                "user_input": user_input,
+                "previous": self._read(self._house("previous.md")),
+                "can_undo": os.path.exists(self._house("previous.md")),
+                "unknown_ids": sorted(named - known),
+                "model": yaml.safe_load(model_text) if model_text else None}
 
-    def save_notes(self, text: str) -> None:
-        os.makedirs(self.cfg["paths"]["house_dir"], exist_ok=True)
-        with open(self._house("notes.md"), "w", encoding="utf-8") as fp:
-            fp.write(text.rstrip() + "\n" if text.strip() else "")
+    def save_user_input(self, text: str) -> None:
+        self._write("input.md", text)
 
     def house_inputs(self) -> tuple[dict, dict]:
         """(described signals, candidates): what the understanding is built from."""
@@ -512,93 +506,45 @@ class Service:
                                        "device": e.meta.get("device"), "last": e.last_value}
         return described, dict(list(sorted(candidates.items()))[:200])
 
-    def generate_house(self, client=None, from_draft_knowledge: bool = False) -> dict:
-        """A new draft: the review merged into the owner knowledge, then the understanding.
-
-        With from_draft_knowledge the draft's (possibly edited) knowledge is kept
-        and only the understanding is built again."""
-        from .llm import build_house_description, consolidate_knowledge
+    def update_house(self, client=None) -> dict:
+        """Merge the saved input into the current draft; keep the old version for undo."""
+        from .llm import update_house_description
 
         client = client or self.settings.client("house")
         if client is None:
-            raise RuntimeError("no LLM configured for the house understanding (Settings)")
-        previous = self._draft() or {}
-        accepted_knowledge = self._read(self._house("knowledge.md"))
-        review = self._read(self._house("notes.md"))
-        context = self.cfg.get("context", "")
-        if from_draft_knowledge:
-            if not previous.get("knowledge_md"):
-                raise FileNotFoundError("no draft knowledge")
-            knowledge = {"knowledge_md": previous["knowledge_md"], "changes": previous.get("knowledge_changes", []),
-                         "edited": previous.get("knowledge_edited", False)}
-        elif review.strip():
-            last_questions = previous.get("questions") or (self._accepted_review().get("questions") or [])
-            knowledge = consolidate_knowledge(client, context, accepted_knowledge, review, last_questions)
-        else:
-            knowledge = {"knowledge_md": accepted_knowledge, "changes": []}
+            raise RuntimeError("no LLM configured for the house description (Settings)")
+        current = self._read(self._house("description.md"))
+        previous = self._read(self._house("previous.md"))
+        user_input = self._read(self._house("input.md")) or self._read(self._house("notes.md"))
+        if not user_input.strip():
+            raise RuntimeError("write what should change in your input first")
         described, candidates = self.house_inputs()
-        out = build_house_description(client, context, described, candidates, knowledge["knowledge_md"],
-                                      self._read(self._house("description.md")))
-        draft = {"generated": time.strftime("%Y-%m-%d %H:%M"), "model_name": getattr(client, "model", ""),
-                 "knowledge_md": knowledge["knowledge_md"], "knowledge_changes": knowledge["changes"],
-                 "knowledge_edited": bool(knowledge.get("edited")), **out}
-        self._save_draft(draft)
-        return draft
+        out = update_house_description(client, self.cfg.get("context", ""), described, candidates,
+                                       current, previous, user_input)
+        self._write("previous.md", current)
+        self._write("previous_model.yaml", self._read(self._house("model.yaml")))
+        self._write("description.md", out["description_md"])
+        self._write("model.yaml", yaml.safe_dump(out.get("model") or {}, sort_keys=False, allow_unicode=True,
+                                                width=100))
+        return out
 
-    def _accepted_review(self) -> dict:
-        archive = self.house()["archive"]
-        if not archive:
-            return {}
-        text = self._read(self._house(os.path.join("archive", archive[0], "review.yaml")))
-        return yaml.safe_load(text) or {} if text else {}
+    def clear_house(self) -> dict:
+        """Clear the draft; the old version stays available for undo."""
+        self._write("previous.md", self._read(self._house("description.md")))
+        self._write("previous_model.yaml", self._read(self._house("model.yaml")))
+        self._write("description.md", "")
+        self._write("model.yaml", "")
+        return self.house()
 
-    def edit_draft(self, description: str | None = None, knowledge: str | None = None) -> None:
-        draft = self._draft()
-        if draft is None:
-            raise FileNotFoundError("no draft")
-        if description is not None:
-            draft["description_md"] = description
-            draft["edited"] = True
-        if knowledge is not None:
-            draft["knowledge_md"] = knowledge
-            draft["knowledge_edited"] = True
-        self._save_draft(draft)
-
-    def accept_house(self, clear_review: bool = False) -> str:
-        """The draft becomes the accepted understanding; archived with its knowledge and the review."""
-        draft = self._draft()
-        if draft is None:
-            raise FileNotFoundError("no draft")
-        stamp = time.strftime("%Y-%m-%d_%H%M%S")
-        folder = self._house(os.path.join("archive", stamp))
-        os.makedirs(folder, exist_ok=True)
-        model_yaml = yaml.safe_dump(draft.get("model") or {}, sort_keys=False, allow_unicode=True, width=100)
-        review = {k: draft.get(k) for k in ("generated", "model_name", "edited", "knowledge_edited",
-                                             "knowledge_changes", "questions", "recommendations")}
-        for target in (self.cfg["paths"]["house_dir"], folder):
-            with open(os.path.join(target, "description.md"), "w", encoding="utf-8") as fp:
-                fp.write(draft["description_md"].rstrip() + "\n")
-            with open(os.path.join(target, "knowledge.md"), "w", encoding="utf-8") as fp:
-                fp.write((draft.get("knowledge_md") or "").rstrip() + "\n")
-            with open(os.path.join(target, "model.yaml"), "w", encoding="utf-8") as fp:
-                fp.write(model_yaml)
-        with open(os.path.join(folder, "review.yaml"), "w", encoding="utf-8") as fp:
-            yaml.safe_dump(review, fp, sort_keys=False, allow_unicode=True, width=100)
-        with open(os.path.join(folder, "notes.md"), "w", encoding="utf-8") as fp:
-            fp.write(self._read(self._house("notes.md")))
-        if clear_review:
-            self.save_notes("")
-        os.remove(self.cfg["paths"]["house_draft"])
-        return stamp
-
-    def archived(self, stamp: str) -> dict:
-        if "/" in stamp or ".." in stamp:
-            raise KeyError(stamp)
-        folder = self._house(os.path.join("archive", stamp))
-        if not os.path.isdir(folder):
-            raise KeyError(stamp)
-        review = self._read(os.path.join(folder, "review.yaml"))
-        return {"stamp": stamp, "description": self._read(os.path.join(folder, "description.md")),
-                "knowledge": self._read(os.path.join(folder, "knowledge.md")),
-                "notes": self._read(os.path.join(folder, "notes.md")),
-                "review": yaml.safe_load(review) if review else {}}
+    def undo_house(self) -> dict:
+        """Swap the current draft with the version before the last update or clear."""
+        if not os.path.exists(self._house("previous.md")):
+            raise FileNotFoundError("nothing to undo")
+        current, previous = self._read(self._house("description.md")), self._read(self._house("previous.md"))
+        current_model = self._read(self._house("model.yaml"))
+        previous_model = self._read(self._house("previous_model.yaml"))
+        self._write("description.md", previous)
+        self._write("model.yaml", previous_model)
+        self._write("previous.md", current)
+        self._write("previous_model.yaml", current_model)
+        return self.house()

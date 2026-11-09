@@ -115,57 +115,42 @@ def create_app(service: Service) -> FastAPI:
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    # --- the house understanding: review, owner knowledge, understanding ------
+    # --- the house description draft ------------------------------------------
     @app.get("/api/house")
     def house():
         return service.house()
 
-    @app.put("/api/house/notes")
-    def save_notes(text: str = Body(..., embed=True)):
-        service.save_notes(text)
+    @app.put("/api/house/input")
+    def save_user_input(text: str = Body(..., embed=True)):
+        service.save_user_input(text)
         return {"ok": True}
 
-    @app.post("/api/house/generate")
-    async def generate_house(body: dict | None = Body(None)):
-        body = body or {}
-        keep = bool(body.get("from_draft_knowledge"))
-        client = None
-        if body.get("model"):                    # the House tab's own choice; default: the task's settings
-            client = service.settings.client("house", str(body.get("provider") or ""), str(body["model"]))
-            if client is None:
-                raise HTTPException(400, f"provider {body.get('provider')!r} is not configured in .env")
+    @app.post("/api/house/update")
+    async def update_house(text: str | None = Body(None, embed=True)):
+        def run():
+            if text is not None:
+                service.save_user_input(text)      # the input is saved with the draft
+            return service.update_house()
+
         try:
-            return await run_in_threadpool(lambda: service.generate_house(client, from_draft_knowledge=keep))
+            return await run_in_threadpool(run)
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc
-        except FileNotFoundError as exc:
-            raise HTTPException(404, "no draft knowledge to build from") from exc
         except LlmUnavailable:
             raise
         except Exception as exc:
             raise HTTPException(502, f"LLM request failed: {exc}") from exc
 
-    @app.put("/api/house/draft")
-    def edit_draft(body: dict = Body(...)):
-        try:
-            service.edit_draft(body.get("description"), body.get("knowledge"))
-        except FileNotFoundError as exc:
-            raise HTTPException(404, "no draft") from exc
-        return {"ok": True}
+    @app.post("/api/house/clear")
+    def clear_house():
+        return service.clear_house()
 
-    @app.post("/api/house/accept")
-    def accept_house(body: dict | None = Body(None)):
+    @app.post("/api/house/undo")
+    def undo_house():
         try:
-            return {"archived": service.accept_house(bool((body or {}).get("clear_review")))}
+            return service.undo_house()
         except FileNotFoundError as exc:
-            raise HTTPException(404, "no draft to accept") from exc
-
-    @app.get("/api/house/archive")
-    def archived(stamp: str = Query(...)):
-        try:
-            return service.archived(stamp)
-        except KeyError as exc:
-            raise HTTPException(404, "no such archived version") from exc
+            raise HTTPException(404, "nothing to undo") from exc
 
     # --- mixer model: identification, proposals, sending, rollback ----------------------
     @app.get("/api/parameters")

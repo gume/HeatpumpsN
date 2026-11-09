@@ -14,7 +14,6 @@ def make(tmp_path):
     cfg = {"paths": {"catalog": str(tmp_path / "catalog.json"), "registry": str(tmp_path / "registry.yaml"),
                      "proposals": str(tmp_path / "proposals.yaml"),
                      "house_dir": str(tmp_path / "house"),
-                     "house_draft": str(tmp_path / "house_draft.yaml"),
                      "settings": str(tmp_path / "settings.yaml")},
            "context": "TF top floor"}
     service = Service(cfg, MemoryWriter(), "dry-run")
@@ -129,71 +128,70 @@ def test_settings_providers_and_tasks(tmp_path, monkeypatch):
     assert "gemini-2.5-pro" in (tmp_path / "settings.yaml").read_text()
 
 
-def test_house_review_knowledge_understanding_cycle(tmp_path):
+def test_house_description_update_clear_and_undo(tmp_path):
     service, client = make(tmp_path)
     client.put("/api/signal", params={"id": "ems-esp/boiler_data#curflowtemp"},
                json={"name": "Boiler flow", "quantity": "temperature", "store": True})
     service._handle("zigbee2mqtt/radar", json.dumps({"humidity": 53}).encode(), False)   # candidates need 2 messages
-    assert client.post("/api/house/generate").status_code == 400            # no LLM configured
-    client.put("/api/house/notes", json={"text": "alul csak padlofutes van. Target 21 C in the BF."})
-    seen = {"knowledge": [], "understanding": []}
+    assert client.post("/api/house/update").status_code == 400               # no LLM configured
+
+    client.put("/api/house/input", json={"text": "The bottom floor has floor heating only."})
+    seen = {}
 
     class Fake:
         model = "fake-model"
 
         def chat(self, system, user):
-            data = json.loads(user)
-            if "owner_review" in data:                                       # consolidation
-                seen["knowledge"].append(data)
-                return json.dumps({"knowledge_md": "## Heating system and hydraulics\n- BF: floor heating only.\n"
-                                                   "## Comfort targets and schedules\n- BF 21 °C.",
-                                   "changes": ["added: BF floor heating only", "added: BF target 21 °C"]})
-            seen["understanding"].append(data)
+            seen.update(json.loads(user))
             return json.dumps({
                 "description_md": "## Overview\nA gas boiler feeds three circuits: `ems-esp/boiler_data#curflowtemp`, `ems-esp/boiler_data#curflowtmp`.",
-                "questions": ["Is the garage heated?"],
-                "recommendations": [{"kind": "existing_signal", "signal": "zigbee2mqtt/radar#humidity",
-                                     "what": "Use the radar humidity", "why": "room comfort", "priority": "low"},
-                                    {"kind": "existing_signal", "signal": "not/known", "what": "x"},
-                                    {"kind": "new_sensor", "what": "Outdoor sensor", "why": "heating curve",
-                                     "priority": "high"}],
+                "notes": "Added the bottom floor.",
                 "model": {"systems": [{"name": "Boiler", "description": "", "signals": ["ems-esp/boiler_data#curflowtemp"]}]}})
 
-    out = service.generate_house(client=Fake())
-    # The review went into the consolidation, the knowledge (not the raw review) into the understanding.
-    assert seen["knowledge"][0]["owner_review"].startswith("alul csak") and seen["knowledge"][0]["current_owner_knowledge"] == ""
-    assert seen["understanding"][0]["owner_knowledge"].startswith("## Heating system")
-    assert "ems-esp/boiler_data#curflowtemp" in seen["understanding"][0]["described_signals"]
-    assert "zigbee2mqtt/radar#humidity" in seen["understanding"][0]["candidate_signals"]
-    assert out["knowledge_changes"] == ["added: BF floor heating only", "added: BF target 21 °C"]
-    assert [r["kind"] for r in out["recommendations"]] == ["existing_signal", "new_sensor"]   # unknown id dropped
-    assert out["unknown_ids"] == ["ems-esp/boiler_data#curflowtmp"]                          # typo in the prose flagged
+    out = service.update_house(client=Fake())
+    assert seen["user_input"] == "The bottom floor has floor heating only."
+    assert seen["current_description"] == "" and seen["previous_description"] == ""
+    assert "ems-esp/boiler_data#curflowtemp" in seen["described_signals"]
+    assert "zigbee2mqtt/radar#humidity" in seen["candidate_signals"]
+    assert out["notes"] == "Added the bottom floor."
+    assert out["unknown_ids"] == ["ems-esp/boiler_data#curflowtmp"]          # typo in the prose flagged
     h = client.get("/api/house").json()
-    assert h["draft"]["questions"] == ["Is the garage heated?"] and h["current"]["description"] == ""
+    assert h["description"].startswith("## Overview")
+    assert h["user_input"].startswith("The bottom floor")
+    assert h["can_undo"] is True and h["previous"] == ""
+    assert h["model"]["systems"][0]["name"] == "Boiler"
+    assert h["unknown_ids"] == ["ems-esp/boiler_data#curflowtmp"]
+    for name in ("description.md", "input.md", "previous.md", "model.yaml"):
+        assert (tmp_path / "house" / name).exists()
 
-    # Edit the draft's knowledge and rebuild only the understanding from it: no consolidation call.
-    assert client.put("/api/house/draft", json={"knowledge": "## Building\n- 15 cm insulation."}).status_code == 200
-    service.generate_house(client=Fake(), from_draft_knowledge=True)
-    assert len(seen["knowledge"]) == 1 and seen["understanding"][1]["owner_knowledge"] == "## Building\n- 15 cm insulation."
-    assert client.put("/api/house/draft", json={"description": "## Overview\nEdited."}).status_code == 200
+    # The next update sees the first draft as current and as the previous version.
+    seen.clear()
 
-    stamp = client.post("/api/house/accept", json={"clear_review": True}).json()["archived"]
+    class Fake2(Fake):
+        def chat(self, system, user):
+            seen.update(json.loads(user))
+            return json.dumps({"description_md": "## Overview\nThe radiators are back.",
+                               "notes": "Restored the radiators.", "model": {}})
+
+    service.update_house(client=Fake2())
+    assert seen["current_description"].startswith("## Overview")
+    assert "A gas boiler" in seen["previous_description"] or seen["previous_description"] == ""
     h = client.get("/api/house").json()
-    assert h["draft"] is None and h["current"]["description"].startswith("## Overview\nEdited.")
-    assert h["current"]["knowledge"].startswith("## Building") and h["notes"] == ""
-    assert h["archive"] == [stamp] and h["current"]["model"]["systems"][0]["name"] == "Boiler"
-    a = client.get("/api/house/archive", params={"stamp": stamp}).json()
-    assert a["notes"].startswith("alul csak") and a["knowledge"].startswith("## Building")
-    assert a["review"]["edited"] is True and a["review"]["knowledge_edited"] is True
-    assert a["review"]["model_name"] == "fake-model"
-    assert client.post("/api/house/accept").status_code == 404
-    assert client.get("/api/house/archive", params={"stamp": "../x"}).status_code == 404
+    assert h["description"].startswith("## Overview\nThe radiators are back.")
+    assert h["previous"].startswith("## Overview\nA gas boiler")
 
-    # Next round: the accepted knowledge and the last questions go into the consolidation.
-    client.put("/api/house/notes", json={"text": "The garage is not heated."})
-    service.generate_house(client=Fake())
-    assert seen["knowledge"][1]["current_owner_knowledge"].startswith("## Building")
-    assert seen["knowledge"][1]["questions_asked_last_time"] == ["Is the garage heated?"]
+    assert client.post("/api/house/undo").status_code == 200
+    h = client.get("/api/house").json()
+    assert h["description"].startswith("## Overview\nA gas boiler")
+
+    r = client.post("/api/house/clear").json()
+    assert r["description"] == ""
+    h = client.get("/api/house").json()
+    assert h["description"] == "" and h["user_input"].startswith("The bottom floor")
+    assert h["previous"].startswith("## Overview\nA gas boiler")
+
+    assert client.post("/api/house/undo").status_code == 200
+    assert client.get("/api/house").json()["description"].startswith("## Overview\nA gas boiler")
 
 
 def test_llm_unavailable_answers_503_with_details(tmp_path):
@@ -208,7 +206,7 @@ def test_llm_unavailable_answers_503_with_details(tmp_path):
             raise LlmUnavailable("quota", "requests per day exceeded", "gemini-x", "house", 3600, 429)
 
     service.settings.client = lambda task: Busy()
-    r = client.post("/api/house/generate")
+    r = client.post("/api/house/update", json={"text": "anything"})
     assert r.status_code == 503
     body = r.json()
     assert body["llm"] == {"kind": "quota", "message": "requests per day exceeded", "model": "gemini-x",

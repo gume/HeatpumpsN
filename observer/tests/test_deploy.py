@@ -55,7 +55,7 @@ def test_state_round_trip_with_backup(tmp_path):
         fp.write("\n# house a\n")
     os.makedirs(os.path.join(src["paths"]["library"], "skills", "mine"), exist_ok=True)
     open(os.path.join(src["paths"]["library"], "skills", "mine", "SKILL.md"), "w").write("---\nversion: 1\n---\nx")
-    open(os.path.join(src["paths"]["house_dir"], "knowledge.md"), "w").write("## Building\n- 15 cm insulation\n")
+    open(os.path.join(src["paths"]["house_dir"], "description.md"), "w").write("## Building\n- 15 cm insulation\n")
     src["context"] = "House A: three floors."
     data = export_state(src)
     dst = make_home(tmp_path, "b")
@@ -63,7 +63,7 @@ def test_state_round_trip_with_backup(tmp_path):
     assert r["context"] and r["backup"]
     assert open(dst["paths"]["registry"]).read().endswith("# house a\n")
     assert os.path.exists(os.path.join(dst["paths"]["library"], "skills", "mine", "SKILL.md"))
-    assert "15 cm" in open(os.path.join(dst["paths"]["house_dir"], "knowledge.md")).read()
+    assert "15 cm" in open(os.path.join(dst["paths"]["house_dir"], "description.md")).read()
     assert load_config(dst["config_path"])["context"].startswith("House A")
     assert "mqtt" in open(dst["config_path"]).read()                 # the rest of config.yaml is kept
     assert os.path.exists(os.path.join(r["backup"], "registry.yaml"))

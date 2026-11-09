@@ -22,7 +22,7 @@ send later is a validated controller parameter set (plan:
 | --- | --- |
 | code, tests, docs | `config.yaml`, `.env` (secrets) |
 | `observer/defaults/`: config and `.env` templates, a generic `registry.yaml` with family rules only | `registry.yaml`: this house's sensor selection and descriptions |
-| `docker-compose.dev.yml`, scripts | `house/`: your review, owner knowledge, accepted understanding, archive |
+| `docker-compose.dev.yml`, scripts | `house/`: description draft, your input, the previous version, model |
 | `observer/sandbox_lib/`: the `obs` library for sandboxed code (tools and skills: the separate observer-library repository) | `data/`: catalog, settings, proposals, log |
 | | `runs/`: every agent run (steps, code, data queries, report, resume state); `library/`: house tools and skills, their history, imported packs, audit flags, test results |
 | | `sandbox/venv`: the sandbox's Python environment |
@@ -113,7 +113,7 @@ Nothing changes without that step, and everything works without an LLM.
 * **Proposals:** ask the LLM about undescribed signals, then accept, edit and
   accept, or reject each proposal.
 * **Rules:** the family rules from `registry.yaml` (edited in the file).
-* **House:** the reviewed house description, see below.
+* **House:** the house description draft, see below.
 * **Settings:** LLM provider names and the model per task.
 
 Signals can be filtered by source, unit (including "no unit"), quantity,
@@ -123,36 +123,28 @@ write a draft description in your own words and press **Polish with LLM**: the
 model rewrites it using the signal's metadata, unit, rule and neighbouring
 signals, and says what it changed; you review and save.
 
-## House understanding
+## House description (draft)
 
-How the observer understands the house, kept in three parts (House tab):
+* `description.md`: the current draft (overview, boiler and DHW, each circuit,
+  rooms, outdoor, controller and devices, how the parts interact, uncertain
+  points);
+* `input.md`: the owner's input: corrections, missing facts and instructions.
+  Always saved;
+* `previous.md`: the draft before the last update or clear, for undo and as a
+  reference in the input;
+* `model.yaml`: the same understanding in machine form (systems, points,
+  relations, checks, gaps), read by analysis and anomaly checks.
 
-1. **Your review** (`house/notes.md`): free text, any language, always
-   editable: corrections, missing facts, answers to the questions, comfort
-   targets, changes in the house.
-2. **Owner knowledge** (`house/knowledge.md`): the facts from your reviews
-   that the sensors cannot know (building, hydraulics and equipment, rooms and
-   use, comfort targets and schedules, what a signal really measures,
-   history, known issues), consolidated and formatted by the LLM. Newer
-   statements override older ones; each draft lists what changed. It is
-   authoritative for the understanding and the agent.
-3. **House understanding** (`house/description.md` + `model.yaml`): the
-   description for you (overview, boiler and DHW, each circuit, rooms,
-   outdoor, controller and devices, how the parts interact, uncertain points)
-   and the same in machine form (systems, points, relations, checks, gaps),
-   built from the signals and the owner knowledge.
+**Cycle:** write what should change in **your input** → *Update draft* merges
+the input into the current draft (with the previous version available as a
+reference, and the input authoritative on conflicts) and saves the result →
+*Clear draft* starts over while keeping the previous version → *Undo last
+update* swaps back. Signal ids named in the text that do not exist are flagged
+above the draft. No review is stored: the draft and the input are the house's
+operational data.
 
-**Cycle:** *Generate a draft* merges your review into the owner knowledge,
-then builds the understanding from it (two LLM requests) → read both, answer
-the **questions** in your review, look at the **recommendations** → edit the
-knowledge or the understanding in the draft if needed (*Rebuild the
-understanding from the knowledge* uses edited knowledge without a new
-consolidation) → *Accept and archive*: knowledge and understanding become the
-accepted version and go to `house/archive/<time>/` together with the review
-they came from and `review.yaml` (questions, recommendations, changes, model,
-whether it was edited); optionally your review is cleared. The draft waits in
-`data/house_draft.yaml`. Signal ids named in the text that do not exist are
-flagged.
+The quality depends on the model: the house description benefits from a
+strong reasoning model (Settings).
 
 ## LLM providers and models
 
@@ -327,7 +319,7 @@ machine-specific settings from the environment (`OBSERVER_MQTT_HOST`,
 `_ORG`, `_BUCKET`); `observer influx-setup` creates the read-only token; a
 portal password (`OBSERVER_PORTAL_PASSWORD`, HTTP Basic) protects everything
 but `/healthz`. `observer state export|import` moves registry, catalog, house
-understanding, house library, settings and context between observers.
+description, house library, settings and context between observers.
 
 ## Simulation with the controller's MPC core
 

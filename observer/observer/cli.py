@@ -2,8 +2,9 @@
 
 All operational data lives outside the repository, in the data directory
 OBSERVER_HOME (default ~/.local/share/heatpumpsn-observer): config.yaml, .env,
-registry.yaml, house/ (description, model, notes, archive) and data/ (catalog,
-settings, proposals). The repository holds only code, docs and defaults.
+registry.yaml, house/ (description draft, user input, previous version, model)
+and data/ (catalog, settings, proposals). The repository holds only code, docs
+and defaults.
 
   init     [--home PATH] [--profile dev|release]   create the data directory from the defaults
   influx-setup             create the read-only InfluxDB token if missing (idempotent)
@@ -18,7 +19,7 @@ settings, proposals). The repository holds only code, docs and defaults.
   accept   ID [ID ...] | --all [--min-confidence X]   merge proposals into registry.yaml
 
   state export [FILE.tgz] | state import FILE.tgz
-                           registry, house understanding, library, settings, context (not secrets, not data)
+                           registry, house description, library, settings, context (not secrets, not data)
   db export [-o FILE] [--start T] [--stop T]   recorded samples into one compact Parquet file
   db import FILE [--dry-run]                   add the samples the database does not have (never deletes)
 
@@ -42,6 +43,8 @@ import os
 import sys
 import time
 
+import yaml
+
 from .catalog import Catalog
 from .config import (ENV_OVERRIDES, apply_env_overrides, load_config, load_env,  # noqa: F401 - re-exported
                      mqtt_args as _mqtt_args, observer_home)
@@ -60,7 +63,7 @@ def cmd_init(home: str, profile: str = "dev") -> None:
     import shutil
 
     os.makedirs(os.path.join(home, "data"), exist_ok=True)
-    os.makedirs(os.path.join(home, "house", "archive"), exist_ok=True)
+    os.makedirs(os.path.join(home, "house"), exist_ok=True)
     created = []
     config = "config.release.yaml" if profile == "release" else "config.example.yaml"
     # the release takes its settings from the install folder's .env (docker compose), not from data/
@@ -72,10 +75,10 @@ def cmd_init(home: str, profile: str = "dev") -> None:
         if not os.path.exists(target):
             shutil.copyfile(os.path.join(DEFAULTS, src), target)
             created.append(dst)
-    notes = os.path.join(home, "house", "notes.md")
-    if not os.path.exists(notes):
-        open(notes, "w").close()
-        created.append("house/notes.md")
+    user_input = os.path.join(home, "house", "input.md")
+    if not os.path.exists(user_input):
+        open(user_input, "w").close()
+        created.append("house/input.md")
     if os.path.exists(os.path.join(home, ".env")):
         os.chmod(os.path.join(home, ".env"), 0o600)
     print(f"data directory {home}: " + (", ".join(created) + " created" if created else "already complete"))

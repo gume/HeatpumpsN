@@ -8,8 +8,8 @@ Plans: `plans/master_plan.md` (observer role, P4), `plans/observer_node.md`
 | Plan item | State |
 | --- | --- |
 | Ingest and store (node §9.1, phase A) | done; the collector in its own container and image (0.5.0, 0.6.0); one install folder with `update.sh` / `cleanup.sh` (0.6.0) |
-| Reviewed house understanding (phase B) | done; **nothing accepted yet** (a draft waits); a stronger model can be chosen for one draft on the House tab (0.6.0) |
-| **Supervision with alerts to HA** (node §9.4, phase C): checks from the accepted model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **first version** (0.4.0): event, stale, range, stuck and scheduled agent checks, alerts to HA; drift alert for the mixer model (0.5.0); still missing: checks derived from the accepted house model, drift detection beyond the mixer, an agent investigation triggered by an alert |
+| House description draft (phase B) | done (0.7.0); update, clear and undo from the saved input; a stronger model can be set for the house task in Settings |
+| **Supervision with alerts to HA** (node §9.4, phase C): checks from the house model, drift and anomaly reports, first rule "EMS-ESP offline", alerts as HA entities over MQTT | **first version** (0.4.0): event, stale, range, stuck and scheduled agent checks, alerts to HA; drift alert for the mixer model (0.5.0); still missing: checks derived from the house model, drift detection beyond the mixer, an agent investigation triggered by an alert |
 | **Identification from live data** (node §9.2, master P4): transport delay from pulse events, valve characteristic f(pos, T_boiler, T_return), gradient statistics | **first version** (0.5.0): the controller's mixer model (law, transport delay, sensor lags, per pump scenario) re-identified daily or on the Parameters tab; the slow log (exact model inputs) is stored, until enough of it exists the published values are used; still missing: **gradient statistics** (safe gradient limits, pulse size caps) |
 | **Parameter generation, validation on held-out data, push** (node §9.3, master 9.9, phase G) | **first version** (0.5.0): proposal only when clearly better on held-out data, closed-loop backtest with the controller's MPC core, approval in the portal, HMAC-signed push to `cmd/mpc/params` with the controller's acknowledgement; **sending is off** (`parameters.push_enabled`) and **not yet tried against the real controller**; no optimisation agent that proposes parameter sets or boiler settings itself |
 | Parameter versioning with rollback (node §9.4) | done (0.5.0): every sent set keeps the one it replaced for a roll back |
@@ -33,11 +33,10 @@ Open work on the observer, to be handled later. The roadmap (phases C–H) is in
 [`../plans/observer_agentic_plan.md`](../plans/observer_agentic_plan.md);
 working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
 
-1. **House understanding quality**: the house task runs on
-   `gemini-3.5-flash-lite` and gives a thin model. `gemini-3.8-flash`
-   (20 requests/day) would fit the house task (2 requests per draft).
-   Generate a draft with the review, check the owner knowledge, accept the
-   first version.
+1. **House description quality**: the house task runs on
+   `gemini-3.5-flash-lite` and gives a thin draft. Switch the *house* task to a
+   stronger model (Settings), then write the known facts in the House tab and
+   update the draft.
 2. **Portal roles**: the portal has an HTTP Basic password
    (`OBSERVER_PORTAL_PASSWORD`); a read-only user (view without approving
    parameter pushes) is missing.
@@ -67,8 +66,9 @@ working agreements in [`HANDOVER.md`](HANDOVER.md) §0.
    (e.g. "encoder did not respond" warnings from before the `stat_t`
    firmware fix, the boot-time ΔT pause) and the unreviewed house
    description misleads (the controller's "boiler" sensor is the
-   heat-exchanger secondary, not the boiler flow). Remedies: accept a
-   reviewed house description; an operations log in the data directory
+   heat-exchanger secondary, not the boiler flow). Remedies: write and correct
+   the house description in the House tab (from the data and what you know); an
+   operations log in the data directory
    (firmware uploads, settings changes, hardware work) exposed as a tool.
 8. **Agent model**: runs use `gemini-3.5-flash-lite`, which ignores the
    library (skills, tools) and writes its own code. Try a stronger model for

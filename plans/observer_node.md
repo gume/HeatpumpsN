@@ -11,6 +11,6 @@
 
 ---
 
-The current plan for the observer's next stages (reviewed house description,
+The current plan for the observer's next stages (house description draft,
 supervision, tools, agents, sandbox, shared skills) is in
 [`observer_agentic_plan.md`](observer_agentic_plan.md).
