@@ -17,7 +17,7 @@ the firmware as the `legacy` mode.
           observer / HA command                       anomaly (supervisor)
  legacy  <───────────────────>  mpc  ──────────────────────────────>  homing
                                  ▲                                       │ full close stroke,
-                                 │ 30 min stable, ≥ 60 min since anomaly │ dead reckoning := 0
+                                 │ 20 min stable, ≥ 60 min since anomaly │ dead reckoning := 0
                                  └──────────────  cautious  <────────────┘
 ```
 
@@ -115,12 +115,17 @@ the measured forward temperature, the setpoint and the human-owned opening windo
 * It closes −8 % immediately (at most once a minute) if T_fwd > setpoint + 2.5 K.
 * It never opens above 70 %.
 
-**Automatic retry:** the controller returns to `mpc` after 30 min within
-±1.5 K, at least 60 min after the anomaly. If another anomaly follows within
-2 h of a retry, it stays in `cautious` until `mode = mpc` is sent.
+**Automatic retry:** the controller returns to `mpc` after 20 min within
+±1.5 K, at least 60 min after the anomaly. A failure of the same anomaly within
+2 h of a retry counts as a strike; a different anomaly starts a new count, and
+a retry that survives the 2 h window clears it. After the third strike the
+automatic retries stop: the controller stays in `cautious` until the operator
+sends `mode = mpc` (the portal's **Unblock and resume MPC** button). The portal
+shows a non-dismissible warning while the retries are blocked.
 
-Event codes: 1340 anomaly and homing, 1341 homed (cautious active), 1342 MPC
-resumed, 1343 parameters accepted, 1344 parameters rejected, 1345 mode change.
+Event codes: 1340 anomaly and homing (with the strike count), 1341 homed
+(cautious active; also when the retry limit blocks), 1342 MPC resumed, 1343
+parameters accepted, 1344 parameters rejected, 1345 mode change.
 
 ## 4. Parameter sets (observer interface)
 

@@ -54,9 +54,11 @@ constexpr float kCautiousCloseBand = 1.0f;
 constexpr float kCautiousHotK = 2.5f;
 constexpr float kCautiousSupplyK = 3.0f;
 constexpr float kCautiousStableBand = 1.5f;
-// Log check (6 days, 8 anomalies): every overshoot hit 2-5 min after the floor
-// pump started, not after the retry itself, so 20 min of stable cautious
-// control is enough to prove the loop is quiet before handing it back.
+// Log check (2026-11-01..09, 8 overshoots): six hit 3.5-4.9 min after the
+// floor pump started; two came late (35 min and 37 min after the start) and
+// the second of those was 87 s after an automatic retry. 20 min of stable
+// cautious control covers the common heating-start overshoot; the retry case
+// is what the strike limit below catches.
 constexpr float kCautiousStableS = 1200.0f;
 constexpr float kRetryAfterAnomalyS = 3600.0f;
 constexpr float kRetryProbationS = 7200.0f;
