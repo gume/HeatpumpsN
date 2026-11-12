@@ -15,19 +15,35 @@
 // a successful load always replaces those defaults. Consequently a carrier
 // change is not visible in the stored values until the config is cleared.
 //
-// There is no migration: a blob from another format version is discarded and
-// the compiled defaults are used (Stale).
+// A firmware update never resets the settings by itself: the NVS blob is read
+// on every boot, independently of the image that wrote it. Older formats are
+// migrated by copying their unchanged Config prefix onto current defaults, so
+// existing settings survive while appended fields receive their default
+// values. v1 (1288-byte prefix), v2 (1348 bytes), v3 (1364 bytes), v4 (1376
+// bytes) and v5 (1376 bytes) are supported. A blob from an unknown version, or
+// one that fails validation, falls back to the compiled defaults; nothing is
+// written until the migration/repair is complete.
+//
+// Because the Config blob changes shape with the format, the Wi-Fi credentials
+// (the values that keep the portal reachable) also have a tiny, unversioned
+// backup record. It is only consulted when the Config blob cannot be used, so
+// an unknown future format or a damaged blob still leaves the station able to
+// join its network. The backup is refreshed on every successful config_save().
 namespace hpn {
 
 enum class ConfigLoadResult : uint8_t {
   Loaded,    // valid current-format blob restored
+  Migrated,  // valid older blob upgraded in memory; caller should save it
   Missing,   // no saved blob; compiled defaults are in effect
   Stale,     // blob from another format version; discarded
-  Corrupt,   // current-format blob failed size/CRC validation
+  Corrupt,   // blob failed size/CRC validation
 };
 
-// Load a saved Config into `config`. On Missing/Stale/Corrupt, `config` is left
-// untouched (the caller has usually seeded it with compiled defaults). Only
+// Load a saved Config into `config`. Migration starts from current compiled
+// defaults and copies the known prefix of the older layout, so fields that did
+// not exist in the old format keep their shipped default. On Missing/Stale/
+// Corrupt, `config` is left with the defaults (except for Wi-Fi credentials,
+// which are restored from the backup record when it is available). Only
 // Corrupt indicates damaged data.
 ConfigLoadResult config_load(Config& config);
 

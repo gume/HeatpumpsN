@@ -83,8 +83,9 @@ The migration refuses (409 with the reason) when:
 
 Steps, in this order:
 
-1. stash `hpncfg/config`, `hpnsec/blob`, `hpnsec/seq` and `hpnmpc/blob` in the
-   sector at 0x3FF000 (magic, length, CRC32);
+1. stash `hpncfg/config`, `hpnwifi/wifi`, `hpnsec/blob`, `hpnsec/seq`,
+   `hpnmpc/blob`, `hpnctr/counters` and `hpnanti/next_day` in the sector at
+   0x3FF000 (magic, length, CRC32);
 2. write otadata at 0x9000 for the running slot, state valid;
 3. erase 0xB000–0x10000 (the new NVS) and 0x390000–0x3FF000 (the new
    filesystem and coredump), one 4 KB sector at a time with a short pause:
@@ -178,10 +179,17 @@ is paused for the scan. There is no automatic scan at boot any more.
 
 The relay counters count operations (switch-ons), like ESPHome's
 `relay_counter` and like relay datasheets. They live in RAM and are written
-to NVS `hpnctr` at most hourly. The mixer relays are counted at the output as
-they exist on the board: direction and motion on v0.1, open and close on
+to NVS `hpnctr` at most hourly, and are flushed before an admin reboot, an OTA
+restart and a partition migration. The mixer relays are counted at the output
+as they exist on the board: direction and motion on v0.1, open and close on
 v1.x (the direction relay stays energized after an opening move, so it
 operates less often than the motion relay).
+
+The stored counter blob is migrated across firmware updates: v1 (no CRC) and
+v2 (every relay change counted) are converted to the current v3 switch-on
+format. A partition migration also carries `hpnctr` and `hpnanti` in the
+settings stash, so the counters and the anti-seize schedule survive the move to
+the new NVS.
 
 A board that came from ESPHome starts at zero. The `esp32s2_counter_preset`
 build sets the counters once:

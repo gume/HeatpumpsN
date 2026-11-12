@@ -69,6 +69,16 @@ void setup() {
   // Settings carried across a partition migration go back into NVS first.
   hpn::layout::restore_stash();
   const hpn::ConfigLoadResult config_result = hpn::config_load(config);
+  if (config_result == hpn::ConfigLoadResult::Migrated) {
+    // Persist the upgraded layout immediately so the migration is one-time and
+    // the next boot finds a current blob. If this fails the in-memory config is
+    // still usable and the migration is retried on the next boot.
+    if (hpn::config_save(config)) {
+      Serial.println("[config] upgraded configuration saved");
+    } else {
+      Serial.println("[config] upgraded configuration could not be saved; will retry on next boot");
+    }
+  }
   state_init(g_state);
   if (config_result == hpn::ConfigLoadResult::Corrupt) {
     // The saved blob failed its CRC/layout check. Keep running on compiled

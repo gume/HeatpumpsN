@@ -40,6 +40,13 @@ constexpr float kFloorSetpointStepC = 0.5f;
 // Source of truth: plans/controller node/01_config_and_contracts.md (§1).
 // Keep this struct in sync with the plan. Parameter ownership is documented
 // there; do not add values here that bypass the three ownership categories.
+//
+// NVS compatibility: the saved blob is migrated across firmware updates by
+// copying the unchanged prefix of an older layout over the current defaults.
+// Therefore new fields must be appended at the end of this struct. Bump
+// kVersion in src/config_store.cpp, add the old payload size to kLayouts and
+// adjust migrate_config() only when a field's meaning changes. Reordering or
+// removing a field needs an explicit conversion rather than a prefix copy.
 struct Config {
   // =========================================================================
   // CATEGORY 1: Long-Term Configuration (Owner: Human via Web Dashboard ONLY)

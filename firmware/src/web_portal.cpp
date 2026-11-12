@@ -115,6 +115,22 @@ struct CounterBlob {
   uint32_t runtime_s[CTR_COUNT];
 };
 
+// v1 predates the CRC32 header field. Its layout is otherwise the same, so a
+// v1 blob can be migrated without guessing: magic, version, size, then the two
+// counter arrays. Kept as a separate struct because the current blob has the
+// CRC between the header and the arrays.
+struct CounterBlobV1 {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+  uint32_t cycles[CTR_COUNT];
+  uint32_t runtime_s[CTR_COUNT];
+};
+
+static_assert(sizeof(CounterBlobPrefix) == 8, "unexpected counter prefix layout");
+static_assert(sizeof(CounterBlobV1) == 56, "unexpected counter v1 layout");
+static_assert(sizeof(CounterBlob) == 60, "unexpected counter layout");
+
 struct Snapshot {
   SystemState state;
   uint32_t captured_ms;
@@ -1442,34 +1458,94 @@ void counters_load() {
   }
 
   const size_t stored = prefs.getBytesLength(kCounterKey);
+  uint8_t bytes[sizeof(CounterBlob)] = {};
   CounterBlob blob{};
   bool ok = false;
   bool stale = false;
+  bool damaged = false;
+  bool migrated = false;
+  uint16_t migrated_from = 0;
+
   if (stored != 0) {
-    // Preferences has no partial read; read the whole blob. The current format
-    // is larger than the legacy one, so a larger blob cannot be current.
     if (stored < sizeof(CounterBlobPrefix)) {
       // Too short to be any known format.
-    } else if (stored > sizeof(blob)) {
+      damaged = true;
+    } else if (stored > sizeof(CounterBlob)) {
       // Larger than any recorded format: an old/foreign blob.
       stale = true;
-    } else if (prefs.getBytes(kCounterKey, &blob, stored) != stored) {
+    } else if (prefs.getBytes(kCounterKey, bytes, stored) != stored) {
       // Read failed despite the length check: treat as damage.
-    } else if (blob.magic != kCounterMagic || blob.version != kCounterVersion) {
-      // Old-format counters; discard without migration and without an alarm.
-      stale = true;
-    } else if (stored == sizeof(blob) && blob.size == sizeof(blob) &&
-               blob.crc == counter_blob_crc(blob)) {
-      ok = true;
+      damaged = true;
+    } else {
+      const CounterBlobPrefix* prefix = reinterpret_cast<const CounterBlobPrefix*>(bytes);
+      if (prefix->magic != kCounterMagic) {
+        // Foreign namespace content, not damage.
+        stale = true;
+      } else if (prefix->version == kCounterVersion) {
+        if (stored == sizeof(CounterBlob) && prefix->size == sizeof(CounterBlob)) {
+          memcpy(&blob, bytes, sizeof(blob));
+          if (blob.crc == counter_blob_crc(blob)) {
+            ok = true;
+          } else {
+            damaged = true;
+          }
+        } else {
+          damaged = true;
+        }
+      } else if (prefix->version == 2) {
+        // v2 has the same layout and CRC as v3. It counted every relay change,
+        // so a full on/off pair was two counts; convert to switch-on operations.
+        if (stored == sizeof(CounterBlob) && prefix->size == sizeof(CounterBlob)) {
+          memcpy(&blob, bytes, sizeof(blob));
+          if (blob.crc == counter_blob_crc(blob)) {
+            for (uint8_t i = 0; i < CTR_COUNT; ++i) {
+              blob.cycles[i] = (blob.cycles[i] + 1u) / 2u;
+            }
+            blob.version = kCounterVersion;
+            blob.crc = counter_blob_crc(blob);
+            migrated = true;
+            migrated_from = 2;
+            ok = true;
+          } else {
+            damaged = true;
+          }
+        } else {
+          damaged = true;
+        }
+      } else if (prefix->version == 1) {
+        // v1 had no CRC field. Its layout is a strict prefix of the current
+        // one, so the counters can be taken over as they are (v1 also counted
+        // every change; convert to switch-on operations).
+        if (stored == sizeof(CounterBlobV1) && prefix->size == sizeof(CounterBlobV1)) {
+          CounterBlobV1 legacy{};
+          memcpy(&legacy, bytes, sizeof(legacy));
+          blob.magic = kCounterMagic;
+          blob.version = kCounterVersion;
+          blob.size = sizeof(blob);
+          for (uint8_t i = 0; i < CTR_COUNT; ++i) {
+            blob.cycles[i] = (legacy.cycles[i] + 1u) / 2u;
+            blob.runtime_s[i] = legacy.runtime_s[i];
+          }
+          blob.crc = counter_blob_crc(blob);
+          migrated = true;
+          migrated_from = 1;
+          ok = true;
+        } else {
+          damaged = true;
+        }
+      } else {
+        // An unknown format: do not reinterpret its bytes.
+        stale = true;
+      }
     }
   }
   prefs.end();
 
   if (!ok) {
     if (stale) {
-      Serial.printf("[counters] legacy NVS format (%u bytes); counters reset\n",
+      Serial.printf("[counters] unknown NVS format (%u bytes); counters reset\n",
                     static_cast<unsigned>(stored));
-    } else if (stored != 0) {
+    } else if (damaged) {
       Serial.printf("[counters] NVS CRC/format check failed (%u bytes); counters reset\n",
                     static_cast<unsigned>(stored));
       flag_nvs_corruption();
@@ -1484,11 +1560,17 @@ void counters_load() {
     g_counters[i].runtime_s = blob.runtime_s[i];
   }
   g_counter_runtime_ms = millis();
-  g_counters_dirty = false;
-  g_counters_persisted = true;
+  g_counters_dirty = migrated;
+  g_counters_persisted = !migrated;
+  if (migrated) g_counter_save_requested = true;
   taskEXIT_CRITICAL(&g_counter_mux);
 
-  Serial.println("[counters] loaded relay counters from NVS");
+  if (migrated) {
+    Serial.printf("[counters] migrated relay counters from v%u; will save the current format\n",
+                  static_cast<unsigned>(migrated_from));
+  } else {
+    Serial.println("[counters] loaded relay counters from NVS");
+  }
 #endif
 }
 
@@ -1535,6 +1617,19 @@ void counters_save() {
   g_counters_dirty = false;
   g_counters_persisted = false;
 #endif
+}
+
+// Persist counters before a deliberate reset or a partition migration. The
+// hourly timer can miss the last operations; a reboot is a natural point to
+// write them once, and a migration must have them in NVS before its stash.
+void counters_flush() {
+  if (!counter_persistence_enabled()) return;
+  bool pending = false;
+  taskENTER_CRITICAL(&g_counter_mux);
+  pending = g_counters_dirty || g_counter_save_requested;
+  g_counter_save_requested = false;
+  taskEXIT_CRITICAL(&g_counter_mux);
+  if (pending) counters_save();
 }
 
 #ifdef HPN_COUNTER_PRESET
@@ -3688,6 +3783,10 @@ void handle_partitions_get(AsyncWebServerRequest* request) {
 }
 
 void handle_partitions_migrate(AsyncWebServerRequest* request) {
+  // The stash copies whole NVS records, so the current counters and the
+  // anti-seize schedule must be in NVS before the migration starts.
+  counters_flush();
+  anti_seize_flush_now(millis());
   char err[160];
   if (!layout::migrate(err, sizeof(err))) {   // reboots on success
     send_error(request, 409, err);
@@ -4225,6 +4324,8 @@ void tick(const Config& config, SystemState& state) {
   if (g_reboot_requested && static_cast<int32_t>(now - g_reboot_at_ms) >= 0) {
     // Every reboot requested here comes from an admin (reboot, factory reset,
     // after an upload), so this image demonstrably works.
+    counters_flush();
+    anti_seize_flush_now(now);
     layout::confirm_now("admin-requested reboot");
     Serial.println("[web] rebooting now");
     Serial.flush();

@@ -240,14 +240,18 @@ namespace:
 
 - the blob carries a magic value, format version, exact struct size and a
   CRC32 checksum; a CRC failure in the current format resets the counters and
-  latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED`, while an older format
-  is discarded silently;
-- counters are loaded at boot;
+  latches `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED`;
+- older formats are migrated: v1 (CRC-less) and v2 (change counts) are
+  converted to v3 switch-on operations, so relay wear survives a firmware
+  update;
+- counters are loaded at boot and a migrated blob is persisted immediately;
 - a dirty flag is set by a cycle change or by the one-second runtime
   accumulation;
 - the cache is written at most once per hour, and only when dirty;
 - an explicit counter reset requests an immediate save so a reboot cannot
   resurrect the old values;
+- counters are also flushed before an admin reboot, before an OTA restart and
+  before a partition migration, so the latest operations are not lost;
 - emulation builds never load or save counters, so the bench model cannot wear
   the NVS or leak test data into a hardware configuration.
 
@@ -309,8 +313,13 @@ flashed carrier, run the portal's factory reset.
 The blob is versioned (currently v5). v1–v4 blobs are migrated by copying their
 unchanged prefix over current defaults, preserving every existing setting while
 initialising the appended fields, and the upgraded blob is saved immediately.
-Counters and the anti-seize schedule still have no migration path; an
-old-format blob of those is discarded. The
+Relay counters are migrated the same way. The anti-seize schedule still has no
+format version; an old-format blob of it is discarded. Because the Wi-Fi
+credentials are what keep the device reachable, they also have a small,
+version-independent backup record (`hpnwifi`): it is only read when the Config
+blob cannot be used (unknown format, damaged blob, or missing store), and it is
+refreshed on every successful save. If neither the Config blob nor the backup
+has usable credentials, the values compiled from `credentials.h` are used. The
 `WARN_NVS_CORRUPTED` / `ERR_NVS_DATA_CORRUPTED` latch is held for the current
 boot: saving settings rewrites the config blob, but the live flag clears only
 on the next boot once every persisted blob validates. This keeps unrelated

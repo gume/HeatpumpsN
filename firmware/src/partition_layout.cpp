@@ -194,7 +194,9 @@ struct StashItem {
   bool u64;
 };
 constexpr StashItem kStashItems[] = {
-    {"hpncfg", "config", false}, {"hpnsec", "blob", false}, {"hpnsec", "seq", true}, {"hpnmpc", "blob", false},
+    {"hpncfg", "config", false},   {"hpnwifi", "wifi", false}, {"hpnsec", "blob", false},
+    {"hpnsec", "seq", true},       {"hpnmpc", "blob", false},  {"hpnctr", "counters", false},
+    {"hpnanti", "next_day", false},
 };
 
 // Layout: magic, total length, CRC32 of the payload; payload = records of

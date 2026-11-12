@@ -278,11 +278,22 @@ The heater has no HA command: L2 derives it from the three circuit requests.
 
 - `struct Config` (1376 bytes, `include/hpn/config.h`) is stored as one NVS
   blob: header (magic, version, size), payload, CRC32. Format version 5.
-- **No migration.** A blob of another version is ignored and the compiled
-  defaults apply, Wi-Fi included. Board facts that are not user settings go in
-  `BoardConfig` (`src/board.cpp`), not in `Config`.
-- Other NVS records (relay counters `hpnctr`, anti-seize `hpnanti`, security
-  `hpnsec`, MPC parameters `hpnmpc`) follow the same rule.
+- **Saved settings survive firmware updates.** The blob is read on every boot,
+  independently of the image that wrote it. Older formats are migrated by
+  copying their unchanged `Config` prefix over current defaults; the upgraded
+  blob is saved immediately. Only an unknown version or a failed CRC falls back
+  to the compiled defaults. Keep new fields at the end of `Config`, bump
+  `kVersion`, and add the old size to `kLayouts`; a reordering or removal needs
+  an explicit conversion in `migrate_config`.
+- Wi-Fi credentials additionally live in a small version-independent backup
+  (`hpnwifi`), read only when the Config blob cannot be used, so a format
+  change or a damaged blob cannot lock the device off its network.
+- Board facts that are not user settings go in `BoardConfig`
+  (`src/board.cpp`), not in `Config`.
+- Relay counters (`hpnctr`) are versioned and migrated (v1/v2 → v3). The
+  `hpnanti` schedule, `hpnsec` keys and `hpnmpc` parameters have their own
+  stores; a partition migration stashes all of them, including the counters
+  and anti-seize schedule.
 - Backup and restore: `GET /api/config/export` (sealed), `POST /api/config/import`.
 
 ### 5.5 Mixer
